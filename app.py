@@ -85,68 +85,89 @@ if archivo_cargado is not None:
 
         df['Estrategia_Cierre'] = df.apply(generar_estrategia, axis=1)
         
-        # Ordenamiento interno
+        # Ordenamiento interno por dinero
         df = df.sort_values(by='Valor_Orden', ascending=False)
         cols_vista = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
 
         # --- SEPARACIÓN EN PESTAÑAS (TABS) ---
         tab_vip, tab_potencial, tab_general = st.tabs(["🏆 Cuentas VIP", "🚀 Alertas 20-80", "📋 Cartera General"])
 
+        # ==========================================
         # PESTAÑA 1: VIP
+        # ==========================================
         with tab_vip:
             df_vip = df[df['Prioridad'] == "⭐ TOP 10"]
             if not df_vip.empty:
                 st.markdown("### 🥇 Ranking de Cuentas Clave")
-                # Agrupamos para ver el peso total por cliente
                 ranking_vip = df_vip.groupby('Cliente')['Valor_Orden'].sum().reset_index()
                 ranking_vip = ranking_vip.sort_values(by='Valor_Orden', ascending=False).reset_index(drop=True)
                 ranking_vip.index += 1
-                
                 st.dataframe(ranking_vip.rename(columns={'Valor_Orden': 'Valor Total Estimado (MXN)'}).style.format({'Valor Total Estimado (MXN)': '${:,.2f}'}), use_container_width=True)
                 
-                st.markdown("### 📋 Plan de Ataque VIP")
-                st.data_editor(df_vip[cols_vista], hide_index=True, use_container_width=True, key="vip_edit")
+                st.markdown("### 🔍 Filtrar Detalle VIP")
+                lista_vip = ["Todos"] + sorted(df_vip['Cliente'].unique().tolist())
+                sel_vip = st.selectbox("Selecciona una cuenta VIP:", lista_vip, key="filtro_vip")
+                
+                df_mostrar_vip = df_vip if sel_vip == "Todos" else df_vip[df_vip['Cliente'] == sel_vip]
+                
+                col1, col2 = st.columns(2)
+                col1.metric("Total MXN (Selección)", f"${df_mostrar_vip['Monto_MXN'].sum():,.2f}")
+                col2.metric("Total USD (Selección)", f"${df_mostrar_vip['Monto_USD'].sum():,.2f}")
+                
+                st.data_editor(df_mostrar_vip[cols_vista], hide_index=True, use_container_width=True, key="vip_edit")
             else:
-                st.info("Sin cotizaciones VIP activas.")
+                st.info("Sin cotizaciones VIP activas en este reporte.")
 
+        # ==========================================
         # PESTAÑA 2: RADAR 20-80
+        # ==========================================
         with tab_potencial:
             df_normal = df[df['Prioridad'] == "Normal"]
             if not df_normal.empty:
-                st.markdown("### 🚀 Cuentas Emergentes")
-                st.write("Estos clientes están fuera de tu Top 10, pero concentran un volumen alto de cotizaciones. Considéralos prospectos para escalar a trato preferencial.")
+                st.markdown("### 🚀 Top 5 Cuentas Emergentes")
+                st.write("Clientes fuera de tu Top 10 concentrando alto volumen. Posibles candidatos a trato preferencial.")
                 
-                # Agrupamos a los normales y sacamos el Top 5 por dinero en la mesa
                 ranking_normal = df_normal.groupby('Cliente')['Valor_Orden'].sum().reset_index()
                 ranking_normal = ranking_normal.sort_values(by='Valor_Orden', ascending=False)
                 candidatos = ranking_normal.head(5)
-                
                 st.dataframe(candidatos.rename(columns={'Valor_Orden': 'Valor Total Estimado (MXN)'}).style.format({'Valor Total Estimado (MXN)': '${:,.2f}'}), use_container_width=True)
                 
                 nombres_candidatos = candidatos['Cliente'].tolist()
                 df_alertas = df_normal[df_normal['Cliente'].isin(nombres_candidatos)]
                 
-                st.markdown("### 📋 Cotizaciones en Alerta")
-                st.data_editor(df_alertas[cols_vista], hide_index=True, use_container_width=True, key="pot_edit")
+                st.markdown("### 🔍 Filtrar Detalle Emergente")
+                lista_pot = ["Todos"] + sorted(df_alertas['Cliente'].unique().tolist())
+                sel_pot = st.selectbox("Selecciona una cuenta emergente:", lista_pot, key="filtro_pot")
+                
+                df_mostrar_pot = df_alertas if sel_pot == "Todos" else df_alertas[df_alertas['Cliente'] == sel_pot]
+                
+                col1, col2 = st.columns(2)
+                col1.metric("Total MXN (Selección)", f"${df_mostrar_pot['Monto_MXN'].sum():,.2f}")
+                col2.metric("Total USD (Selección)", f"${df_mostrar_pot['Monto_USD'].sum():,.2f}")
+                
+                st.data_editor(df_mostrar_pot[cols_vista], hide_index=True, use_container_width=True, key="pot_edit")
 
-        # PESTAÑA 3: GENERAL
+        # ==========================================
+        # PESTAÑA 3: CARTERA GENERAL
+        # ==========================================
         with tab_general:
-            st.markdown("### 🔍 Análisis de Cartera Base")
+            # Excluimos a los emergentes (Top 5) de esta pestaña para evitar duplicados
             df_resto = df_normal[~df_normal['Cliente'].isin(nombres_candidatos)] if not df_normal.empty else df_normal
             
-            lista_clientes = ["Todos"] + sorted(df_normal['Cliente'].unique().tolist())
-            sel_cliente = st.selectbox("Filtrar cliente específico:", lista_clientes)
-            
-            if sel_cliente != "Todos":
-                df_mostrar = df_normal[df_normal['Cliente'] == sel_cliente]
-            else:
-                df_mostrar = df_resto
+            if not df_resto.empty:
+                st.markdown("### 🔍 Buscar en Cartera Base")
+                lista_gral = ["Todos"] + sorted(df_resto['Cliente'].unique().tolist())
+                sel_gral = st.selectbox("Selecciona un cliente de la base general:", lista_gral, key="filtro_gral")
                 
-            col1, col2 = st.columns(2)
-            col1.metric("Total MXN (Vista Actual)", f"${df_mostrar['Monto_MXN'].sum():,.2f}")
-            col2.metric("Total USD (Vista Actual)", f"${df_mostrar['Monto_USD'].sum():,.2f}")
-            
-            st.data_editor(df_mostrar[cols_vista], hide_index=True, use_container_width=True, key="gen_edit")
+                df_mostrar_gral = df_resto if sel_gral == "Todos" else df_resto[df_resto['Cliente'] == sel_gral]
+                    
+                col1, col2 = st.columns(2)
+                col1.metric("Total MXN (Selección)", f"${df_mostrar_gral['Monto_MXN'].sum():,.2f}")
+                col2.metric("Total USD (Selección)", f"${df_mostrar_gral['Monto_USD'].sum():,.2f}")
+                
+                st.data_editor(df_mostrar_gral[cols_vista], hide_index=True, use_container_width=True, key="gral_edit")
+            else:
+                st.info("No hay más clientes en la cartera general.")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
