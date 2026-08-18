@@ -26,7 +26,7 @@ if archivo_cargado is not None:
         df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
         df.columns = df.columns.str.strip()
         
-        # Traductor (Ahora incluimos la FECHA)
+        # Traductor
         traductor = {
             "COTIZACION": "Cotización", 
             "CLIENTE": "Cliente", 
@@ -51,7 +51,20 @@ if archivo_cargado is not None:
         df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
         df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
 
-        # --- 2. SEMÁFOROS SLA ---
+        # --- 2. ESCÁNER TOP 10 VIP ---
+        # Aquí están tus palabras clave. Puedes agregar más en el futuro si tu cartera cambia.
+        top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
+        
+        def es_vip(cliente_str):
+            cliente_str = str(cliente_str).upper()
+            for marca in top_10:
+                if marca in cliente_str:
+                    return "⭐ TOP 10"
+            return "Normal"
+            
+        df['Prioridad'] = df['Cliente'].apply(es_vip)
+
+        # --- 3. SEMÁFOROS SLA ---
         if 'Fecha_Registro' in df.columns:
             df['Fecha_Registro'] = pd.to_datetime(df['Fecha_Registro'], errors='coerce')
             dias_diff = (pd.Timestamp.now().normalize() - df['Fecha_Registro']).dt.days
@@ -66,16 +79,17 @@ if archivo_cargado is not None:
         else:
             df['SLA'] = "⚪ N/A"
 
-        # --- 3. REGLA 80-20 (ORDENAMIENTO) ---
-        # Calculamos un valor aproximado interno solo para saber quién es el cliente más grande
+        # --- 4. DOBLE REGLA 80-20 (ORDENAMIENTO) ---
+        # Primero agrupa a todos los VIP arriba, y dentro de los VIP y los Normales, los ordena por monto.
+        df['Es_VIP_Bool'] = df['Prioridad'] == "⭐ TOP 10"
         df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
-        df = df.sort_values(by='Valor_Orden', ascending=False)
+        df = df.sort_values(by=['Es_VIP_Bool', 'Valor_Orden'], ascending=[False, False])
 
-        # --- 4. COLUMNA TÁCTICA ---
+        # --- 5. COLUMNA TÁCTICA ---
         df['Estrategia_Cierre'] = ""
 
-        # Preparamos la vista final
-        columnas_finales = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        # Preparamos la vista final agregando la columna Prioridad
+        columnas_finales = ['Prioridad', 'SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         df_final = df[[c for c in columnas_finales if c in df.columns]]
 
         # --- VISUALIZACIÓN ---
