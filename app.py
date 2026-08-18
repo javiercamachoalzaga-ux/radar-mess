@@ -26,11 +26,10 @@ if archivo_cargado is not None:
         df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
         df.columns = df.columns.str.strip()
         
-        # Traductor
         traductor = {"COTIZACION": "Cotización", "CLIENTE": "Cliente", "VALOR": "Monto_Bruto", "FECHA": "Fecha_Registro"}
         df = df.rename(columns=lambda x: traductor.get(x, x))
         
-        # --- 1. SEPARACIÓN DE MONEDAS ---
+        # --- LIMPIEZA DE MONEDAS ---
         def procesar_mxn(val_str):
             val_str = str(val_str).upper()
             if 'USD' in val_str: return 0.0
@@ -45,93 +44,110 @@ if archivo_cargado is not None:
 
         df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
         df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
+        df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # --- 2. ESCÁNER TOP 10 VIP ---
+        # --- ESCÁNER TOP 10 VIP ---
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
-        
         def es_vip(cliente_str):
             cliente_str = str(cliente_str).upper()
             for marca in top_10:
                 if marca in cliente_str: return "⭐ TOP 10"
             return "Normal"
-            
         df['Prioridad'] = df['Cliente'].apply(es_vip)
 
-        # --- 3. SEMÁFOROS SLA ---
+        # --- SEMÁFOROS SLA ---
         if 'Fecha_Registro' in df.columns:
             df['Fecha_Registro'] = pd.to_datetime(df['Fecha_Registro'], errors='coerce')
             dias_diff = (pd.Timestamp.now().normalize() - df['Fecha_Registro']).dt.days
-            
             def semaforo(dias):
                 if pd.isna(dias): return "⚪ S/F"
                 if dias >= 3: return "🔴 +3 días"
                 elif dias == 2: return "🟡 2 días"
                 else: return "🟢 Reciente"
-                
             df['SLA'] = dias_diff.apply(semaforo)
         else:
             df['SLA'] = "⚪ N/A"
 
-        # Cálculo de valor total unificado para ordenamiento interno
-        df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
-
-        # --- 4. MOTOR DE ESTRATEGIA (IA COMERCIAL) ---
+        # --- MOTOR DE ESTRATEGIA ---
         def generar_estrategia(fila):
             prioridad = fila['Prioridad']
             sla = fila['SLA']
             monto = fila['Valor_Orden']
             
-            # Lógica de decisiones: Primero lo primero
             if prioridad == "⭐ TOP 10":
-                if "🔴" in sla:
-                    return "🚨 RIESGO: Visita presencial inmediata. Buscar acuerdo ganar-ganar. Validar si requieren soporte con equipos de medición de marcas de nuestra cartera principal (aclarar exclusiones si aplica)."
-                elif "🟡" in sla:
-                    return "📞 ALERTA: Llamada gerencial. Asegurar tiempos de entrega de calibración sin afectar su línea de producción. Mantener opciones simples."
-                else:
-                    return "✉️ SEGUIMIENTO: Correo consultivo. Confirmar recepción y ponerse a disposición técnica."
+                if "🔴" in sla: return "🚨 RIESGO: Visita presencial. Validar si requieren soporte con equipos de medición (aclarar exclusiones)."
+                elif "🟡" in sla: return "📞 ALERTA: Llamada gerencial. Asegurar tiempos de entrega de calibración."
+                else: return "✉️ SEGUIMIENTO: Correo consultivo. Confirmar recepción."
             else:
-                if monto > 15000:
-                    return "💼 ALTO VALOR: Agendar videollamada o visita técnica. Confirmar detalles del alcance acreditado (ej. verificar exclusión de escala HBW 5/250 si hay durómetros involucrados)."
-                elif "🔴" in sla:
-                    return "⏱️ 80/20: Llamada rápida de 5 min para intentar cierre. Si hay barreras, descartar para no mermar productividad."
-                else:
-                    return "📱 CONTACTO: Enviar WhatsApp de seguimiento para pulsar temperatura de compra."
+                if monto > 15000: return "💼 ALTO VALOR: Agendar visita. Confirmar detalles del alcance acreditado."
+                elif "🔴" in sla: return "⏱️ 80/20: Llamada rápida de 5 min. Si hay barreras, descartar temporalmente."
+                else: return "📱 CONTACTO: WhatsApp de seguimiento para pulsar temperatura."
 
-        # Aplicamos la inteligencia a cada fila
         df['Estrategia_Cierre'] = df.apply(generar_estrategia, axis=1)
-
-        # --- 5. ORDENAMIENTO 80-20 ---
-        df['Es_VIP_Bool'] = df['Prioridad'] == "⭐ TOP 10"
-        df = df.sort_values(by=['Es_VIP_Bool', 'Valor_Orden'], ascending=[False, False])
-
-        # Preparamos la vista base
-        columnas_finales = ['Prioridad', 'SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
-        df_base = df[[c for c in columnas_finales if c in df.columns]]
-
-        # --- 6. FILTRO DE CLIENTE DINÁMICO ---
-        st.markdown("### 🔍 Análisis de Cuentas")
-        lista_clientes = ["Todos"] + sorted(df_base['Cliente'].unique().tolist())
-        cliente_seleccionado = st.selectbox("Selecciona un cliente para aislar sus cotizaciones:", lista_clientes)
-
-        if cliente_seleccionado != "Todos":
-            df_mostrar = df_base[df_base['Cliente'] == cliente_seleccionado]
-        else:
-            df_mostrar = df_base
-
-        # --- VISUALIZACIÓN ---
-        st.subheader("📊 Valor de la Selección")
-        col1, col2 = st.columns(2)
-        col1.metric("Total MXN", f"${df_mostrar['Monto_MXN'].sum():,.2f}")
-        col2.metric("Total USD", f"${df_mostrar['Monto_USD'].sum():,.2f}")
         
-        st.markdown("### 📋 Plan de Ataque")
-        # El data_editor permite modificar la estrategia sugerida
-        df_editado = st.data_editor(df_mostrar, hide_index=True, use_container_width=True)
-        
-        st.markdown("---")
-        if st.download_button("📥 Descargar Plan Filtrado", data=df_editado.to_csv(index=False).encode('utf-8-sig'), file_name="Plan_Filtrado.csv"):
-            st.success("¡Plan descargado! Éxito en tus cierres.")
+        # Ordenamiento interno
+        df = df.sort_values(by='Valor_Orden', ascending=False)
+        cols_vista = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+
+        # --- SEPARACIÓN EN PESTAÑAS (TABS) ---
+        tab_vip, tab_potencial, tab_general = st.tabs(["🏆 Cuentas VIP", "🚀 Alertas 20-80", "📋 Cartera General"])
+
+        # PESTAÑA 1: VIP
+        with tab_vip:
+            df_vip = df[df['Prioridad'] == "⭐ TOP 10"]
+            if not df_vip.empty:
+                st.markdown("### 🥇 Ranking de Cuentas Clave")
+                # Agrupamos para ver el peso total por cliente
+                ranking_vip = df_vip.groupby('Cliente')['Valor_Orden'].sum().reset_index()
+                ranking_vip = ranking_vip.sort_values(by='Valor_Orden', ascending=False).reset_index(drop=True)
+                ranking_vip.index += 1
+                
+                st.dataframe(ranking_vip.rename(columns={'Valor_Orden': 'Valor Total Estimado (MXN)'}).style.format({'Valor Total Estimado (MXN)': '${:,.2f}'}), use_container_width=True)
+                
+                st.markdown("### 📋 Plan de Ataque VIP")
+                st.data_editor(df_vip[cols_vista], hide_index=True, use_container_width=True, key="vip_edit")
+            else:
+                st.info("Sin cotizaciones VIP activas.")
+
+        # PESTAÑA 2: RADAR 20-80
+        with tab_potencial:
+            df_normal = df[df['Prioridad'] == "Normal"]
+            if not df_normal.empty:
+                st.markdown("### 🚀 Cuentas Emergentes")
+                st.write("Estos clientes están fuera de tu Top 10, pero concentran un volumen alto de cotizaciones. Considéralos prospectos para escalar a trato preferencial.")
+                
+                # Agrupamos a los normales y sacamos el Top 5 por dinero en la mesa
+                ranking_normal = df_normal.groupby('Cliente')['Valor_Orden'].sum().reset_index()
+                ranking_normal = ranking_normal.sort_values(by='Valor_Orden', ascending=False)
+                candidatos = ranking_normal.head(5)
+                
+                st.dataframe(candidatos.rename(columns={'Valor_Orden': 'Valor Total Estimado (MXN)'}).style.format({'Valor Total Estimado (MXN)': '${:,.2f}'}), use_container_width=True)
+                
+                nombres_candidatos = candidatos['Cliente'].tolist()
+                df_alertas = df_normal[df_normal['Cliente'].isin(nombres_candidatos)]
+                
+                st.markdown("### 📋 Cotizaciones en Alerta")
+                st.data_editor(df_alertas[cols_vista], hide_index=True, use_container_width=True, key="pot_edit")
+
+        # PESTAÑA 3: GENERAL
+        with tab_general:
+            st.markdown("### 🔍 Análisis de Cartera Base")
+            df_resto = df_normal[~df_normal['Cliente'].isin(nombres_candidatos)] if not df_normal.empty else df_normal
             
+            lista_clientes = ["Todos"] + sorted(df_normal['Cliente'].unique().tolist())
+            sel_cliente = st.selectbox("Filtrar cliente específico:", lista_clientes)
+            
+            if sel_cliente != "Todos":
+                df_mostrar = df_normal[df_normal['Cliente'] == sel_cliente]
+            else:
+                df_mostrar = df_resto
+                
+            col1, col2 = st.columns(2)
+            col1.metric("Total MXN (Vista Actual)", f"${df_mostrar['Monto_MXN'].sum():,.2f}")
+            col2.metric("Total USD (Vista Actual)", f"${df_mostrar['Monto_USD'].sum():,.2f}")
+            
+            st.data_editor(df_mostrar[cols_vista], hide_index=True, use_container_width=True, key="gen_edit")
+
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
 else:
