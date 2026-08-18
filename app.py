@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
 # 1. Configuración de página
-st.set_page_config(page_title="Radar MESS", layout="wide")
+st.set_page_config(page_title="Radar MESS 80-20", layout="wide")
 
 # 2. Seguridad
 def check_password():
@@ -21,30 +22,75 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # Leemos el archivo con codificación especial para evitar el error anterior
+        # Leemos el archivo y limpiamos
         df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
         df.columns = df.columns.str.strip()
         
-        # Traductor
-        traductor = {"COTIZACION": "Cotización", "CLIENTE": "Cliente", "VALOR": "Monto_Bruto"}
-        df = df.rename(columns=traductor)
+        # Traductor (Ahora incluimos la FECHA)
+        traductor = {
+            "COTIZACION": "Cotización", 
+            "CLIENTE": "Cliente", 
+            "VALOR": "Monto_Bruto",
+            "FECHA": "Fecha_Registro"
+        }
+        df = df.rename(columns=lambda x: traductor.get(x, x))
         
-        # Limpieza de montos
-        def limpiar_monto(x):
-            try:
-                return float(''.join(c for c in str(x) if c.isdigit() or c == '.'))
+        # --- 1. SEPARACIÓN DE MONEDAS ---
+        def procesar_mxn(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' in val_str: return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
             except: return 0.0
 
-        df['Monto_MXN'] = df['Monto_Bruto'].apply(limpiar_monto)
-        
-        # Resultados
+        def procesar_usd(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' not in val_str: return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
+            except: return 0.0
+
+        df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
+        df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
+
+        # --- 2. SEMÁFOROS SLA ---
+        if 'Fecha_Registro' in df.columns:
+            df['Fecha_Registro'] = pd.to_datetime(df['Fecha_Registro'], errors='coerce')
+            dias_diff = (pd.Timestamp.now().normalize() - df['Fecha_Registro']).dt.days
+            
+            def semaforo(dias):
+                if pd.isna(dias): return "⚪ S/F"
+                if dias >= 3: return "🔴 +3 días"
+                elif dias == 2: return "🟡 2 días"
+                else: return "🟢 Reciente"
+                
+            df['SLA'] = dias_diff.apply(semaforo)
+        else:
+            df['SLA'] = "⚪ N/A"
+
+        # --- 3. REGLA 80-20 (ORDENAMIENTO) ---
+        # Calculamos un valor aproximado interno solo para saber quién es el cliente más grande
+        df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
+        df = df.sort_values(by='Valor_Orden', ascending=False)
+
+        # --- 4. COLUMNA TÁCTICA ---
+        df['Estrategia_Cierre'] = ""
+
+        # Preparamos la vista final
+        columnas_finales = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        df_final = df[[c for c in columnas_finales if c in df.columns]]
+
+        # --- VISUALIZACIÓN ---
         st.subheader("📊 Visión Financiera")
-        st.metric("Total Cotizado", f"${df['Monto_MXN'].sum():,.2f} MXN")
-        st.data_editor(df[['Cotización', 'Cliente', 'Monto_MXN']], hide_index=True)
+        col1, col2 = st.columns(2)
+        col1.metric("Total Cotizado MXN", f"${df['Monto_MXN'].sum():,.2f}")
+        col2.metric("Total Cotizado USD", f"${df['Monto_USD'].sum():,.2f}")
         
-        # Descarga
-        if st.download_button("📥 Descargar Ruta", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="Ruta_Limpia.csv"):
-            st.success("¡Descargado!")
+        st.markdown("### 📋 Plan de Ataque")
+        # El data_editor permite escribir en la tabla
+        df_editado = st.data_editor(df_final, hide_index=True, use_container_width=True)
+        
+        st.markdown("---")
+        if st.download_button("📥 Descargar Plan del Día", data=df_editado.to_csv(index=False).encode('utf-8-sig'), file_name="Plan_80_20.csv"):
+            st.success("¡Plan descargado! Éxito en tus cierres.")
             
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
