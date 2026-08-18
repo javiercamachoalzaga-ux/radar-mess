@@ -1,9 +1,8 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 # 1. Configuración
-st.set_page_config(page_title="Radar Comercial | MESS", layout="wide")
+st.set_page_config(page_title="Radar MESS", layout="wide")
 
 # 2. Seguridad
 def check_password():
@@ -18,47 +17,37 @@ if not check_password():
 
 # 3. Interfaz
 st.title("🎯 Radar de Cierres 80-20")
-st.sidebar.header("⚙️ Configuración")
-tc = st.sidebar.number_input("Tipo de cambio (USD a MXN)", value=19.50, step=0.10)
 archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott", type=["csv"])
 
 if archivo_cargado is not None:
-    df = pd.read_csv(archivo_cargado)
+    # Leemos y quitamos filas vacías que veo en tu tabla
+    df = pd.read_csv(archivo_cargado).dropna(subset=['COTIZACION', 'CLIENTE'])
     df.columns = df.columns.str.strip()
     
-    # Traductor
-    traductor = {"FOLIO": "Cotización", "CLIENTE": "Cliente", "AREA": "Parque_Industrial", 
-                 "VALOR": "Monto_Bruto", "ETAPA": "Temperatura", "FECHA DE REGISTRO": "Fecha_Registro"}
+    # Traductor actualizado a tus columnas reales
+    traductor = {
+        "COTIZACION": "Cotización", 
+        "CLIENTE": "Cliente", 
+        "VALOR": "Monto_Bruto"
+    }
     df = df.rename(columns=traductor)
     
-    # LIMPIEZA ROBUSTA
-    def limpiar_y_convertir(fila):
-        val_str = str(fila['Monto_Bruto']).upper()
-        # Extraer solo números y puntos
-        num = float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-        # Si contiene 'USD', multiplicamos
-        if 'USD' in val_str:
-            return num * tc
-        return num
+    # LIMPIEZA: Solo números para el monto
+    def limpiar_monto(x):
+        try:
+            # Quitamos todo lo que no sea dígito o punto
+            return float(''.join(c for c in str(x) if c.isdigit() or c == '.'))
+        except: return 0.0
 
-    # Aplicamos con manejo de errores interno
-    try:
-        df['Monto_MXN'] = df.apply(limpiar_y_convertir, axis=1)
-    except:
-        df['Monto_MXN'] = 0 # Si algo falla, ponemos 0 para no romper la app
-
-    # Días
-    df['Fecha_Registro'] = pd.to_datetime(df['Fecha_Registro'], errors='coerce')
-    df['Dias_Sin_Contacto'] = (pd.Timestamp.now() - df['Fecha_Registro']).dt.days.fillna(0).astype(int)
+    df['Monto_MXN'] = df['Monto_Bruto'].apply(limpiar_monto)
     
-    columnas_oro = ["Cotización", "Cliente", "Parque_Industrial", "Monto_MXN", "Dias_Sin_Contacto", "Temperatura"]
-    df = df[columnas_oro]
+    # Mostramos los datos limpios
+    st.subheader("📊 Visión Financiera")
+    st.metric("Total Cotizado", f"${df['Monto_MXN'].sum():,.2f} MXN")
+    
+    st.data_editor(df[['Cotización', 'Cliente', 'Monto_MXN']], hide_index=True)
+    
+    if st.download_button("📥 Descargar", data=df.to_csv(index=False).encode('utf-8-sig'), file_name="Ruta_Limpia.csv"):
+        st.success("Descargado")
 else:
-    df = pd.DataFrame({"Cotización": ["DEMO"], "Monto_MXN": [0], "Parque_Industrial": ["Qro"]})
-
-# 4. Visualización
-st.metric("Valor Total Activo (MXN)", f"${df['Monto_MXN'].sum():,.2f} MXN")
-df_editado = st.data_editor(df, hide_index=True)
-
-if st.download_button("📥 Descargar Ruta", data=df_editado.to_csv(index=False).encode('utf-8-sig'), file_name="Ruta.csv"):
-    st.success("¡Ruta descargada!")
+    st.write("Por favor sube tu archivo CSV de Scott para empezar.")
