@@ -22,17 +22,12 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # Leemos el archivo y limpiamos
+        # Leemos y limpiamos
         df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
         df.columns = df.columns.str.strip()
         
         # Traductor
-        traductor = {
-            "COTIZACION": "Cotización", 
-            "CLIENTE": "Cliente", 
-            "VALOR": "Monto_Bruto",
-            "FECHA": "Fecha_Registro"
-        }
+        traductor = {"COTIZACION": "Cotización", "CLIENTE": "Cliente", "VALOR": "Monto_Bruto", "FECHA": "Fecha_Registro"}
         df = df.rename(columns=lambda x: traductor.get(x, x))
         
         # --- 1. SEPARACIÓN DE MONEDAS ---
@@ -52,14 +47,12 @@ if archivo_cargado is not None:
         df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
 
         # --- 2. ESCÁNER TOP 10 VIP ---
-        # Aquí están tus palabras clave. Puedes agregar más en el futuro si tu cartera cambia.
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         
         def es_vip(cliente_str):
             cliente_str = str(cliente_str).upper()
             for marca in top_10:
-                if marca in cliente_str:
-                    return "⭐ TOP 10"
+                if marca in cliente_str: return "⭐ TOP 10"
             return "Normal"
             
         df['Prioridad'] = df['Cliente'].apply(es_vip)
@@ -79,31 +72,64 @@ if archivo_cargado is not None:
         else:
             df['SLA'] = "⚪ N/A"
 
-        # --- 4. DOBLE REGLA 80-20 (ORDENAMIENTO) ---
-        # Primero agrupa a todos los VIP arriba, y dentro de los VIP y los Normales, los ordena por monto.
-        df['Es_VIP_Bool'] = df['Prioridad'] == "⭐ TOP 10"
+        # Cálculo de valor total unificado para ordenamiento interno
         df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
+
+        # --- 4. MOTOR DE ESTRATEGIA (IA COMERCIAL) ---
+        def generar_estrategia(fila):
+            prioridad = fila['Prioridad']
+            sla = fila['SLA']
+            monto = fila['Valor_Orden']
+            
+            # Lógica de decisiones: Primero lo primero
+            if prioridad == "⭐ TOP 10":
+                if "🔴" in sla:
+                    return "🚨 RIESGO: Visita presencial inmediata. Buscar acuerdo ganar-ganar. Validar si requieren soporte con equipos de medición de marcas de nuestra cartera principal (aclarar exclusiones si aplica)."
+                elif "🟡" in sla:
+                    return "📞 ALERTA: Llamada gerencial. Asegurar tiempos de entrega de calibración sin afectar su línea de producción. Mantener opciones simples."
+                else:
+                    return "✉️ SEGUIMIENTO: Correo consultivo. Confirmar recepción y ponerse a disposición técnica."
+            else:
+                if monto > 15000:
+                    return "💼 ALTO VALOR: Agendar videollamada o visita técnica. Confirmar detalles del alcance acreditado (ej. verificar exclusión de escala HBW 5/250 si hay durómetros involucrados)."
+                elif "🔴" in sla:
+                    return "⏱️ 80/20: Llamada rápida de 5 min para intentar cierre. Si hay barreras, descartar para no mermar productividad."
+                else:
+                    return "📱 CONTACTO: Enviar WhatsApp de seguimiento para pulsar temperatura de compra."
+
+        # Aplicamos la inteligencia a cada fila
+        df['Estrategia_Cierre'] = df.apply(generar_estrategia, axis=1)
+
+        # --- 5. ORDENAMIENTO 80-20 ---
+        df['Es_VIP_Bool'] = df['Prioridad'] == "⭐ TOP 10"
         df = df.sort_values(by=['Es_VIP_Bool', 'Valor_Orden'], ascending=[False, False])
 
-        # --- 5. COLUMNA TÁCTICA ---
-        df['Estrategia_Cierre'] = ""
-
-        # Preparamos la vista final agregando la columna Prioridad
+        # Preparamos la vista base
         columnas_finales = ['Prioridad', 'SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
-        df_final = df[[c for c in columnas_finales if c in df.columns]]
+        df_base = df[[c for c in columnas_finales if c in df.columns]]
+
+        # --- 6. FILTRO DE CLIENTE DINÁMICO ---
+        st.markdown("### 🔍 Análisis de Cuentas")
+        lista_clientes = ["Todos"] + sorted(df_base['Cliente'].unique().tolist())
+        cliente_seleccionado = st.selectbox("Selecciona un cliente para aislar sus cotizaciones:", lista_clientes)
+
+        if cliente_seleccionado != "Todos":
+            df_mostrar = df_base[df_base['Cliente'] == cliente_seleccionado]
+        else:
+            df_mostrar = df_base
 
         # --- VISUALIZACIÓN ---
-        st.subheader("📊 Visión Financiera")
+        st.subheader("📊 Valor de la Selección")
         col1, col2 = st.columns(2)
-        col1.metric("Total Cotizado MXN", f"${df['Monto_MXN'].sum():,.2f}")
-        col2.metric("Total Cotizado USD", f"${df['Monto_USD'].sum():,.2f}")
+        col1.metric("Total MXN", f"${df_mostrar['Monto_MXN'].sum():,.2f}")
+        col2.metric("Total USD", f"${df_mostrar['Monto_USD'].sum():,.2f}")
         
         st.markdown("### 📋 Plan de Ataque")
-        # El data_editor permite escribir en la tabla
-        df_editado = st.data_editor(df_final, hide_index=True, use_container_width=True)
+        # El data_editor permite modificar la estrategia sugerida
+        df_editado = st.data_editor(df_mostrar, hide_index=True, use_container_width=True)
         
         st.markdown("---")
-        if st.download_button("📥 Descargar Plan del Día", data=df_editado.to_csv(index=False).encode('utf-8-sig'), file_name="Plan_80_20.csv"):
+        if st.download_button("📥 Descargar Plan Filtrado", data=df_editado.to_csv(index=False).encode('utf-8-sig'), file_name="Plan_Filtrado.csv"):
             st.success("¡Plan descargado! Éxito en tus cierres.")
             
     except Exception as e:
