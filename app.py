@@ -25,8 +25,6 @@ st.markdown("""
         margin-bottom: 25px;
         font-weight: 500;
     }
-    .metric-ganada { color: #28a745 !important; }
-    .metric-perdida { color: #dc3545 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -41,9 +39,9 @@ if not check_password():
     st.info("Ingresa tu contraseña en el menú lateral.")
     st.stop()
 
-# 3. Encabezado
+# 3. Encabezado principal
 st.markdown('<div class="titulo-radar">⚡ Radar Comercial 80/20</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Inteligencia Táctica y Análisis Histórico 2026</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Inteligencia Táctica y Análisis Histórico de Bateo</div>', unsafe_allow_html=True)
 
 archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott (Histórico Completo)", type=["csv"])
 
@@ -53,7 +51,6 @@ if archivo_cargado is not None:
         df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
         df.columns = df.columns.str.strip()
         
-        # --- NUEVO: CAPTURAMOS EL ESTATUS ---
         traductor = {
             "COTIZACION": "Cotización", "CLIENTE": "Cliente", "VALOR": "Monto_Bruto", 
             "FECHA": "Fecha_Registro", "ESTATUS": "Estatus"
@@ -61,7 +58,6 @@ if archivo_cargado is not None:
         df = df.rename(columns=lambda x: traductor.get(x, x))
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
         
-        # Normalizamos el estatus para evitar errores de mayúsculas/minúsculas
         if 'Estatus' not in df.columns:
             df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
@@ -81,7 +77,9 @@ if archivo_cargado is not None:
 
         df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
         df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
-        df['Valor_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
+        
+        # Variable interna solo para saber el "peso" del cliente y ordenarlos, no se muestra
+        df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
         # --- ESCÁNER TOP 10 VIP ---
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
@@ -92,21 +90,33 @@ if archivo_cargado is not None:
             return "Normal"
         df['Prioridad'] = df['Cliente'].apply(es_vip)
 
-        # --- CÁLCULO DE HIT RATE Y ESTADÍSTICAS GLOBALES ---
-        mxn_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Valor_Orden'].sum()
-        mxn_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Valor_Orden'].sum()
-        mxn_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Valor_Orden'].sum()
+        # --- CÁLCULO SEPARADO DE HIT RATE (MXN Y USD) ---
+        mxn_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_MXN'].sum()
+        mxn_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_MXN'].sum()
+        mxn_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_MXN'].sum()
         
-        total_cerrado = mxn_ganado + mxn_perdido
-        hit_rate_real = (mxn_ganado / total_cerrado * 100) if total_cerrado > 0 else 0
+        usd_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_USD'].sum()
+        usd_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_USD'].sum()
+        usd_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_USD'].sum()
+        
+        total_cerrado_mxn = mxn_ganado + mxn_perdido
+        total_cerrado_usd = usd_ganado + usd_perdido
+        
+        hit_rate_mxn = (mxn_ganado / total_cerrado_mxn * 100) if total_cerrado_mxn > 0 else 0
+        hit_rate_usd = (usd_ganado / total_cerrado_usd * 100) if total_cerrado_usd > 0 else 0
 
-        # --- PANEL LATERAL DE PROYECCIÓN ---
+        # --- PANEL LATERAL DE PROYECCIÓN INDEPENDIENTE ---
         st.sidebar.markdown("---")
-        st.sidebar.header("📈 Proyección Comercial")
-        st.sidebar.metric("Hit Rate Real Histórico", f"{hit_rate_real:.1f}%", help="Calculado sobre las cotizaciones ya cerradas (Ganadas vs Perdidas).")
-        tasa_bateo = st.sidebar.slider("Simulador de Bateo Futuro (%)", min_value=5, max_value=100, value=int(hit_rate_real) if hit_rate_real > 0 else 30, step=5)
+        st.sidebar.header("📈 Hit Rate Real")
+        st.sidebar.metric("Bateo Histórico MXN", f"{hit_rate_mxn:.1f}%")
+        st.sidebar.metric("Bateo Histórico USD", f"{hit_rate_usd:.1f}%")
+        
+        st.sidebar.markdown("---")
+        st.sidebar.header("🎯 Simulador Futuro")
+        tasa_mxn = st.sidebar.slider("Simulador Bateo MXN (%)", min_value=0, max_value=100, value=int(hit_rate_mxn) if hit_rate_mxn > 0 else 30, step=5)
+        tasa_usd = st.sidebar.slider("Simulador Bateo USD (%)", min_value=0, max_value=100, value=int(hit_rate_usd) if hit_rate_usd > 0 else 30, step=5)
 
-        # --- SEMÁFOROS Y ESTRATEGIA (SOLO PARA LO QUE ESTÁ EN PROCESO) ---
+        # --- SEMÁFOROS Y ESTRATEGIA (SOLO PARA ACTIVAS) ---
         df_activas = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         
         if 'Fecha_Registro' in df_activas.columns:
@@ -124,28 +134,28 @@ if archivo_cargado is not None:
         def generar_estrategia(fila):
             prioridad = fila['Prioridad']
             sla = fila['SLA']
-            monto = fila['Valor_Orden']
+            monto = fila['Peso_Interno_Orden']
             
             if prioridad == "⭐ TOP 10":
-                if "🔴" in sla: return "🚨 RIESGO: Visita presencial inmediata. Aclarar dudas técnicas."
+                if "🔴" in sla: return "🚨 RIESGO: Visita presencial. Aclarar dudas técnicas (ej. exclusión de escala HBW 5/250 si aplica)."
                 elif "🟡" in sla: return "📞 ALERTA: Llamada consultiva."
                 else: return "✉️ SEGUIMIENTO: Correo de presencia."
             else:
-                if monto > 15000: return "💼 ALTO VALOR: Visita/Llamada para revisar alcance técnico."
+                if monto > 15000: return "💼 ALTO VALOR: Agendar visita/llamada para revisar alcance técnico acreditado."
                 elif "🔴" in sla: return "⏱️ 80/20: Llamada de 5 min. Descartar rápido si hay bloqueo."
                 else: return "📱 CONTACTO: WhatsApp de seguimiento."
 
         df_activas['Estrategia_Cierre'] = df_activas.apply(generar_estrategia, axis=1)
-        df_activas = df_activas.sort_values(by='Valor_Orden', ascending=False)
+        df_activas = df_activas.sort_values(by='Peso_Interno_Orden', ascending=False)
         cols_vista = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
 
         # ==========================================
         # PREPARACIÓN DE LAS BASES DE DATOS ACTIVAS
         # ==========================================
         df_vip = df_activas[df_activas['Prioridad'] == "⭐ TOP 10"].copy()
-        
         df_normal = df_activas[df_activas['Prioridad'] == "Normal"].copy()
-        ranking_normal = df_normal.groupby('Cliente')['Valor_Orden'].sum().reset_index().sort_values(by='Valor_Orden', ascending=False)
+        
+        ranking_normal = df_normal.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
         top_5_nombres = ranking_normal.head(5)['Cliente'].tolist()
         
         df_potencial = df_normal[df_normal['Cliente'].isin(top_5_nombres)].copy()
@@ -156,35 +166,43 @@ if archivo_cargado is not None:
         # ==========================================
         tab_dash, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard Estadístico", "🏆 VIP (Activas)", "🚀 Alertas (Activas)", "📋 General (Activas)"])
 
-        # --- PESTAÑA 0: DASHBOARD HISTÓRICO ---
+        # --- PESTAÑA 0: DASHBOARD HISTÓRICO PÚRO ---
         with tab_dash:
-            st.markdown("### 📈 Desempeño Histórico 2026")
-            st.write("Análisis de toda tu tubería de ventas. Los montos combinan MXN y USD (convertidos al tipo de cambio base de 19.50 para la gráfica).")
+            st.markdown("### 📈 Desempeño Histórico 2026 (Monedas Separadas)")
             
-            # Métricas principales
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Cotizado (MXN Eq)", f"${df['Valor_Orden'].sum():,.2f}")
-            col2.metric("✅ Ganado", f"${mxn_ganado:,.2f}")
-            col3.metric("❌ Perdido/Cancelado", f"${mxn_perdido:,.2f}")
-            col4.metric("⏳ En Proceso (Pipeline)", f"${mxn_proceso:,.2f}")
+            col_m, col_u = st.columns(2)
+            with col_m:
+                st.markdown("#### 🇲🇽 Mercado Nacional (MXN)")
+                m1, m2 = st.columns(2)
+                m1.metric("✅ Ganado MXN", f"${mxn_ganado:,.2f}")
+                m2.metric("❌ Perdido MXN", f"${mxn_perdido:,.2f}")
+                st.metric("⏳ En Proceso MXN", f"${mxn_proceso:,.2f}")
+                
+            with col_u:
+                st.markdown("#### 🇺🇸 Mercado Extranjero (USD)")
+                u1, u2 = st.columns(2)
+                u1.metric("✅ Ganado USD", f"${usd_ganado:,.2f}")
+                u2.metric("❌ Perdido USD", f"${usd_perdido:,.2f}")
+                st.metric("⏳ En Proceso USD", f"${usd_proceso:,.2f}")
             
             st.markdown("---")
             col_grafica, col_top = st.columns([2, 1])
             
             with col_grafica:
-                st.markdown("#### Distribución por Estatus")
-                resumen_estatus = df.groupby('Estatus')['Valor_Orden'].sum().reset_index()
-                # Gráfica nativa de Streamlit
-                st.bar_chart(resumen_estatus.set_index('Estatus'))
+                st.markdown("#### Comparativa de Estatus por Moneda")
+                resumen_mxn = df.groupby('Estatus')['Monto_MXN'].sum().rename("MXN")
+                resumen_usd = df.groupby('Estatus')['Monto_USD'].sum().rename("USD")
+                resumen_estatus = pd.concat([resumen_mxn, resumen_usd], axis=1)
+                st.bar_chart(resumen_estatus)
             
             with col_top:
-                st.markdown("#### Top 5 Clientes Cerrados (Ganados)")
+                st.markdown("#### Top 5 Ganados (Totales)")
                 df_ganados = df[df['Estatus'].str.contains('GANAD', na=False)]
                 if not df_ganados.empty:
-                    top_ganados = df_ganados.groupby('Cliente')['Valor_Orden'].sum().sort_values(ascending=False).head(5)
-                    st.dataframe(top_ganados.reset_index().rename(columns={'Valor_Orden': 'Monto Cerrado'}), use_container_width=True)
+                    top_ganados = df_ganados.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().sort_values(by='Monto_MXN', ascending=False).head(5)
+                    st.dataframe(top_ganados.style.format('${:,.2f}'), use_container_width=True)
                 else:
-                    st.info("Aún no hay cotizaciones ganadas.")
+                    st.info("Sin cotizaciones ganadas registradas.")
 
         # --- PESTAÑA 1: VIP (SOLO ACTIVAS) ---
         with tab_vip:
@@ -198,13 +216,11 @@ if archivo_cargado is not None:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Pipeline MXN", f"${tot_mxn:,.2f}")
-                c2.metric(f"Proyección MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c2.metric(f"Proyección MXN ({tasa_mxn}%)", f"${tot_mxn * (tasa_mxn/100):,.2f}")
                 c3.metric("Pipeline USD", f"${tot_usd:,.2f}")
-                c4.metric(f"Proyección USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
+                c4.metric(f"Proyección USD ({tasa_usd}%)", f"${tot_usd * (tasa_usd/100):,.2f}")
                 
                 st.data_editor(df_mostrar_vip[cols_vista], hide_index=True, use_container_width=True, key=f"t_vip_{sel_vip}")
-            else:
-                st.info("Sin cuentas VIP en proceso.")
 
         # --- PESTAÑA 2: EMERGENTES (SOLO ACTIVAS) ---
         with tab_potencial:
@@ -218,13 +234,11 @@ if archivo_cargado is not None:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Pipeline MXN", f"${tot_mxn:,.2f}")
-                c2.metric(f"Proyección MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c2.metric(f"Proyección MXN ({tasa_mxn}%)", f"${tot_mxn * (tasa_mxn/100):,.2f}")
                 c3.metric("Pipeline USD", f"${tot_usd:,.2f}")
-                c4.metric(f"Proyección USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
+                c4.metric(f"Proyección USD ({tasa_usd}%)", f"${tot_usd * (tasa_usd/100):,.2f}")
                 
                 st.data_editor(df_mostrar_pot[cols_vista], hide_index=True, use_container_width=True, key=f"t_pot_{sel_pot}")
-            else:
-                st.info("Sin cuentas emergentes en proceso.")
 
         # --- PESTAÑA 3: CARTERA GENERAL (SOLO ACTIVAS) ---
         with tab_general:
@@ -238,13 +252,11 @@ if archivo_cargado is not None:
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Pipeline MXN", f"${tot_mxn:,.2f}")
-                c2.metric(f"Proyección MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c2.metric(f"Proyección MXN ({tasa_mxn}%)", f"${tot_mxn * (tasa_mxn/100):,.2f}")
                 c3.metric("Pipeline USD", f"${tot_usd:,.2f}")
-                c4.metric(f"Proyección USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
+                c4.metric(f"Proyección USD ({tasa_usd}%)", f"${tot_usd * (tasa_usd/100):,.2f}")
                 
                 st.data_editor(df_mostrar_gral[cols_vista], hide_index=True, use_container_width=True, key=f"t_gral_{sel_gral}")
-            else:
-                st.info("No hay más clientes activos en la cartera general.")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: Verifica que tu CSV contenga la columna ESTATUS. Detalles: {e}")
