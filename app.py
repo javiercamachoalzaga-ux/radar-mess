@@ -3,9 +3,32 @@ import pandas as pd
 from datetime import datetime
 
 # 1. Configuración de página
-st.set_page_config(page_title="Radar MESS 80-20", layout="wide")
+st.set_page_config(page_title="Radar Comercial 80-20", layout="wide")
 
-# 2. Seguridad
+# --- NUEVO DISEÑO MODERNO (HEADER CON GRADIENTE) ---
+st.markdown("""
+    <style>
+    html, body, [class*="css"]  {
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+    .titulo-radar {
+        font-size: 42px;
+        font-weight: 900;
+        background: -webkit-linear-gradient(45deg, #1e3c72, #2a5298, #00C6FF);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: -10px;
+    }
+    .subtitulo {
+        font-size: 16px;
+        color: #6c757d;
+        margin-bottom: 25px;
+        font-weight: 500;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# 2. Seguridad y Configuración
 def check_password():
     st.sidebar.header("🔒 Acceso Restringido")
     pwd = st.sidebar.text_input("🔑 Contraseña", type="password")
@@ -16,8 +39,16 @@ if not check_password():
     st.info("Ingresa tu contraseña en el menú lateral.")
     st.stop()
 
-# 3. Interfaz y Carga
-st.title("🎯 Radar de Cierres 80-20")
+# --- CONFIGURACIÓN DE BATEO ---
+st.sidebar.markdown("---")
+st.sidebar.header("📈 Proyección Comercial")
+tasa_bateo = st.sidebar.slider("Tu % de Bateo (Hit Rate)", min_value=5, max_value=100, value=30, step=5, 
+                               help="Porcentaje histórico de cotizaciones que logras cerrar con éxito.")
+
+# 3. Interfaz y Carga (NUEVO HEADER)
+st.markdown('<div class="titulo-radar">⚡ Radar Comercial 80/20</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Sistema de Inteligencia Táctica y Proyección de Bateo</div>', unsafe_allow_html=True)
+
 archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott", type=["csv"])
 
 if archivo_cargado is not None:
@@ -28,8 +59,6 @@ if archivo_cargado is not None:
         
         traductor = {"COTIZACION": "Cotización", "CLIENTE": "Cliente", "VALOR": "Monto_Bruto", "FECHA": "Fecha_Registro"}
         df = df.rename(columns=lambda x: traductor.get(x, x))
-        
-        # Limpieza exhaustiva de texto para evitar fallos en los filtros
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
         
         # --- LIMPIEZA DE MONEDAS ---
@@ -78,7 +107,7 @@ if archivo_cargado is not None:
             monto = fila['Valor_Orden']
             
             if prioridad == "⭐ TOP 10":
-                if "🔴" in sla: return "🚨 RIESGO: Visita presencial. Validar opciones (ej. aclarar que no manejamos acreditación HBW 5/250 para durómetros si aplica)."
+                if "🔴" in sla: return "🚨 RIESGO: Visita presencial. Validar opciones (ej. aclarar alcance técnico si aplica)."
                 elif "🟡" in sla: return "📞 ALERTA: Llamada para asegurar tiempos de entrega de calibración o venta de equipo."
                 else: return "✉️ SEGUIMIENTO: Correo consultivo para mantener presencia."
             else:
@@ -91,8 +120,7 @@ if archivo_cargado is not None:
         cols_vista = ['SLA', 'Cotización', 'Cliente', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
 
         # ==========================================
-        # PREPARACIÓN DE LAS 3 BASES DE DATOS INDEPENDIENTES
-        # Aquí solucionamos el error: separamos todo ANTES de las pestañas
+        # PREPARACIÓN DE LAS BASES DE DATOS
         # ==========================================
         df_vip = df[df['Prioridad'] == "⭐ TOP 10"].copy()
         
@@ -113,14 +141,17 @@ if archivo_cargado is not None:
             if not df_vip.empty:
                 lista_vip = ["Todos"] + sorted(df_vip['Cliente'].unique().tolist())
                 sel_vip = st.selectbox("Filtrar VIP:", lista_vip, key="f_vip")
-                
                 df_mostrar_vip = df_vip if sel_vip == "Todos" else df_vip[df_vip['Cliente'] == sel_vip]
                 
-                c1, c2 = st.columns(2)
-                c1.metric("Total MXN (Selección)", f"${df_mostrar_vip['Monto_MXN'].sum():,.2f}")
-                c2.metric("Total USD (Selección)", f"${df_mostrar_vip['Monto_USD'].sum():,.2f}")
+                tot_mxn = df_mostrar_vip['Monto_MXN'].sum()
+                tot_usd = df_mostrar_vip['Monto_USD'].sum()
                 
-                # La llave dinámica evita que el editor se congele
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Cotizado MXN", f"${tot_mxn:,.2f}")
+                c2.metric(f"Bateo MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c3.metric("Cotizado USD", f"${tot_usd:,.2f}")
+                c4.metric(f"Bateo USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
+                
                 st.data_editor(df_mostrar_vip[cols_vista], hide_index=True, use_container_width=True, key=f"t_vip_{sel_vip}")
             else:
                 st.info("Sin cuentas VIP")
@@ -130,12 +161,16 @@ if archivo_cargado is not None:
             if not df_potencial.empty:
                 lista_pot = ["Todos"] + sorted(df_potencial['Cliente'].unique().tolist())
                 sel_pot = st.selectbox("Filtrar Emergentes:", lista_pot, key="f_pot")
-                
                 df_mostrar_pot = df_potencial if sel_pot == "Todos" else df_potencial[df_potencial['Cliente'] == sel_pot]
                 
-                c1, c2 = st.columns(2)
-                c1.metric("Total MXN (Selección)", f"${df_mostrar_pot['Monto_MXN'].sum():,.2f}")
-                c2.metric("Total USD (Selección)", f"${df_mostrar_pot['Monto_USD'].sum():,.2f}")
+                tot_mxn = df_mostrar_pot['Monto_MXN'].sum()
+                tot_usd = df_mostrar_pot['Monto_USD'].sum()
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Cotizado MXN", f"${tot_mxn:,.2f}")
+                c2.metric(f"Bateo MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c3.metric("Cotizado USD", f"${tot_usd:,.2f}")
+                c4.metric(f"Bateo USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
                 
                 st.data_editor(df_mostrar_pot[cols_vista], hide_index=True, use_container_width=True, key=f"t_pot_{sel_pot}")
             else:
@@ -146,12 +181,16 @@ if archivo_cargado is not None:
             if not df_general.empty:
                 lista_gral = ["Todos"] + sorted(df_general['Cliente'].unique().tolist())
                 sel_gral = st.selectbox("Filtrar Cartera Base:", lista_gral, key="f_gral")
-                
                 df_mostrar_gral = df_general if sel_gral == "Todos" else df_general[df_general['Cliente'] == sel_gral]
                 
-                c1, c2 = st.columns(2)
-                c1.metric("Total MXN (Selección)", f"${df_mostrar_gral['Monto_MXN'].sum():,.2f}")
-                c2.metric("Total USD (Selección)", f"${df_mostrar_gral['Monto_USD'].sum():,.2f}")
+                tot_mxn = df_mostrar_gral['Monto_MXN'].sum()
+                tot_usd = df_mostrar_gral['Monto_USD'].sum()
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Cotizado MXN", f"${tot_mxn:,.2f}")
+                c2.metric(f"Bateo MXN ({tasa_bateo}%)", f"${tot_mxn * (tasa_bateo/100):,.2f}")
+                c3.metric("Cotizado USD", f"${tot_usd:,.2f}")
+                c4.metric(f"Bateo USD ({tasa_bateo}%)", f"${tot_usd * (tasa_bateo/100):,.2f}")
                 
                 st.data_editor(df_mostrar_gral[cols_vista], hide_index=True, use_container_width=True, key=f"t_gral_{sel_gral}")
             else:
