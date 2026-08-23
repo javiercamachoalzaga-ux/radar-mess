@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="Radar Comercial 80-20", layout="wide")
+st.set_page_config(page_title="Radar Comercial Activo", layout="wide")
 
 st.markdown("""
     <style>
@@ -26,30 +26,25 @@ if not check_password():
     st.info("Ingresa tu contraseña en el menú lateral.")
     st.stop()
 
-st.markdown('<div class="titulo-radar">⚡ Radar Comercial 80/20</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Inteligencia Táctica, Bateo y Proyectos 2026</div>', unsafe_allow_html=True)
+st.markdown('<div class="titulo-radar">⚡ Radar Comercial Activo</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Inteligencia de Cierres Diarios y Proyectos Vivos</div>', unsafe_allow_html=True)
 
-archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto de Scott (Sin modificar)", type=["csv"])
+archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto de Scott", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # 1. Lectura del archivo BRUTO de Scott
+        # 1. LECTURA Y EXTRACCIÓN INTELIGENTE
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
-        
-        # 2. MOTOR DE EXTRACCIÓN INTELIGENTE (Ignora duplicados y columnas basura)
         df_clean = pd.DataFrame()
 
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_raw.columns:
-                    # Limpiamos el nombre original quitando espacios y forzando mayúsculas
                     nombre_limpio = str(col).upper().strip()
-                    # Si coincide con la clave original o con los duplicados que hace el sistema (.1, .2)
                     if nombre_limpio == clave or nombre_limpio == f"{clave}.1":
                         return df_raw[col].copy()
             return pd.Series([None] * len(df_raw))
 
-        # Extracción quirúrgica
         df_clean['Cotización'] = buscar_col(["COTIZACION"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
@@ -60,7 +55,7 @@ if archivo_cargado is not None:
         df_clean['Categoria'] = buscar_col(["CATEGORIA"])
         df_clean['Nombre_Contacto'] = buscar_col(["CONTACTO"])
 
-        # Fusión automática de todas las columnas de VALOR que Scott haya creado
+        # Fusión automática de columnas de VALOR
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
             if val_str == 'NAN' or val_str.strip() == '': return 0.0
@@ -72,7 +67,6 @@ if archivo_cargado is not None:
 
         for col in df_raw.columns:
             nombre_limpio = str(col).upper().strip()
-            # Si la columna es un valor financiero
             if nombre_limpio == "VALOR" or nombre_limpio.startswith("VALOR."):
                 temp_mxn = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
                 temp_usd = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
@@ -82,190 +76,163 @@ if archivo_cargado is not None:
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
 
-        # Transferimos la tabla limpia para que el resto de la app trabaje sobre seguro
         df = df_clean
 
-        # 3. Limpieza final de filas vacías
+        # 2. FILTRO ESTRICTO: SOLO LO VIVO (Día a Día)
         df = df.dropna(subset=['Cliente'])
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
-        
-        # Omitir filas que no sean clientes reales (ej. la fila vacía que detectamos antes)
         df = df[df['Cliente'].str.upper() != 'NAN']
         
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
+        
+        # ELIMINAMOS HISTÓRICO: Nos quedamos solo con lo que está En Proceso
+        df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
             
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # 4. Asignación VIP
+        # 3. ASIGNACIÓN VIP Y 80-20
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
-        df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ TOP 10" if any(m in c.upper() for m in top_10) else "Normal")
+        df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ VIP" if any(m in c.upper() for m in top_10) else "Normal")
 
-        # 5. Dashboard Histórico
-        mxn_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_MXN'].sum()
-        mxn_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_MXN'].sum()
-        mxn_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_MXN'].sum()
+        df_vip = df[df['Prioridad'] == "⭐ VIP"].copy()
+        df_normal = df[df['Prioridad'] == "Normal"].copy()
         
-        usd_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_USD'].sum()
-        usd_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_USD'].sum()
-        usd_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_USD'].sum()
-        
-        tot_c_mxn = mxn_ganado + mxn_perdido
-        tot_c_usd = usd_ganado + usd_perdido
-        hr_mxn = (mxn_ganado / tot_c_mxn * 100) if tot_c_mxn > 0 else 0
-        hr_usd = (usd_ganado / tot_c_usd * 100) if tot_c_usd > 0 else 0
+        # Identificamos a los "Heavy Hitters" del 80-20 (Top 10 clientes normales con más dinero)
+        ranking_normal = df_normal.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
+        nombres_80_20 = ranking_normal.head(10)['Cliente'].tolist()
+        df_80_20 = df_normal[df_normal['Cliente'].isin(nombres_80_20)].copy()
+        df_resto = df_normal[~df_normal['Cliente'].isin(nombres_80_20)].copy()
 
-        st.sidebar.markdown("---")
-        st.sidebar.header("📈 Hit Rate Real")
-        st.sidebar.metric("Bateo Histórico MXN", f"{hr_mxn:.1f}%")
-        st.sidebar.metric("Bateo Histórico USD", f"{hr_usd:.1f}%")
-        st.sidebar.markdown("---")
-        st.sidebar.header("🎯 Simulador Futuro")
-        tasa_mxn = st.sidebar.slider("Simulador Bateo MXN (%)", 0, 100, int(hr_mxn) if hr_mxn > 0 else 30, 5)
-        tasa_usd = st.sidebar.slider("Simulador Bateo USD (%)", 0, 100, int(hr_usd) if hr_usd > 0 else 30, 5)
-
-        # 6. Preparación de Pestañas Activas y Táctica
-        df_activas = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
-        
-        if 'Fecha_Creacion' in df_activas.columns:
-            df_activas['SLA'] = (pd.Timestamp.now().normalize() - pd.to_datetime(df_activas['Fecha_Creacion'], errors='coerce', dayfirst=True)).dt.days
-            df_activas['SLA'] = df_activas['SLA'].apply(lambda d: "⚪ S/F" if pd.isna(d) else ("🔴 +3 días" if d >= 3 else ("🟡 2 días" if d == 2 else "🟢 Reciente")))
+        # 4. CÁLCULOS DE SLA Y ESTRATEGIA DIARIA
+        if 'Fecha_Creacion' in df.columns:
+            df['SLA'] = (pd.Timestamp.now().normalize() - pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)).dt.days
+            df['SLA'] = df['SLA'].apply(lambda d: "⚪ S/F" if pd.isna(d) else ("🔴 +3 días" if d >= 3 else ("🟡 2 días" if d == 2 else "🟢 Reciente")))
         else:
-            df_activas['SLA'] = "⚪ N/A"
+            df['SLA'] = "⚪ N/A"
 
         def estrategia(fila):
-            if fila['Prioridad'] == "⭐ TOP 10": return "🚨 RIESGO: Visita técnica." if "🔴" in fila['SLA'] else ("📞 ALERTA: Llamada consultiva." if "🟡" in fila['SLA'] else "✉️ SEGUIMIENTO: Correo.")
-            else: return "💼 ALTO VALOR: Visita/Llamada." if fila['Peso_Interno_Orden'] > 15000 else ("⏱️ 80/20: Descartar rápido." if "🔴" in fila['SLA'] else "📱 CONTACTO: WhatsApp.")
+            if fila['Prioridad'] == "⭐ VIP": return "🚨 RIESGO: Visita técnica presencial." if "🔴" in fila['SLA'] else ("📞 ALERTA: Llamada consultiva gerencial." if "🟡" in fila['SLA'] else "✉️ SEGUIMIENTO: Correo.")
+            else: return "💼 ALTO VALOR: Priorizar cierre." if fila['Peso_Interno_Orden'] > 15000 else ("⏱️ 80/20: Descartar rápido." if "🔴" in fila['SLA'] else "📱 CONTACTO: WhatsApp.")
 
-        df_activas['Estrategia_Cierre'] = df_activas.apply(estrategia, axis=1)
-        df_activas = df_activas.sort_values(by='Peso_Interno_Orden', ascending=False)
+        df['Estrategia_Cierre'] = df.apply(estrategia, axis=1)
         
-        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
-        cols_vista = [c for c in cols_ideales if c in df_activas.columns]
+        # Actualizamos los sub-dataframes con las nuevas columnas calculadas
+        df_vip = df[df['Prioridad'] == "⭐ VIP"].sort_values(by='Peso_Interno_Orden', ascending=False)
+        df_80_20 = df[df['Cliente'].isin(nombres_80_20)].sort_values(by='Peso_Interno_Orden', ascending=False)
+        df_resto = df[~df['Cliente'].isin(nombres_80_20) & (df['Prioridad'] == "Normal")].sort_values(by='Peso_Interno_Orden', ascending=False)
 
-        df_vip = df_activas[df_activas['Prioridad'] == "⭐ TOP 10"].copy()
-        df_normal = df_activas[df_activas['Prioridad'] == "Normal"].copy()
-        ranking_normal = df_normal.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
-        top_5_nombres = ranking_normal.head(5)['Cliente'].tolist()
-        df_potencial = df_normal[df_normal['Cliente'].isin(top_5_nombres)].copy()
-        df_general = df_normal[~df_normal['Cliente'].isin(top_5_nombres)].copy()
+        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        cols_vista = [c for c in cols_ideales if c in df.columns]
 
-        # 7. Renderizado de Interfaz
-        tab_dash, tab_proyectos, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard", "📁 Proyectos", "🏆 VIP", "🚀 Alertas", "📋 General"])
+        # PANEL LATERAL RESUMIDO
+        st.sidebar.markdown("---")
+        st.sidebar.header("💰 Tubería Total (Viva)")
+        st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
+        st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
 
-        with tab_dash:
-            st.markdown("### 📈 Desempeño Histórico 2026")
-            col_m, col_u = st.columns(2)
-            with col_m:
-                st.markdown("#### 🇲🇽 Mercado Nacional (MXN)")
-                m1, m2 = st.columns(2)
-                m1.metric("✅ Ganado MXN", f"${mxn_ganado:,.2f}")
-                m1.metric("❌ Perdido MXN", f"${mxn_perdido:,.2f}")
-                st.metric("⏳ En Proceso MXN", f"${mxn_proceso:,.2f}")
-            with col_u:
-                st.markdown("#### 🇺🇸 Mercado Extranjero (USD)")
-                u1, u2 = st.columns(2)
-                u1.metric("✅ Ganado USD", f"${usd_ganado:,.2f}")
-                u2.metric("❌ Perdido USD", f"${usd_perdido:,.2f}")
-                st.metric("⏳ En Proceso USD", f"${usd_proceso:,.2f}")
+        # 5. RENDERIZADO DE PESTAÑAS TÁCTICAS
+        tab_dash_vip, tab_dash_8020, tab_proy, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
+            "👑 Dash VIP", "🚀 Dash 80/20", "📁 Proyectos Vivos", "🏆 Operación VIP", "⚡ Operación 80/20", "📋 General"
+        ])
 
-        with tab_proyectos:
-            st.markdown("### 📁 Estatus Consolidado y Fechas de Proyectos (Histórico)")
+        # --- DASHBOARD VIP ---
+        with tab_dash_vip:
+            st.markdown("### 👑 Concentración de Capital: Cuentas VIP")
+            if not df_vip.empty:
+                col_m, col_u = st.columns(2)
+                col_m.metric("Capital VIP (MXN)", f"${df_vip['Monto_MXN'].sum():,.2f}")
+                col_u.metric("Capital VIP (USD)", f"${df_vip['Monto_USD'].sum():,.2f}")
+                
+                st.markdown("#### Top Cuentas VIP por Volumen Vivo")
+                resumen_vip = df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
+                st.bar_chart(resumen_vip.set_index('Cliente'))
+            else:
+                st.info("No hay cotizaciones vivas para cuentas VIP en este momento.")
+
+        # --- DASHBOARD 80/20 ---
+        with tab_dash_8020:
+            st.markdown("### 🚀 Oportunidades de Alto Impacto (80/20)")
+            st.write("Estos son tus clientes fuera del Top 10 corporativo, pero que actualmente concentran el mayor volumen de dinero en la mesa.")
+            if not df_80_20.empty:
+                col_m, col_u = st.columns(2)
+                col_m.metric("Capital 80/20 (MXN)", f"${df_80_20['Monto_MXN'].sum():,.2f}")
+                col_u.metric("Capital 80/20 (USD)", f"${df_80_20['Monto_USD'].sum():,.2f}")
+                
+                st.markdown("#### Ranking de Cuentas Emergentes (Top 10)")
+                resumen_8020 = df_80_20.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
+                st.bar_chart(resumen_8020.set_index('Cliente'))
+            else:
+                st.info("No hay datos suficientes para el segmento 80/20.")
+
+        # --- PROYECTOS VIVOS ---
+        with tab_proy:
+            st.markdown("### 📁 Proyectos Activos (Mes a Mes)")
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
-                    def estatus_proyecto(est_list):
-                        s = " ".join([str(e) for e in est_list]).upper()
-                        return "✅ GANADO" if "GANAD" in s else ("⏳ EN PROCESO" if "PROCESO" in s else "❌ PERDIDO/CANCELADO")
-
-                    def fecha_minima(f_list):
+                    def fecha_cierre_valida(f_list):
                         fechas_validas = pd.to_datetime(f_list, errors='coerce', dayfirst=True).dropna()
-                        if not fechas_validas.empty:
-                            return fechas_validas.min().strftime('%d/%m/%Y')
-                        return "Sin registro"
-
-                    def fecha_maxima(f_list):
-                        fechas_validas = pd.to_datetime(f_list, errors='coerce', dayfirst=True).dropna()
-                        if not fechas_validas.empty:
-                            return fechas_validas.max().strftime('%d/%m/%Y')
-                        return "Sin registro"
+                        return fechas_validas.max().strftime('%d/%m/%Y') if not fechas_validas.empty else "Sin registro"
 
                     agg_dict = {
                         'Cotización': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else "",
                         'Categoria': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else "",
                         'Descripcion': lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else "",
                         'Monto_MXN': 'sum',
-                        'Monto_USD': 'sum',
-                        'Estatus': estatus_proyecto
+                        'Monto_USD': 'sum'
                     }
-                    
-                    if 'Fecha_Creacion' in df_proyectos.columns:
-                        agg_dict['Fecha_Creacion'] = fecha_minima
-                    if 'Fecha_Cierre' in df_proyectos.columns:
-                        agg_dict['Fecha_Cierre'] = fecha_maxima
+                    if 'Fecha_Cierre' in df_proyectos.columns: agg_dict['Fecha_Cierre'] = fecha_cierre_valida
 
                     res_proy = df_proyectos.groupby(['ID_Proyecto', 'Cliente']).agg(agg_dict).reset_index()
                     
-                    renombres_proy = {
-                        'Cotización': 'Cotizaciones',
-                        'Monto_MXN': 'Total_MXN',
-                        'Monto_USD': 'Total_USD',
-                        'Estatus': 'Estatus_General',
-                        'Fecha_Creacion': 'Fecha_Creacion',
-                        'Fecha_Cierre': 'Fecha_Cierre'
-                    }
-                    res_proy = res_proy.rename(columns=renombres_proy)
+                    renombres = {'Cotización': 'Cotizaciones', 'Monto_MXN': 'Total_MXN', 'Monto_USD': 'Total_USD'}
+                    res_proy = res_proy.rename(columns=renombres)
                     
                     if 'Fecha_Cierre' in res_proy.columns:
                         def calcular_vigencia(fila):
-                            if fila['Estatus_General'] != "⏳ EN PROCESO":
-                                return "Cerrado"
                             f_cierre = pd.to_datetime(fila['Fecha_Cierre'], errors='coerce', dayfirst=True)
-                            if pd.isna(f_cierre):
-                                return "⚪ Sin Fecha"
+                            if pd.isna(f_cierre): return "⚪ Sin Fecha"
                             dias = (f_cierre.normalize() - pd.Timestamp.now().normalize()).days
-                            if dias < 0:
-                                return f"🔴 VENCIDO ({abs(dias)}d)"
-                            elif dias <= 5:
-                                return f"🟡 Vence en {dias}d"
-                            else:
-                                return f"🟢 Vigente ({dias}d)"
+                            if dias < 0: return f"🔴 VENCIDO ({abs(dias)}d)"
+                            elif dias <= 5: return f"🟡 Vence en {dias}d"
+                            else: return f"🟢 Vigente ({dias}d)"
                                 
                         res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
-                        cols_orden = ['ID_Proyecto', 'Cliente', 'Estatus_General', 'Vigencia', 'Fecha_Creacion', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Categoria', 'Descripcion', 'Cotizaciones']
-                        cols_finales_proy = [c for c in cols_orden if c in res_proy.columns]
-                        res_proy = res_proy[cols_finales_proy]
+                        cols_orden = ['ID_Proyecto', 'Cliente', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Categoria', 'Descripcion', 'Cotizaciones']
+                        res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
                     st.dataframe(res_proy.style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
-                else:
-                    st.info("Ninguna cotización tiene un número de proyecto asignado.")
-            else:
-                st.info("El archivo CSV no contiene la columna 'PROYECTO'.")
+                else: st.info("No hay proyectos agrupados y vivos actualmente.")
+            else: st.info("Falta la columna 'PROYECTO'.")
 
-        with tab_vip:
+        # --- OPERACIÓN VIP ---
+        with tab_op_vip:
             if not df_vip.empty:
                 sel = st.selectbox("Filtrar VIP:", ["Todos"] + sorted(df_vip['Cliente'].unique().tolist()), key="f_vip")
                 df_m = df_vip if sel == "Todos" else df_vip[df_vip['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_vip_{sel}")
 
-        with tab_potencial:
-            if not df_potencial.empty:
-                sel = st.selectbox("Filtrar Emergentes:", ["Todos"] + sorted(df_potencial['Cliente'].unique().tolist()), key="f_pot")
-                df_m = df_potencial if sel == "Todos" else df_potencial[df_potencial['Cliente'] == sel]
+        # --- OPERACIÓN 80/20 ---
+        with tab_op_8020:
+            if not df_80_20.empty:
+                sel = st.selectbox("Filtrar Emergentes (Top 10):", ["Todos"] + sorted(df_80_20['Cliente'].unique().tolist()), key="f_pot")
+                df_m = df_80_20 if sel == "Todos" else df_80_20[df_80_20['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_pot_{sel}")
 
-        with tab_general:
-            if not df_general.empty:
-                sel = st.selectbox("Filtrar Base:", ["Todos"] + sorted(df_general['Cliente'].unique().tolist()), key="f_gral")
-                df_m = df_general if sel == "Todos" else df_general[df_general['Cliente'] == sel]
+        # --- GENERAL ---
+        with tab_gral:
+            if not df_resto.empty:
+                sel = st.selectbox("Filtrar Base (Menor Prioridad):", ["Todos"] + sorted(df_resto['Cliente'].unique().tolist()), key="f_gral")
+                df_m = df_resto if sel == "Todos" else df_resto[df_resto['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_gral_{sel}")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.write("Por favor sube tu archivo bruto (Directo de Scott) para empezar.")
-          
+    st.write("Por favor sube tu archivo bruto de Scott para empezar.")
 
-             
-      
+       
+       
+     
