@@ -4,10 +4,9 @@ from datetime import datetime
 
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 
-# --- DISEÑO ESTÉTICO CORPORATIVO (MESS SERVICIOS METROLÓGICOS) ---
+# --- DISEÑO ESTÉTICO CORPORATIVO (CORREGIDO PARA CONTRASTE) ---
 st.markdown("""
     <style>
-    /* Importación de tipografía geométrica similar al logotipo de MESS */
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
     
     html, body, [class*="css"] { 
@@ -18,7 +17,7 @@ st.markdown("""
     .titulo-radar {
         font-size: 42px; 
         font-weight: 900;
-        color: #003a70; /* Azul oscuro corporativo */
+        color: #003a70;
         margin-bottom: -5px;
         letter-spacing: -1px;
         text-transform: uppercase;
@@ -42,7 +41,6 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     
-    /* Etiquetas de Métricas */
     div[data-testid="stMetricLabel"] {
         font-size: 13px !important;
         font-weight: 700 !important;
@@ -51,7 +49,6 @@ st.markdown("""
         letter-spacing: 0.5px;
     }
     
-    /* Valores de Métricas */
     div[data-testid="stMetricValue"] {
         font-size: 26px !important;
         font-weight: 800 !important;
@@ -71,10 +68,27 @@ st.markdown("""
         border-bottom-color: #003a70 !important;
     }
     
-    /* Sidebar */
+    /* === CORRECCIÓN DE CONTRASTE EN SIDEBAR === */
     [data-testid="stSidebar"] {
-        background-color: #f4f6f7;
+        background-color: #f4f6f7 !important;
         border-right: 1px solid #e0e0e0;
+    }
+    /* Forzar texto azul oscuro en todos los elementos del sidebar */
+    [data-testid="stSidebar"] p, 
+    [data-testid="stSidebar"] label, 
+    [data-testid="stSidebar"] h1, 
+    [data-testid="stSidebar"] h2, 
+    [data-testid="stSidebar"] h3, 
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] {
+        color: #003a70 !important;
+        font-weight: 600;
+    }
+    /* Asegurar que los inputs mantengan contraste */
+    .stTextInput input {
+        color: #000000 !important;
+        background-color: #ffffff !important;
+        border: 1px solid #b2bec3 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -93,7 +107,7 @@ if not check_password():
 try:
     st.sidebar.image("logo mess 1.jpg", use_container_width=True)
 except:
-    st.sidebar.markdown("**[LOGO MESS]** *(Asegúrate de tener el archivo 'logo mess 1.jpg' en la carpeta)*")
+    pass
 
 st.markdown('<div class="titulo-radar">Radar Comercial</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Inteligencia de Cierres Diarios y Proyectos Vivos</div>', unsafe_allow_html=True)
@@ -164,6 +178,12 @@ if archivo_cargado is not None:
         st.sidebar.divider()
         st.sidebar.header("Filtros Tácticos")
         
+        # NUEVO: Búsqueda por ID de Proyecto o Cliente
+        busqueda_proyecto = st.sidebar.text_input("🔍 Buscar ID de Proyecto o Cliente:", placeholder="Ej. 111822 o SAFRAN")
+        if busqueda_proyecto:
+            df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
+                    (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
+
         max_monto = float(df['Peso_Interno_Orden'].max()) if not df.empty else 1000000.0
         if pd.isna(max_monto) or max_monto == 0: max_monto = 100000.0
         
@@ -361,5 +381,6 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
+   
 
-         
+     
