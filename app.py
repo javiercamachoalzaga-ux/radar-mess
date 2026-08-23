@@ -2,31 +2,100 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="Radar Comercial Activo", layout="wide")
+st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 
+# --- DISEÑO ESTÉTICO CORPORATIVO (MESS SERVICIOS METROLÓGICOS) ---
 st.markdown("""
     <style>
-    html, body, [class*="css"]  { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; }
-    .titulo-radar {
-        font-size: 42px; font-weight: 900;
-        background: -webkit-linear-gradient(45deg, #1e3c72, #2a5298, #00C6FF);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: -10px;
+    /* Importación de tipografía geométrica similar al logotipo de MESS */
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
+    
+    html, body, [class*="css"] { 
+        font-family: 'Montserrat', sans-serif !important; 
     }
-    .subtitulo { font-size: 16px; color: #6c757d; margin-bottom: 25px; font-weight: 500; }
+    
+    /* Header Corporativo */
+    .titulo-radar {
+        font-size: 42px; 
+        font-weight: 900;
+        color: #003a70; /* Azul oscuro corporativo */
+        margin-bottom: -5px;
+        letter-spacing: -1px;
+        text-transform: uppercase;
+    }
+    .subtitulo { 
+        font-size: 16px; 
+        color: #555555; 
+        margin-bottom: 30px; 
+        font-weight: 600; 
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    /* Tarjetas de Métricas */
+    div[data-testid="metric-container"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px 20px;
+        border-radius: 8px;
+        border-left: 5px solid #003a70;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    /* Etiquetas de Métricas */
+    div[data-testid="stMetricLabel"] {
+        font-size: 13px !important;
+        font-weight: 700 !important;
+        color: #7f8c8d !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Valores de Métricas */
+    div[data-testid="stMetricValue"] {
+        font-size: 26px !important;
+        font-weight: 800 !important;
+        color: #2c3e50 !important;
+    }
+
+    /* Pestañas (Tabs) Estilizadas */
+    button[role="tab"] {
+        font-weight: 700 !important;
+        font-size: 14px !important;
+        padding-bottom: 10px !important;
+        text-transform: uppercase;
+        color: #7f8c8d !important;
+    }
+    button[role="tab"][aria-selected="true"] {
+        color: #003a70 !important;
+        border-bottom-color: #003a70 !important;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #f4f6f7;
+        border-right: 1px solid #e0e0e0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 def check_password():
-    st.sidebar.header("🔒 Acceso Restringido")
-    pwd = st.sidebar.text_input("🔑 Contraseña", type="password")
+    st.sidebar.header("Acceso Restringido")
+    pwd = st.sidebar.text_input("Contraseña", type="password")
     if "mi_contrasena" in st.secrets and pwd == st.secrets["mi_contrasena"]: return True
     return False
 
 if not check_password():
-    st.info("Ingresa tu contraseña en el menú lateral.")
+    st.info("Ingresa tu contraseña en el menú lateral para acceder al sistema.")
     st.stop()
 
-st.markdown('<div class="titulo-radar">⚡ Radar Comercial Activo</div>', unsafe_allow_html=True)
+# Logo en el menú lateral
+try:
+    st.sidebar.image("logo mess 1.jpg", use_container_width=True)
+except:
+    st.sidebar.markdown("**[LOGO MESS]** *(Asegúrate de tener el archivo 'logo mess 1.jpg' en la carpeta)*")
+
+st.markdown('<div class="titulo-radar">Radar Comercial</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Inteligencia de Cierres Diarios y Proyectos Vivos</div>', unsafe_allow_html=True)
 
 archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto de Scott", type=["csv"])
@@ -86,17 +155,15 @@ if archivo_cargado is not None:
         df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # Pre-procesamiento de fechas para los filtros
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
         # 3. FILTROS TÁCTICOS (MENÚ LATERAL)
         # ==========================================
-        st.sidebar.markdown("---")
-        st.sidebar.header("🔍 Filtros Tácticos")
+        st.sidebar.divider()
+        st.sidebar.header("Filtros Tácticos")
         
-        # A. Filtro por Monto
         max_monto = float(df['Peso_Interno_Orden'].max()) if not df.empty else 1000000.0
         if pd.isna(max_monto) or max_monto == 0: max_monto = 100000.0
         
@@ -104,13 +171,10 @@ if archivo_cargado is not None:
                                       min_value=0.0, 
                                       max_value=max_monto, 
                                       value=(0.0, max_monto), 
-                                      step=5000.0,
-                                      help="Filtra las cotizaciones según su valor combinado en pesos y dólares.")
+                                      step=5000.0)
 
-        # B. Filtro por Fecha
         tipo_filtro_fecha = st.sidebar.selectbox("Filtrar por Fecha:", ["Sin Filtro", "Fecha de Creación", "Fecha de Cierre"])
         
-        # Aplicamos los filtros al DataFrame principal
         df = df[(df['Peso_Interno_Orden'] >= rango_monto[0]) & (df['Peso_Interno_Orden'] <= rango_monto[1])]
 
         if tipo_filtro_fecha != "Sin Filtro":
@@ -124,21 +188,25 @@ if archivo_cargado is not None:
                     f_ini, f_fin = fecha_rango
                     mask = (df[col_fecha].dt.date >= f_ini) & (df[col_fecha].dt.date <= f_fin)
                     incluir_vacios = st.sidebar.checkbox(f"Incluir registros sin {tipo_filtro_fecha}", value=True)
-                    
-                    if incluir_vacios:
-                        df = df[mask | df[col_fecha].isna()]
-                    else:
-                        df = df[mask]
+                    if incluir_vacios: df = df[mask | df[col_fecha].isna()]
+                    else: df = df[mask]
             else:
-                st.sidebar.warning(f"No hay registros con {tipo_filtro_fecha} válidas en el rango de monto seleccionado.")
+                st.sidebar.warning(f"No hay registros válidos para el filtro de fecha.")
+
+        st.sidebar.divider()
+        
+        # PANEL LATERAL RESUMIDO
+        st.sidebar.header("Tubería (Filtrada)")
+        st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
+        st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
 
         # ==========================================
-        # 4. ASIGNACIÓN VIP Y 80-20 (Post-Filtro)
+        # 4. ASIGNACIÓN VIP Y 80-20
         # ==========================================
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
-        df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ VIP" if any(m in c.upper() for m in top_10) else "Normal")
+        df['Prioridad'] = df['Cliente'].apply(lambda c: "VIP" if any(m in c.upper() for m in top_10) else "Normal")
 
-        df_vip = df[df['Prioridad'] == "⭐ VIP"].copy()
+        df_vip = df[df['Prioridad'] == "VIP"].copy()
         df_normal = df[df['Prioridad'] == "Normal"].copy()
         
         ranking_normal = df_normal.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
@@ -149,59 +217,55 @@ if archivo_cargado is not None:
         # 5. CÁLCULOS DE SLA Y ESTRATEGIA DIARIA
         if 'Fecha_Creacion' in df.columns:
             df['SLA'] = (pd.Timestamp.now().normalize() - df['Fecha_Creacion_DT']).dt.days
-            df['SLA'] = df['SLA'].apply(lambda d: "⚪ S/F" if pd.isna(d) else ("🔴 +3 días" if d >= 3 else ("🟡 2 días" if d == 2 else "🟢 Reciente")))
+            df['SLA'] = df['SLA'].apply(lambda d: "S/F" if pd.isna(d) else ("+3 Días" if d >= 3 else ("2 Días" if d == 2 else "Reciente")))
         else:
-            df['SLA'] = "⚪ N/A"
+            df['SLA'] = "N/A"
 
         def estrategia(fila):
-            if fila['Prioridad'] == "⭐ VIP": return "🚨 RIESGO: Visita técnica presencial." if "🔴" in fila['SLA'] else ("📞 ALERTA: Llamada consultiva gerencial." if "🟡" in fila['SLA'] else "✉️ SEGUIMIENTO: Correo.")
-            else: return "💼 ALTO VALOR: Priorizar cierre." if fila['Peso_Interno_Orden'] > 15000 else ("⏱️ 80/20: Descartar rápido." if "🔴" in fila['SLA'] else "📱 CONTACTO: WhatsApp.")
+            if fila['Prioridad'] == "VIP": return "[RIESGO] Visita presencial" if "+3" in fila['SLA'] else ("[ALERTA] Llamada consultiva" if "2" in fila['SLA'] else "[SEGUIMIENTO] Correo")
+            else: return "[ALTO VALOR] Priorizar cierre" if fila['Peso_Interno_Orden'] > 15000 else ("[80/20] Descartar rápido" if "+3" in fila['SLA'] else "[CONTACTO] WhatsApp")
 
         df['Estrategia_Cierre'] = df.apply(estrategia, axis=1)
         
-        df_vip = df[df['Prioridad'] == "⭐ VIP"].sort_values(by='Peso_Interno_Orden', ascending=False)
+        df_vip = df[df['Prioridad'] == "VIP"].sort_values(by='Peso_Interno_Orden', ascending=False)
         df_80_20 = df[df['Cliente'].isin(nombres_80_20)].sort_values(by='Peso_Interno_Orden', ascending=False)
         df_resto = df[~df['Cliente'].isin(nombres_80_20) & (df['Prioridad'] == "Normal")].sort_values(by='Peso_Interno_Orden', ascending=False)
 
         cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df.columns]
 
-        # PANEL LATERAL RESUMIDO
-        st.sidebar.markdown("---")
-        st.sidebar.header("💰 Tubería (Filtrada)")
-        st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
-        st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
-
         # 6. RENDERIZADO DE PESTAÑAS
         tab_dash_vip, tab_dash_8020, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
-            "👑 Dash VIP", "🚀 Dash 80/20", "📁 Proyectos Vivos", "🎯 Plan de Acción", "🏆 Operación VIP", "⚡ Operación 80/20", "📋 General"
+            "Dash VIP", "Dash 80/20", "Proyectos Vivos", "Plan de Acción", "Op. VIP", "Op. 80/20", "General"
         ])
 
         with tab_dash_vip:
-            st.markdown("### 👑 Concentración de Capital: Cuentas VIP")
+            st.markdown("### Concentración de Capital: Cuentas VIP")
             if not df_vip.empty:
                 col_m, col_u = st.columns(2)
                 col_m.metric("Capital VIP (MXN)", f"${df_vip['Monto_MXN'].sum():,.2f}")
                 col_u.metric("Capital VIP (USD)", f"${df_vip['Monto_USD'].sum():,.2f}")
-                st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'))
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
             else:
                 st.info("No hay cotizaciones vivas para cuentas VIP con los filtros actuales.")
 
         with tab_dash_8020:
-            st.markdown("### 🚀 Oportunidades de Alto Impacto (80/20)")
+            st.markdown("### Oportunidades de Alto Impacto (80/20)")
             if not df_80_20.empty:
                 col_m, col_u = st.columns(2)
                 col_m.metric("Capital 80/20 (MXN)", f"${df_80_20['Monto_MXN'].sum():,.2f}")
                 col_u.metric("Capital 80/20 (USD)", f"${df_80_20['Monto_USD'].sum():,.2f}")
-                st.bar_chart(df_80_20.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'))
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.bar_chart(df_80_20.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
             else:
                 st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
         proyectos_editados = pd.DataFrame()
 
         with tab_proy:
-            st.markdown("### 📁 Proyectos Activos (Selección de Prioridades)")
-            st.write("📌 **Instrucción:** Marca la casilla `🎯 Atender Hoy` en los proyectos que vas a gestionar. Tu selección se enviará automáticamente a la pestaña 'Plan de Acción'.")
+            st.markdown("### Selección de Prioridades (Proyectos Vivos)")
+            st.caption("Marca la casilla 'Atender Hoy' para enviar los proyectos a tu Plan de Acción.")
             
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
@@ -224,70 +288,78 @@ if archivo_cargado is not None:
                     if 'Fecha_Cierre' in res_proy.columns:
                         def calcular_vigencia(fila):
                             f_cierre = pd.to_datetime(fila['Fecha_Cierre'], errors='coerce', dayfirst=True)
-                            if pd.isna(f_cierre): return "⚪ Sin Fecha"
+                            if pd.isna(f_cierre): return "Sin Fecha"
                             dias = (f_cierre.normalize() - pd.Timestamp.now().normalize()).days
-                            if dias < 0: return f"🔴 VENCIDO ({abs(dias)}d)"
-                            elif dias <= 5: return f"🟡 Vence en {dias}d"
-                            else: return f"🟢 Vigente ({dias}d)"
+                            if dias < 0: return f"VENCIDO ({abs(dias)}d)"
+                            elif dias <= 5: return f"Vence en {dias}d"
+                            else: return f"Vigente ({dias}d)"
                                 
                         res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
                         cols_orden = ['ID_Proyecto', 'Cliente', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Descripcion', 'Cotizaciones']
                         res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
-                    res_proy.insert(0, '🎯 Atender Hoy', False)
+                    res_proy.insert(0, 'Atender Hoy', False)
                     
+                    st.markdown("<br>", unsafe_allow_html=True)
                     proyectos_editados = st.data_editor(
                         res_proy, 
                         hide_index=True, 
                         use_container_width=True, 
                         key="editor_proyectos",
-                        column_config={"🎯 Atender Hoy": st.column_config.CheckboxColumn("🎯 Atender Hoy", default=False)}
+                        column_config={"Atender Hoy": st.column_config.CheckboxColumn("Atender Hoy", default=False)}
                     )
                 else: st.info("No hay proyectos agrupados y vivos que cumplan con los filtros.")
             else: st.info("Falta la columna 'PROYECTO'.")
 
         with tab_plan:
-            st.markdown("### 🎯 Tu Plan de Acción para Hoy")
+            st.markdown("### Plan de Acción del Día")
             if not proyectos_editados.empty:
-                plan_df = proyectos_editados[proyectos_editados['🎯 Atender Hoy'] == True].copy()
+                plan_df = proyectos_editados[proyectos_editados['Atender Hoy'] == True].copy()
                 
                 if not plan_df.empty:
-                    st.success("¡Objetivos fijados! Este es tu campo de batalla para hoy.")
+                    st.success("Objetivos fijados. Este es tu objetivo de cierre para la jornada.")
                     col1, col2 = st.columns(2)
                     col1.metric("Objetivo MXN a Cerrar", f"${plan_df['Total_MXN'].sum():,.2f}")
                     col2.metric("Objetivo USD a Cerrar", f"${plan_df['Total_USD'].sum():,.2f}")
                     
-                    st.dataframe(plan_df.drop(columns=['🎯 Atender Hoy']).style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.dataframe(plan_df.drop(columns=['Atender Hoy']).style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
                 else:
-                    st.info("Aún no has seleccionado ningún proyecto. Ve a la pestaña '📁 Proyectos Vivos' y marca tus prioridades del día.")
+                    st.info("Aún no has seleccionado ningún proyecto. Ve a la pestaña 'Proyectos Vivos' y marca tus prioridades.")
             else:
                 st.info("Ajusta tus filtros o carga tu archivo para generar tu plan de acción.")
 
         with tab_op_vip:
+            st.markdown("### Detalle Operativo VIP")
             if not df_vip.empty:
                 sel = st.selectbox("Filtrar VIP:", ["Todos"] + sorted(df_vip['Cliente'].unique().tolist()), key="f_vip")
                 df_m = df_vip if sel == "Todos" else df_vip[df_vip['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_vip_{sel}")
+            else:
+                st.info("Sin registros.")
 
         with tab_op_8020:
+            st.markdown("### Detalle Operativo 80/20")
             if not df_80_20.empty:
                 sel = st.selectbox("Filtrar Emergentes (Top 10):", ["Todos"] + sorted(df_80_20['Cliente'].unique().tolist()), key="f_pot")
                 df_m = df_80_20 if sel == "Todos" else df_80_20[df_80_20['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_pot_{sel}")
+            else:
+                st.info("Sin registros.")
 
         with tab_gral:
+            st.markdown("### Seguimiento General (Menor Prioridad)")
             if not df_resto.empty:
-                sel = st.selectbox("Filtrar Base (Menor Prioridad):", ["Todos"] + sorted(df_resto['Cliente'].unique().tolist()), key="f_gral")
+                sel = st.selectbox("Filtrar Base:", ["Todos"] + sorted(df_resto['Cliente'].unique().tolist()), key="f_gral")
                 df_m = df_resto if sel == "Todos" else df_resto[df_resto['Cliente'] == sel]
                 st.data_editor(df_m[cols_vista], hide_index=True, use_container_width=True, key=f"t_gral_{sel}")
+            else:
+                st.info("Sin registros.")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.write("Por favor sube tu archivo bruto de Scott para empezar.")
-      
-      
+    st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 
-   
-    
+         
