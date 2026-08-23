@@ -4,7 +4,7 @@ from datetime import datetime
 
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 
-# --- DISEÑO ESTÉTICO CORPORATIVO (CORREGIDO PARA CONTRASTE) ---
+# --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
@@ -73,7 +73,6 @@ st.markdown("""
         background-color: #f4f6f7 !important;
         border-right: 1px solid #e0e0e0;
     }
-    /* Forzar texto azul oscuro en todos los elementos del sidebar */
     [data-testid="stSidebar"] p, 
     [data-testid="stSidebar"] label, 
     [data-testid="stSidebar"] h1, 
@@ -84,7 +83,6 @@ st.markdown("""
         color: #003a70 !important;
         font-weight: 600;
     }
-    /* Asegurar que los inputs mantengan contraste */
     .stTextInput input {
         color: #000000 !important;
         background-color: #ffffff !important;
@@ -130,6 +128,7 @@ if archivo_cargado is not None:
 
         df_clean['Cotización'] = buscar_col(["COTIZACION"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
+        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) # NUEVO: Extracción de Área
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
@@ -166,6 +165,9 @@ if archivo_cargado is not None:
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
         
+        if 'Area' not in df.columns: df['Area'] = 'SIN ÁREA'
+        df['Area'] = df['Area'].fillna('SIN ÁREA').astype(str).str.strip().str.upper()
+        
         df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
@@ -178,7 +180,6 @@ if archivo_cargado is not None:
         st.sidebar.divider()
         st.sidebar.header("Filtros Tácticos")
         
-        # NUEVO: Búsqueda por ID de Proyecto o Cliente
         busqueda_proyecto = st.sidebar.text_input("🔍 Buscar ID de Proyecto o Cliente:", placeholder="Ej. 111822 o SAFRAN")
         if busqueda_proyecto:
             df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
@@ -251,12 +252,13 @@ if archivo_cargado is not None:
         df_80_20 = df[df['Cliente'].isin(nombres_80_20)].sort_values(by='Peso_Interno_Orden', ascending=False)
         df_resto = df[~df['Cliente'].isin(nombres_80_20) & (df['Prioridad'] == "Normal")].sort_values(by='Peso_Interno_Orden', ascending=False)
 
-        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        # Agregamos 'Area' a las columnas ideales para la vista
+        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Area', 'Cliente', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df.columns]
 
         # 6. RENDERIZADO DE PESTAÑAS
-        tab_dash_vip, tab_dash_8020, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
-            "Dash VIP", "Dash 80/20", "Proyectos Vivos", "Plan de Acción", "Op. VIP", "Op. 80/20", "General"
+        tab_dash_vip, tab_dash_8020, tab_dash_areas, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
+            "Dash VIP", "Dash 80/20", "Dash Áreas", "Proyectos Vivos", "Plan de Acción", "Op. VIP", "Op. 80/20", "General"
         ])
 
         with tab_dash_vip:
@@ -281,6 +283,21 @@ if archivo_cargado is not None:
             else:
                 st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
+        # --- NUEVA PESTAÑA: DASHBOARD DE ÁREAS ---
+        with tab_dash_areas:
+            st.markdown("### Distribución por Unidades de Negocio (Equipos vs Laboratorios)")
+            if not df.empty and 'Area' in df.columns:
+                resumen_area = df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
+                resumen_area = resumen_area.sort_values(by='Monto_MXN', ascending=False)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.dataframe(resumen_area.style.format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), use_container_width=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.bar_chart(resumen_area.set_index('Area'), use_container_width=True)
+            else:
+                st.info("No se encontró información de Áreas en el archivo actual.")
+
         proyectos_editados = pd.DataFrame()
 
         with tab_proy:
@@ -296,6 +313,7 @@ if archivo_cargado is not None:
 
                     agg_dict = {
                         'Cotización': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else "",
+                        'Area': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Area' in df_proyectos.columns else "",
                         'Descripcion': lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else "",
                         'Monto_MXN': 'sum',
                         'Monto_USD': 'sum'
@@ -315,7 +333,7 @@ if archivo_cargado is not None:
                             else: return f"Vigente ({dias}d)"
                                 
                         res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
-                        cols_orden = ['ID_Proyecto', 'Cliente', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Descripcion', 'Cotizaciones']
+                        cols_orden = ['ID_Proyecto', 'Cliente', 'Area', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Descripcion', 'Cotizaciones']
                         res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
@@ -381,6 +399,4 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
-   
-
-     
+              
