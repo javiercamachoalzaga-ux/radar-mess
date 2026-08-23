@@ -47,16 +47,22 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott (Histórico Compl
 
 if archivo_cargado is not None:
     try:
-        # Leemos y limpiamos
-        df = pd.read_csv(archivo_cargado, encoding='latin-1').dropna(subset=['COTIZACION', 'CLIENTE'])
-        df.columns = df.columns.str.strip()
+        # Leemos el archivo
+        df = pd.read_csv(archivo_cargado, encoding='latin-1')
         
-        # --- NUEVO: TRADUCTOR CON PROYECTOS ---
+        # --- SOLUCIÓN AL ERROR DE ETIQUETAS DUPLICADAS ---
+        # 1. Quitamos espacios en blanco de los nombres de las columnas
+        df.columns = df.columns.str.strip()
+        # 2. Eliminamos cualquier columna que tenga el mismo nombre exacto que otra
+        df = df.loc[:, ~df.columns.duplicated()]
+        # 3. Ahora sí eliminamos las filas vacías basadas en Cotización y Cliente
+        df = df.dropna(subset=['COTIZACION', 'CLIENTE'])
+        
+        # --- TRADUCTOR CON PROYECTOS ---
         traductor = {
             "COTIZACION": "Cotización", 
             "CLIENTE": "Cliente", 
             "VALOR": "Monto_Bruto",
-            "VALOR ": "Monto_Bruto", # Cubre si viene con espacio
             "FECHA": "Fecha_Registro", 
             "ESTATUS": "Estatus",
             "PROYECTO": "ID_Proyecto",
@@ -255,3 +261,7 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.write("Por favor sube tu archivo CSV histórico de Scott para empezar.")
+
+    
+     
+
