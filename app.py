@@ -35,15 +35,10 @@ if archivo_cargado is not None:
     try:
         # 1. Leemos el archivo
         df = pd.read_csv(archivo_cargado, encoding='latin-1')
-        
-        # Limpiamos los nombres de las columnas para evitar espacios
         df.columns = df.columns.str.strip()
-        
-        # Si Scott duplica columnas exactas (ej. dos que se llamen exactamente 'CLIENTE'), dejamos solo la primera
         df = df.loc[:, ~df.columns.duplicated()]
 
         # 2. Consolidación de "VALOR"
-        # A veces Scott manda "VALOR" y "VALOR.1". Las unimos en una sola columna limpia antes de borrar filas.
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
             if val_str == 'NAN' or val_str.strip() == '': return 0.0
@@ -60,7 +55,6 @@ if archivo_cargado is not None:
             if 'USD' not in val_str: return 0.0
             return extraer_numero(val_str)
             
-        # Tomamos la primera columna que empiece con VALOR
         col_valor = [c for c in df.columns if c.startswith('VALOR')]
         if col_valor:
             df['Monto_MXN'] = df[col_valor[0]].apply(procesar_mxn)
@@ -84,7 +78,7 @@ if archivo_cargado is not None:
         }
         df = df.rename(columns=lambda x: traductor.get(x, x))
         
-        # 4. AHORA SÍ, borramos filas vacías usando la columna traducida
+        # 4. Limpieza de filas vacías
         if 'Cliente' in df.columns:
             df = df.dropna(subset=['Cliente'])
             df['Cliente'] = df['Cliente'].astype(str).str.strip()
@@ -176,14 +170,15 @@ if archivo_cargado is not None:
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
+                    # AQUI ESTÁ LA SOLUCIÓN: FORZAR CONVERSIÓN A STRING
                     def estatus_proyecto(est_list):
-                        s = " ".join(est_list).upper()
+                        s = " ".join([str(e) for e in est_list]).upper()
                         return "✅ GANADO" if "GANAD" in s else ("⏳ EN PROCESO" if "PROCESO" in s else "❌ PERDIDO/CANCELADO")
                     
                     res_proy = df_proyectos.groupby(['ID_Proyecto', 'Cliente']).agg(
-                        Cotizaciones=('Cotización', lambda x: ", ".join(x.dropna().unique())),
-                        Categoria=('Categoria', lambda x: ", ".join(x.dropna().unique()) if 'Categoria' in df_proyectos.columns else ""),
-                        Descripcion=('Descripcion', lambda x: " | ".join(x.dropna().unique()) if 'Descripcion' in df_proyectos.columns else ""),
+                        Cotizaciones=('Cotización', lambda x: ", ".join(x.dropna().astype(str).unique())),
+                        Categoria=('Categoria', lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else ""),
+                        Descripcion=('Descripcion', lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else ""),
                         Total_MXN=('Monto_MXN', 'sum'),
                         Total_USD=('Monto_USD', 'sum'),
                         Creado=('Fecha_Creacion', 'min'),
@@ -216,7 +211,13 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.write("Por favor sube tu archivo CSV histórico de Scott para empezar.")
-
+      
+        
+       
+    
+    
+         
+               
 
       
    
