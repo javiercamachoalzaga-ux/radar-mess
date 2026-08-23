@@ -86,7 +86,55 @@ if archivo_cargado is not None:
         df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # 3. ASIGNACIÓN VIP Y 80-20
+        # Pre-procesamiento de fechas para los filtros
+        df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
+        df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
+
+        # ==========================================
+        # 3. FILTROS TÁCTICOS (MENÚ LATERAL)
+        # ==========================================
+        st.sidebar.markdown("---")
+        st.sidebar.header("🔍 Filtros Tácticos")
+        
+        # A. Filtro por Monto
+        max_monto = float(df['Peso_Interno_Orden'].max()) if not df.empty else 1000000.0
+        if pd.isna(max_monto) or max_monto == 0: max_monto = 100000.0
+        
+        rango_monto = st.sidebar.slider("Rango de Monto (Eq. MXN)", 
+                                      min_value=0.0, 
+                                      max_value=max_monto, 
+                                      value=(0.0, max_monto), 
+                                      step=5000.0,
+                                      help="Filtra las cotizaciones según su valor combinado en pesos y dólares.")
+
+        # B. Filtro por Fecha
+        tipo_filtro_fecha = st.sidebar.selectbox("Filtrar por Fecha:", ["Sin Filtro", "Fecha de Creación", "Fecha de Cierre"])
+        
+        # Aplicamos los filtros al DataFrame principal
+        df = df[(df['Peso_Interno_Orden'] >= rango_monto[0]) & (df['Peso_Interno_Orden'] <= rango_monto[1])]
+
+        if tipo_filtro_fecha != "Sin Filtro":
+            col_fecha = 'Fecha_Creacion_DT' if tipo_filtro_fecha == "Fecha de Creación" else 'Fecha_Cierre_DT'
+            min_date = df[col_fecha].min()
+            max_date = df[col_fecha].max()
+            
+            if pd.notna(min_date) and pd.notna(max_date):
+                fecha_rango = st.sidebar.date_input("Selecciona el rango:", [min_date.date(), max_date.date()])
+                if len(fecha_rango) == 2:
+                    f_ini, f_fin = fecha_rango
+                    mask = (df[col_fecha].dt.date >= f_ini) & (df[col_fecha].dt.date <= f_fin)
+                    incluir_vacios = st.sidebar.checkbox(f"Incluir registros sin {tipo_filtro_fecha}", value=True)
+                    
+                    if incluir_vacios:
+                        df = df[mask | df[col_fecha].isna()]
+                    else:
+                        df = df[mask]
+            else:
+                st.sidebar.warning(f"No hay registros con {tipo_filtro_fecha} válidas en el rango de monto seleccionado.")
+
+        # ==========================================
+        # 4. ASIGNACIÓN VIP Y 80-20 (Post-Filtro)
+        # ==========================================
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ VIP" if any(m in c.upper() for m in top_10) else "Normal")
 
@@ -98,9 +146,9 @@ if archivo_cargado is not None:
         df_80_20 = df_normal[df_normal['Cliente'].isin(nombres_80_20)].copy()
         df_resto = df_normal[~df_normal['Cliente'].isin(nombres_80_20)].copy()
 
-        # 4. CÁLCULOS DE SLA Y ESTRATEGIA DIARIA
+        # 5. CÁLCULOS DE SLA Y ESTRATEGIA DIARIA
         if 'Fecha_Creacion' in df.columns:
-            df['SLA'] = (pd.Timestamp.now().normalize() - pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)).dt.days
+            df['SLA'] = (pd.Timestamp.now().normalize() - df['Fecha_Creacion_DT']).dt.days
             df['SLA'] = df['SLA'].apply(lambda d: "⚪ S/F" if pd.isna(d) else ("🔴 +3 días" if d >= 3 else ("🟡 2 días" if d == 2 else "🟢 Reciente")))
         else:
             df['SLA'] = "⚪ N/A"
@@ -120,11 +168,11 @@ if archivo_cargado is not None:
 
         # PANEL LATERAL RESUMIDO
         st.sidebar.markdown("---")
-        st.sidebar.header("💰 Tubería Total (Viva)")
+        st.sidebar.header("💰 Tubería (Filtrada)")
         st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
         st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
 
-        # 5. RENDERIZADO DE PESTAÑAS
+        # 6. RENDERIZADO DE PESTAÑAS
         tab_dash_vip, tab_dash_8020, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
             "👑 Dash VIP", "🚀 Dash 80/20", "📁 Proyectos Vivos", "🎯 Plan de Acción", "🏆 Operación VIP", "⚡ Operación 80/20", "📋 General"
         ])
@@ -137,7 +185,7 @@ if archivo_cargado is not None:
                 col_u.metric("Capital VIP (USD)", f"${df_vip['Monto_USD'].sum():,.2f}")
                 st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'))
             else:
-                st.info("No hay cotizaciones vivas para cuentas VIP.")
+                st.info("No hay cotizaciones vivas para cuentas VIP con los filtros actuales.")
 
         with tab_dash_8020:
             st.markdown("### 🚀 Oportunidades de Alto Impacto (80/20)")
@@ -147,9 +195,8 @@ if archivo_cargado is not None:
                 col_u.metric("Capital 80/20 (USD)", f"${df_80_20['Monto_USD'].sum():,.2f}")
                 st.bar_chart(df_80_20.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'))
             else:
-                st.info("No hay datos suficientes para el segmento 80/20.")
+                st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
-        # Declaramos una variable global para el plan de acción
         proyectos_editados = pd.DataFrame()
 
         with tab_proy:
@@ -188,11 +235,8 @@ if archivo_cargado is not None:
                         res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
-                    
-                    # Insertamos la columna de checkboxes interactivos al inicio
                     res_proy.insert(0, '🎯 Atender Hoy', False)
                     
-                    # Generamos el data_editor y guardamos el estado en una variable
                     proyectos_editados = st.data_editor(
                         res_proy, 
                         hide_index=True, 
@@ -200,14 +244,12 @@ if archivo_cargado is not None:
                         key="editor_proyectos",
                         column_config={"🎯 Atender Hoy": st.column_config.CheckboxColumn("🎯 Atender Hoy", default=False)}
                     )
-                else: st.info("No hay proyectos agrupados y vivos actualmente.")
+                else: st.info("No hay proyectos agrupados y vivos que cumplan con los filtros.")
             else: st.info("Falta la columna 'PROYECTO'.")
 
-        # --- NUEVO: PLAN DE ACCIÓN ---
         with tab_plan:
             st.markdown("### 🎯 Tu Plan de Acción para Hoy")
             if not proyectos_editados.empty:
-                # Filtramos solo lo que el usuario marcó con la palomita
                 plan_df = proyectos_editados[proyectos_editados['🎯 Atender Hoy'] == True].copy()
                 
                 if not plan_df.empty:
@@ -216,12 +258,11 @@ if archivo_cargado is not None:
                     col1.metric("Objetivo MXN a Cerrar", f"${plan_df['Total_MXN'].sum():,.2f}")
                     col2.metric("Objetivo USD a Cerrar", f"${plan_df['Total_USD'].sum():,.2f}")
                     
-                    # Quitamos la columna del checkbox para dejar la tabla limpia
                     st.dataframe(plan_df.drop(columns=['🎯 Atender Hoy']).style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
                 else:
                     st.info("Aún no has seleccionado ningún proyecto. Ve a la pestaña '📁 Proyectos Vivos' y marca tus prioridades del día.")
             else:
-                st.info("Carga tu archivo para generar tu plan de acción.")
+                st.info("Ajusta tus filtros o carga tu archivo para generar tu plan de acción.")
 
         with tab_op_vip:
             if not df_vip.empty:
@@ -245,4 +286,8 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.write("Por favor sube tu archivo bruto de Scott para empezar.")
-         
+      
+      
+
+   
+    
