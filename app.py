@@ -45,6 +45,7 @@ if archivo_cargado is not None:
                         return df_raw[col].copy()
             return pd.Series([None] * len(df_raw))
 
+        # Extracción sin las columnas innecesarias
         df_clean['Cotización'] = buscar_col(["COTIZACION"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
@@ -52,8 +53,6 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
-        df_clean['Categoria'] = buscar_col(["CATEGORIA"])
-        df_clean['Nombre_Contacto'] = buscar_col(["CONTACTO"])
 
         # Fusión automática de columnas de VALOR
         def extraer_numero(val_str):
@@ -122,7 +121,7 @@ if archivo_cargado is not None:
         df_80_20 = df[df['Cliente'].isin(nombres_80_20)].sort_values(by='Peso_Interno_Orden', ascending=False)
         df_resto = df[~df['Cliente'].isin(nombres_80_20) & (df['Prioridad'] == "Normal")].sort_values(by='Peso_Interno_Orden', ascending=False)
 
-        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Descripcion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df.columns]
 
         # PANEL LATERAL RESUMIDO
@@ -177,7 +176,6 @@ if archivo_cargado is not None:
 
                     agg_dict = {
                         'Cotización': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else "",
-                        'Categoria': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else "",
                         'Descripcion': lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else "",
                         'Monto_MXN': 'sum',
                         'Monto_USD': 'sum'
@@ -199,7 +197,7 @@ if archivo_cargado is not None:
                             else: return f"🟢 Vigente ({dias}d)"
                                 
                         res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
-                        cols_orden = ['ID_Proyecto', 'Cliente', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Categoria', 'Descripcion', 'Cotizaciones']
+                        cols_orden = ['ID_Proyecto', 'Cliente', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Descripcion', 'Cotizaciones']
                         res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
@@ -233,6 +231,6 @@ if archivo_cargado is not None:
 else:
     st.write("Por favor sube tu archivo bruto de Scott para empezar.")
 
-       
-       
-     
+                
+         
+      
