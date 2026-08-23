@@ -29,47 +29,22 @@ if not check_password():
 st.markdown('<div class="titulo-radar">⚡ Radar Comercial 80/20</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Inteligencia Táctica, Bateo y Proyectos 2026</div>', unsafe_allow_html=True)
 
-archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott (Histórico Completo)", type=["csv"])
+archivo_cargado = st.sidebar.file_uploader("Subir plantilla.radar_2.csv", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # 1. Leemos el archivo
+        # 1. Lectura directa del archivo limpio
         df = pd.read_csv(archivo_cargado, encoding='latin-1')
-        df.columns = df.columns.str.strip()
-        df = df.loc[:, ~df.columns.duplicated()]
-
-        # 2. Consolidación de "VALOR"
-        def extraer_numero(val_str):
-            val_str = str(val_str).upper()
-            if val_str == 'NAN' or val_str.strip() == '': return 0.0
-            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        def procesar_mxn(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' in val_str: return 0.0
-            return extraer_numero(val_str)
-
-        def procesar_usd(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' not in val_str: return 0.0
-            return extraer_numero(val_str)
-            
-        col_valor = [c for c in df.columns if c.startswith('VALOR')]
-        if col_valor:
-            df['Monto_MXN'] = df[col_valor[0]].apply(procesar_mxn)
-            df['Monto_USD'] = df[col_valor[0]].apply(procesar_usd)
-        else:
-            df['Monto_MXN'] = 0.0
-            df['Monto_USD'] = 0.0
-
-        # 3. Traductor Ampliado
+        df.columns = df.columns.str.strip().str.upper() # Fuerza mayúsculas para evitar desajustes
+        
+        # 2. Traductor Robusto
         traductor = {
             "COTIZACION": "Cotización", 
             "CLIENTE": "Cliente", 
+            "VALOR": "Monto_Bruto",
+            "VALOR ": "Monto_Bruto",
             "FECHA": "Fecha_Creacion", 
             "FECHA DE REGISTRO": "Fecha_Registro",
-            "FECHA DE CIERRE": "Fecha_Cierre",
             "ESTATUS": "Estatus",
             "PROYECTO": "ID_Proyecto",
             "DESCRIPCION": "Descripcion",
@@ -78,17 +53,37 @@ if archivo_cargado is not None:
         }
         df = df.rename(columns=lambda x: traductor.get(x, x))
         
-        # 4. Limpieza de filas vacías
-        if 'Cliente' in df.columns:
-            df = df.dropna(subset=['Cliente'])
-            df['Cliente'] = df['Cliente'].astype(str).str.strip()
-        else:
-            st.error("No se encontró la columna CLIENTE en el archivo.")
+        # 3. Limpieza de datos esenciales
+        if 'Cliente' not in df.columns:
+            st.error("El archivo no contiene la columna 'CLIENTE'.")
             st.stop()
             
+        df = df.dropna(subset=['Cliente'])
+        df['Cliente'] = df['Cliente'].astype(str).str.strip()
+        
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
-        
+
+        # 4. Procesamiento de Monedas Simplificado
+        def procesar_mxn(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' in val_str: return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
+            except: return 0.0
+
+        def procesar_usd(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' not in val_str: return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
+            except: return 0.0
+
+        if 'Monto_Bruto' in df.columns:
+            df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
+            df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
+        else:
+            df['Monto_MXN'] = 0.0
+            df['Monto_USD'] = 0.0
+            
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
         # 5. Asignación VIP
@@ -118,7 +113,7 @@ if archivo_cargado is not None:
         tasa_mxn = st.sidebar.slider("Simulador Bateo MXN (%)", 0, 100, int(hr_mxn) if hr_mxn > 0 else 30, 5)
         tasa_usd = st.sidebar.slider("Simulador Bateo USD (%)", 0, 100, int(hr_usd) if hr_usd > 0 else 30, 5)
 
-        # 7. Preparación de Pestañas Activas y Visión Ampliada
+        # 7. Preparación de Pestañas Activas y Táctica
         df_activas = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         
         if 'Fecha_Creacion' in df_activas.columns:
@@ -134,11 +129,9 @@ if archivo_cargado is not None:
         df_activas['Estrategia_Cierre'] = df_activas.apply(estrategia, axis=1)
         df_activas = df_activas.sort_values(by='Peso_Interno_Orden', ascending=False)
         
-        # Seleccionamos las columnas a mostrar
-        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df_activas.columns]
 
-        # Filtros Tácticos
         df_vip = df_activas[df_activas['Prioridad'] == "⭐ TOP 10"].copy()
         df_normal = df_activas[df_activas['Prioridad'] == "Normal"].copy()
         ranking_normal = df_normal.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
@@ -147,7 +140,7 @@ if archivo_cargado is not None:
         df_general = df_normal[~df_normal['Cliente'].isin(top_5_nombres)].copy()
 
         # 8. Renderizado de Interfaz
-        tab_dash, tab_proyectos, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard", "📁 Proyectos", "🏆 VIP (Activas)", "🚀 Alertas", "📋 General"])
+        tab_dash, tab_proyectos, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard", "📁 Proyectos", "🏆 VIP", "🚀 Alertas", "📋 General"])
 
         with tab_dash:
             st.markdown("### 📈 Desempeño Histórico 2026")
@@ -170,18 +163,16 @@ if archivo_cargado is not None:
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
-                    # AQUI ESTÁ LA SOLUCIÓN: FORZAR CONVERSIÓN A STRING
                     def estatus_proyecto(est_list):
                         s = " ".join([str(e) for e in est_list]).upper()
                         return "✅ GANADO" if "GANAD" in s else ("⏳ EN PROCESO" if "PROCESO" in s else "❌ PERDIDO/CANCELADO")
                     
                     res_proy = df_proyectos.groupby(['ID_Proyecto', 'Cliente']).agg(
-                        Cotizaciones=('Cotización', lambda x: ", ".join(x.dropna().astype(str).unique())),
+                        Cotizaciones=('Cotización', lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else ""),
                         Categoria=('Categoria', lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else ""),
                         Descripcion=('Descripcion', lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else ""),
                         Total_MXN=('Monto_MXN', 'sum'),
                         Total_USD=('Monto_USD', 'sum'),
-                        Creado=('Fecha_Creacion', 'min'),
                         Estatus_General=('Estatus', estatus_proyecto)
                     ).reset_index().sort_values(by='Total_MXN', ascending=False)
                     
@@ -210,16 +201,9 @@ if archivo_cargado is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.write("Por favor sube tu archivo CSV histórico de Scott para empezar.")
-      
-        
-       
-    
-    
-         
-               
+    st.write("Por favor sube tu archivo plantilla.radar_2.csv para empezar.")
+   
 
-      
    
                       
        
