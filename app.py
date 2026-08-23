@@ -29,68 +29,79 @@ if not check_password():
 st.markdown('<div class="titulo-radar">⚡ Radar Comercial 80/20</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Inteligencia Táctica, Bateo y Proyectos 2026</div>', unsafe_allow_html=True)
 
-archivo_cargado = st.sidebar.file_uploader("Subir plantilla.radar_2.csv", type=["csv"])
+archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto de Scott (Sin modificar)", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # 1. Lectura directa del archivo limpio
-        df = pd.read_csv(archivo_cargado, encoding='latin-1')
-        df.columns = df.columns.str.strip().str.upper() # Fuerza mayúsculas para evitar desajustes
+        # 1. Lectura del archivo BRUTO de Scott
+        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
         
-        # 2. Traductor Robusto
-        traductor = {
-            "COTIZACION": "Cotización", 
-            "CLIENTE": "Cliente", 
-            "VALOR": "Monto_Bruto",
-            "VALOR ": "Monto_Bruto",
-            "FECHA": "Fecha_Creacion", 
-            "FECHA DE REGISTRO": "Fecha_Registro",
-            "ESTATUS": "Estatus",
-            "PROYECTO": "ID_Proyecto",
-            "DESCRIPCION": "Descripcion",
-            "CATEGORIA": "Categoria",
-            "CONTACTO": "Nombre_Contacto"
-        }
-        df = df.rename(columns=lambda x: traductor.get(x, x))
-        
-        # 3. Limpieza de datos esenciales
-        if 'Cliente' not in df.columns:
-            st.error("El archivo no contiene la columna 'CLIENTE'.")
-            st.stop()
-            
+        # 2. MOTOR DE EXTRACCIÓN INTELIGENTE (Ignora duplicados y columnas basura)
+        df_clean = pd.DataFrame()
+
+        def buscar_col(palabras_clave):
+            for clave in palabras_clave:
+                for col in df_raw.columns:
+                    # Limpiamos el nombre original quitando espacios y forzando mayúsculas
+                    nombre_limpio = str(col).upper().strip()
+                    # Si coincide con la clave original o con los duplicados que hace el sistema (.1, .2)
+                    if nombre_limpio == clave or nombre_limpio == f"{clave}.1":
+                        return df_raw[col].copy()
+            return pd.Series([None] * len(df_raw))
+
+        # Extracción quirúrgica
+        df_clean['Cotización'] = buscar_col(["COTIZACION"])
+        df_clean['Cliente'] = buscar_col(["CLIENTE"])
+        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
+        df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
+        df_clean['Estatus'] = buscar_col(["ESTATUS"])
+        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
+        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+        df_clean['Categoria'] = buscar_col(["CATEGORIA"])
+        df_clean['Nombre_Contacto'] = buscar_col(["CONTACTO"])
+
+        # Fusión automática de todas las columnas de VALOR que Scott haya creado
+        def extraer_numero(val_str):
+            val_str = str(val_str).upper()
+            if val_str == 'NAN' or val_str.strip() == '': return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
+            except: return 0.0
+
+        monto_mxn_total = pd.Series([0.0] * len(df_raw))
+        monto_usd_total = pd.Series([0.0] * len(df_raw))
+
+        for col in df_raw.columns:
+            nombre_limpio = str(col).upper().strip()
+            # Si la columna es un valor financiero
+            if nombre_limpio == "VALOR" or nombre_limpio.startswith("VALOR."):
+                temp_mxn = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
+                temp_usd = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
+                monto_mxn_total += temp_mxn
+                monto_usd_total += temp_usd
+
+        df_clean['Monto_MXN'] = monto_mxn_total
+        df_clean['Monto_USD'] = monto_usd_total
+
+        # Transferimos la tabla limpia para que el resto de la app trabaje sobre seguro
+        df = df_clean
+
+        # 3. Limpieza final de filas vacías
         df = df.dropna(subset=['Cliente'])
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
         
+        # Omitir filas que no sean clientes reales (ej. la fila vacía que detectamos antes)
+        df = df[df['Cliente'].str.upper() != 'NAN']
+        
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
-
-        # 4. Procesamiento de Monedas Simplificado
-        def procesar_mxn(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' in val_str: return 0.0
-            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        def procesar_usd(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' not in val_str: return 0.0
-            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        if 'Monto_Bruto' in df.columns:
-            df['Monto_MXN'] = df['Monto_Bruto'].apply(procesar_mxn)
-            df['Monto_USD'] = df['Monto_Bruto'].apply(procesar_usd)
-        else:
-            df['Monto_MXN'] = 0.0
-            df['Monto_USD'] = 0.0
             
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # 5. Asignación VIP
+        # 4. Asignación VIP
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ TOP 10" if any(m in c.upper() for m in top_10) else "Normal")
 
-        # 6. Dashboard Histórico
+        # 5. Dashboard Histórico
         mxn_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_MXN'].sum()
         mxn_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_MXN'].sum()
         mxn_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_MXN'].sum()
@@ -113,7 +124,7 @@ if archivo_cargado is not None:
         tasa_mxn = st.sidebar.slider("Simulador Bateo MXN (%)", 0, 100, int(hr_mxn) if hr_mxn > 0 else 30, 5)
         tasa_usd = st.sidebar.slider("Simulador Bateo USD (%)", 0, 100, int(hr_usd) if hr_usd > 0 else 30, 5)
 
-        # 7. Preparación de Pestañas Activas y Táctica
+        # 6. Preparación de Pestañas Activas y Táctica
         df_activas = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         
         if 'Fecha_Creacion' in df_activas.columns:
@@ -129,7 +140,7 @@ if archivo_cargado is not None:
         df_activas['Estrategia_Cierre'] = df_activas.apply(estrategia, axis=1)
         df_activas = df_activas.sort_values(by='Peso_Interno_Orden', ascending=False)
         
-        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
+        cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df_activas.columns]
 
         df_vip = df_activas[df_activas['Prioridad'] == "⭐ TOP 10"].copy()
@@ -139,7 +150,7 @@ if archivo_cargado is not None:
         df_potencial = df_normal[df_normal['Cliente'].isin(top_5_nombres)].copy()
         df_general = df_normal[~df_normal['Cliente'].isin(top_5_nombres)].copy()
 
-        # 8. Renderizado de Interfaz
+        # 7. Renderizado de Interfaz
         tab_dash, tab_proyectos, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard", "📁 Proyectos", "🏆 VIP", "🚀 Alertas", "📋 General"])
 
         with tab_dash:
@@ -149,7 +160,7 @@ if archivo_cargado is not None:
                 st.markdown("#### 🇲🇽 Mercado Nacional (MXN)")
                 m1, m2 = st.columns(2)
                 m1.metric("✅ Ganado MXN", f"${mxn_ganado:,.2f}")
-                m2.metric("❌ Perdido MXN", f"${mxn_perdido:,.2f}")
+                m1.metric("❌ Perdido MXN", f"${mxn_perdido:,.2f}")
                 st.metric("⏳ En Proceso MXN", f"${mxn_proceso:,.2f}")
             with col_u:
                 st.markdown("#### 🇺🇸 Mercado Extranjero (USD)")
@@ -159,26 +170,78 @@ if archivo_cargado is not None:
                 st.metric("⏳ En Proceso USD", f"${usd_proceso:,.2f}")
 
         with tab_proyectos:
-            st.markdown("### 📁 Estatus Consolidado por Proyectos (Histórico)")
+            st.markdown("### 📁 Estatus Consolidado y Fechas de Proyectos (Histórico)")
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
                     def estatus_proyecto(est_list):
                         s = " ".join([str(e) for e in est_list]).upper()
                         return "✅ GANADO" if "GANAD" in s else ("⏳ EN PROCESO" if "PROCESO" in s else "❌ PERDIDO/CANCELADO")
+
+                    def fecha_minima(f_list):
+                        fechas_validas = pd.to_datetime(f_list, errors='coerce', dayfirst=True).dropna()
+                        if not fechas_validas.empty:
+                            return fechas_validas.min().strftime('%d/%m/%Y')
+                        return "Sin registro"
+
+                    def fecha_maxima(f_list):
+                        fechas_validas = pd.to_datetime(f_list, errors='coerce', dayfirst=True).dropna()
+                        if not fechas_validas.empty:
+                            return fechas_validas.max().strftime('%d/%m/%Y')
+                        return "Sin registro"
+
+                    agg_dict = {
+                        'Cotización': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else "",
+                        'Categoria': lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else "",
+                        'Descripcion': lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else "",
+                        'Monto_MXN': 'sum',
+                        'Monto_USD': 'sum',
+                        'Estatus': estatus_proyecto
+                    }
                     
-                    res_proy = df_proyectos.groupby(['ID_Proyecto', 'Cliente']).agg(
-                        Cotizaciones=('Cotización', lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Cotización' in df_proyectos.columns else ""),
-                        Categoria=('Categoria', lambda x: ", ".join(x.dropna().astype(str).unique()) if 'Categoria' in df_proyectos.columns else ""),
-                        Descripcion=('Descripcion', lambda x: " | ".join(x.dropna().astype(str).unique()) if 'Descripcion' in df_proyectos.columns else ""),
-                        Total_MXN=('Monto_MXN', 'sum'),
-                        Total_USD=('Monto_USD', 'sum'),
-                        Estatus_General=('Estatus', estatus_proyecto)
-                    ).reset_index().sort_values(by='Total_MXN', ascending=False)
+                    if 'Fecha_Creacion' in df_proyectos.columns:
+                        agg_dict['Fecha_Creacion'] = fecha_minima
+                    if 'Fecha_Cierre' in df_proyectos.columns:
+                        agg_dict['Fecha_Cierre'] = fecha_maxima
+
+                    res_proy = df_proyectos.groupby(['ID_Proyecto', 'Cliente']).agg(agg_dict).reset_index()
                     
+                    renombres_proy = {
+                        'Cotización': 'Cotizaciones',
+                        'Monto_MXN': 'Total_MXN',
+                        'Monto_USD': 'Total_USD',
+                        'Estatus': 'Estatus_General',
+                        'Fecha_Creacion': 'Fecha_Creacion',
+                        'Fecha_Cierre': 'Fecha_Cierre'
+                    }
+                    res_proy = res_proy.rename(columns=renombres_proy)
+                    
+                    if 'Fecha_Cierre' in res_proy.columns:
+                        def calcular_vigencia(fila):
+                            if fila['Estatus_General'] != "⏳ EN PROCESO":
+                                return "Cerrado"
+                            f_cierre = pd.to_datetime(fila['Fecha_Cierre'], errors='coerce', dayfirst=True)
+                            if pd.isna(f_cierre):
+                                return "⚪ Sin Fecha"
+                            dias = (f_cierre.normalize() - pd.Timestamp.now().normalize()).days
+                            if dias < 0:
+                                return f"🔴 VENCIDO ({abs(dias)}d)"
+                            elif dias <= 5:
+                                return f"🟡 Vence en {dias}d"
+                            else:
+                                return f"🟢 Vigente ({dias}d)"
+                                
+                        res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
+                        cols_orden = ['ID_Proyecto', 'Cliente', 'Estatus_General', 'Vigencia', 'Fecha_Creacion', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Categoria', 'Descripcion', 'Cotizaciones']
+                        cols_finales_proy = [c for c in cols_orden if c in res_proy.columns]
+                        res_proy = res_proy[cols_finales_proy]
+
+                    res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
                     st.dataframe(res_proy.style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
-                else: st.info("Ninguna cotización tiene un número de proyecto asignado.")
-            else: st.info("El archivo CSV no contiene la columna 'PROYECTO'.")
+                else:
+                    st.info("Ninguna cotización tiene un número de proyecto asignado.")
+            else:
+                st.info("El archivo CSV no contiene la columna 'PROYECTO'.")
 
         with tab_vip:
             if not df_vip.empty:
@@ -201,11 +264,8 @@ if archivo_cargado is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.write("Por favor sube tu archivo plantilla.radar_2.csv para empezar.")
-   
+    st.write("Por favor sube tu archivo bruto (Directo de Scott) para empezar.")
+          
 
-   
-                      
-       
              
       
