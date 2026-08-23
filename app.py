@@ -33,16 +33,43 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de Scott (Histórico Compl
 
 if archivo_cargado is not None:
     try:
-        # 1. Leemos el archivo asegurando que Pandas maneje los duplicados de Scott
+        # 1. Leemos el archivo
         df = pd.read_csv(archivo_cargado, encoding='latin-1')
         
-        # Eliminamos espacios al inicio y final de los nombres de columnas
+        # Limpiamos los nombres de las columnas para evitar espacios
         df.columns = df.columns.str.strip()
         
-        # Eliminamos filas que no tengan un cliente válido
-        df = df.dropna(subset=['CLIENTE'])
-        
-        # 2. Traductor Ampliado
+        # Si Scott duplica columnas exactas (ej. dos que se llamen exactamente 'CLIENTE'), dejamos solo la primera
+        df = df.loc[:, ~df.columns.duplicated()]
+
+        # 2. Consolidación de "VALOR"
+        # A veces Scott manda "VALOR" y "VALOR.1". Las unimos en una sola columna limpia antes de borrar filas.
+        def extraer_numero(val_str):
+            val_str = str(val_str).upper()
+            if val_str == 'NAN' or val_str.strip() == '': return 0.0
+            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
+            except: return 0.0
+
+        def procesar_mxn(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' in val_str: return 0.0
+            return extraer_numero(val_str)
+
+        def procesar_usd(val_str):
+            val_str = str(val_str).upper()
+            if 'USD' not in val_str: return 0.0
+            return extraer_numero(val_str)
+            
+        # Tomamos la primera columna que empiece con VALOR
+        col_valor = [c for c in df.columns if c.startswith('VALOR')]
+        if col_valor:
+            df['Monto_MXN'] = df[col_valor[0]].apply(procesar_mxn)
+            df['Monto_USD'] = df[col_valor[0]].apply(procesar_usd)
+        else:
+            df['Monto_MXN'] = 0.0
+            df['Monto_USD'] = 0.0
+
+        # 3. Traductor Ampliado
         traductor = {
             "COTIZACION": "Cotización", 
             "CLIENTE": "Cliente", 
@@ -57,36 +84,24 @@ if archivo_cargado is not None:
         }
         df = df.rename(columns=lambda x: traductor.get(x, x))
         
-        df['Cliente'] = df['Cliente'].astype(str).str.strip()
+        # 4. AHORA SÍ, borramos filas vacías usando la columna traducida
+        if 'Cliente' in df.columns:
+            df = df.dropna(subset=['Cliente'])
+            df['Cliente'] = df['Cliente'].astype(str).str.strip()
+        else:
+            st.error("No se encontró la columna CLIENTE en el archivo.")
+            st.stop()
+            
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
         
-        # 3. Procesamiento blindado de Dinero (Revisa las posibles columnas de "VALOR")
-        def procesar_mxn(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' in val_str or val_str == 'NAN': return 0.0
-            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        def procesar_usd(val_str):
-            val_str = str(val_str).upper()
-            if 'USD' not in val_str or val_str == 'NAN': return 0.0
-            try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        # Sumamos si Scott arrojó dos columnas de valor diferentes
-        val_col_1 = df.get('VALOR', pd.Series(['0']*len(df))).astype(str)
-        val_col_2 = df.get('VALOR.1', pd.Series(['0']*len(df))).astype(str) # Pandas renombra duplicados con .1
-        
-        df['Monto_MXN'] = val_col_1.apply(procesar_mxn) + val_col_2.apply(procesar_mxn)
-        df['Monto_USD'] = val_col_1.apply(procesar_usd) + val_col_2.apply(procesar_usd)
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
-        # 4. Asignación VIP
+        # 5. Asignación VIP
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Prioridad'] = df['Cliente'].apply(lambda c: "⭐ TOP 10" if any(m in c.upper() for m in top_10) else "Normal")
 
-        # 5. Dashboard Histórico
+        # 6. Dashboard Histórico
         mxn_ganado = df[df['Estatus'].str.contains('GANAD', na=False)]['Monto_MXN'].sum()
         mxn_perdido = df[df['Estatus'].str.contains('PERDID|CANCELAD', na=False)]['Monto_MXN'].sum()
         mxn_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)]['Monto_MXN'].sum()
@@ -109,11 +124,11 @@ if archivo_cargado is not None:
         tasa_mxn = st.sidebar.slider("Simulador Bateo MXN (%)", 0, 100, int(hr_mxn) if hr_mxn > 0 else 30, 5)
         tasa_usd = st.sidebar.slider("Simulador Bateo USD (%)", 0, 100, int(hr_usd) if hr_usd > 0 else 30, 5)
 
-        # 6. Preparación de Pestañas Activas y Visión Ampliada
+        # 7. Preparación de Pestañas Activas y Visión Ampliada
         df_activas = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         
         if 'Fecha_Creacion' in df_activas.columns:
-            df_activas['SLA'] = (pd.Timestamp.now().normalize() - pd.to_datetime(df_activas['Fecha_Creacion'], errors='coerce')).dt.days
+            df_activas['SLA'] = (pd.Timestamp.now().normalize() - pd.to_datetime(df_activas['Fecha_Creacion'], errors='coerce', dayfirst=True)).dt.days
             df_activas['SLA'] = df_activas['SLA'].apply(lambda d: "⚪ S/F" if pd.isna(d) else ("🔴 +3 días" if d >= 3 else ("🟡 2 días" if d == 2 else "🟢 Reciente")))
         else:
             df_activas['SLA'] = "⚪ N/A"
@@ -125,7 +140,7 @@ if archivo_cargado is not None:
         df_activas['Estrategia_Cierre'] = df_activas.apply(estrategia, axis=1)
         df_activas = df_activas.sort_values(by='Peso_Interno_Orden', ascending=False)
         
-        # AQUI AGREGAMOS TODAS LAS COLUMNAS QUE PEDISTE VER
+        # Seleccionamos las columnas a mostrar
         cols_ideales = ['SLA', 'Cotización', 'ID_Proyecto', 'Cliente', 'Nombre_Contacto', 'Categoria', 'Descripcion', 'Fecha_Creacion', 'Fecha_Cierre', 'Monto_MXN', 'Monto_USD', 'Estrategia_Cierre']
         cols_vista = [c for c in cols_ideales if c in df_activas.columns]
 
@@ -137,7 +152,7 @@ if archivo_cargado is not None:
         df_potencial = df_normal[df_normal['Cliente'].isin(top_5_nombres)].copy()
         df_general = df_normal[~df_normal['Cliente'].isin(top_5_nombres)].copy()
 
-        # 7. Renderizado de Interfaz
+        # 8. Renderizado de Interfaz
         tab_dash, tab_proyectos, tab_vip, tab_potencial, tab_general = st.tabs(["📊 Dashboard", "📁 Proyectos", "🏆 VIP (Activas)", "🚀 Alertas", "📋 General"])
 
         with tab_dash:
@@ -159,7 +174,6 @@ if archivo_cargado is not None:
         with tab_proyectos:
             st.markdown("### 📁 Estatus Consolidado por Proyectos (Histórico)")
             if 'ID_Proyecto' in df.columns:
-                # Quitamos nulos y agrupamos POR CLIENTE Y PROYECTO para no mezclar
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
                     def estatus_proyecto(est_list):
@@ -204,7 +218,6 @@ else:
     st.write("Por favor sube tu archivo CSV histórico de Scott para empezar.")
 
 
-         
       
    
                       
