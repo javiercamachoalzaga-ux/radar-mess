@@ -145,7 +145,6 @@ if archivo_cargado is not None:
 
             if "CANCELAD" in estatus: return "[CANCELADA]"
             
-            # Ajuste de regla: Detección de COMPLETADAS (o GANADAS)
             if "COMPLETAD" in estatus or "GANAD" in estatus:
                 if pd.isna(fila['Fecha_Factura_DT']): return "[COMPLETADA] Sin registro de fecha de factura"
                 
@@ -268,7 +267,10 @@ if archivo_cargado is not None:
                 df_g_mostrar = df_ganadas
                 if filtro_ganadas == "Solo Completadas en Tiempo": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
                 elif filtro_ganadas == "Solo Completadas con Retraso": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
-                st.data_editor(df_g_mostrar[[c for c in cols_vista if c != 'Dias_Retraso_Num']].sort_values(by='Fecha_Creacion_DT', ascending=False), hide_index=True, use_container_width=True)
+                
+                # CORRECCIÓN DE ORDENAMIENTO
+                df_ordenado = df_g_mostrar.sort_values(by='Fecha_Creacion_DT', ascending=False)
+                st.data_editor(df_ordenado[[c for c in cols_vista if c != 'Dias_Retraso_Num']], hide_index=True, use_container_width=True)
             else: st.info("No hay órdenes completadas registradas para auditar.")
 
         with tab_plan:
@@ -320,3 +322,10 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo de OVs para desplegar el panel.")
+ 
+
+
+       
+            
+     
+         
