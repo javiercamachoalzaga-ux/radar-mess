@@ -132,16 +132,25 @@ if archivo_cargado is not None:
         df_clean['Monto_USD'] = monto_usd_total
         df_clean['Peso_Ordenamiento'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
 
-        df = df_clean.dropna(subset=['Cliente'])
+        # ==========================================
+        # FILTRO DE EXCLUSIÓN ESTRICTO
+        # ==========================================
+        df = df_clean.copy()
+        
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
         df = df[df['Cliente'].str.upper() != 'NAN']
         df = df[df['Cliente'] != '']
+        
+        df['OV'] = df['OV'].astype(str).str.strip()
+        df = df[df['OV'].str.upper() != 'NAN']
+        df = df[df['OV'].str.upper() != 'NONE']
+        df = df[df['OV'] != '']
         
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].fillna('EN PROCESO').astype(str).str.strip().str.upper()
 
         # ==========================================
-        # MOTOR DE AUDITORÍA Y SLA (7 Días Hábiles)
+        # MOTOR DE AUDITORÍA Y SLA
         # ==========================================
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
         df['Fecha_Limite_Cálculo'] = df['Fecha_Creacion_DT'] + BDay(7)
@@ -175,18 +184,22 @@ if archivo_cargado is not None:
         df['Dias_Retraso_Num'] = df['Alerta_SLA'].apply(extraer_dias_retraso)
 
         # ==========================================
-        # MOTOR DE COLORES (FORMATO CONDICIONAL)
+        # MOTOR DE COLORES 100% GARANTIZADO
         # ==========================================
         def aplicar_colores(row):
             estatus = str(row.get('Estatus', '')).upper()
-            retraso = pd.to_numeric(row.get('Dias_Retraso_Num', 0), errors='coerce')
-            
-            # Verde claro para Completadas/Ganadas
+            try:
+                retraso = float(row.get('Dias_Retraso_Num', 0))
+            except:
+                retraso = 0
+                
+            # Verde para Completadas/Ganadas
             if "COMPLETAD" in estatus or "GANAD" in estatus:
                 return ['background-color: #d4edda; color: #155724; font-weight: 500;'] * len(row)
-            # Rojo claro para retrasos críticos (> 20 días)
+            # Rojo para retrasos > 20 días
             elif retraso > 20:
                 return ['background-color: #f8d7da; color: #721c24; font-weight: 500;'] * len(row)
+            
             return [''] * len(row)
 
         # ==========================================
@@ -215,7 +228,7 @@ if archivo_cargado is not None:
         filtro_dias_retraso = st.sidebar.slider(
             "Min. Días Hábiles de Retraso", 
             min_value=0, max_value=max_retraso, value=0, 
-            help="Desliza para enfocarte solo en las OVs más rezagadas."
+            help="Filtra OVs con altos días de mora."
         )
 
         df_en_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
@@ -234,7 +247,6 @@ if archivo_cargado is not None:
             "Resumen Global", "Dashboard Ejecutivo", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Reportes)"
         ])
 
-        # Aseguramos que Dias_Retraso_Num y Estatus estén en cols_vista para que el motor de color funcione (las ocultaremos de la vista)
         cols_vista = ['OV', 'Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA', 'Dias_Retraso_Num', 'Estatus']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
@@ -272,7 +284,6 @@ if archivo_cargado is not None:
             col_kpi1, col_kpi2 = st.columns(2)
             with col_kpi1:
                 st.markdown("#### Eficiencia Actual (OVs En Proceso)")
-                st.write("Proporción de OVs activas dentro del SLA vs. Retrasadas")
                 conteo_tiempo = len(df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO')])
                 conteo_retraso = len(df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO')])
                 
@@ -294,23 +305,24 @@ if archivo_cargado is not None:
                 else:
                     st.info("Sin OVs completadas para mostrar facturación.")
 
+        # === APLICAMOS st.dataframe PARA QUE LOS COLORES NO SE BORREN ===
         with tab_retraso:
             st.markdown("### Órdenes de Venta Fuera de Tiempo")
             if not df_retraso.empty:
-                st.data_editor(
+                st.dataframe(
                     df_retraso[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
                     hide_index=True, use_container_width=True,
-                    column_config={"Dias_Retraso_Num": None} # Oculta la columna numérica
+                    column_config={"Dias_Retraso_Num": None, "Estatus": None} 
                 )
             else: st.success("No hay órdenes de venta retrasadas.")
 
         with tab_tiempo:
             st.markdown("### Órdenes de Venta en Proceso Normal")
             if not df_en_tiempo.empty:
-                st.data_editor(
+                st.dataframe(
                     df_en_tiempo[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
                     hide_index=True, use_container_width=True,
-                    column_config={"Dias_Retraso_Num": None}
+                    column_config={"Dias_Retraso_Num": None, "Estatus": None}
                 )
             else: st.info("No hay órdenes en proceso normal.")
 
@@ -318,10 +330,10 @@ if archivo_cargado is not None:
             st.markdown("### Órdenes de Venta Completadas")
             if not df_ganadas.empty:
                 df_ordenado = df_ganadas.sort_values(by='Fecha_Creacion_DT', ascending=False)
-                st.data_editor(
+                st.dataframe(
                     df_ordenado[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
                     hide_index=True, use_container_width=True,
-                    column_config={"Dias_Retraso_Num": None}
+                    column_config={"Dias_Retraso_Num": None, "Estatus": None}
                 )
             else: st.info("No hay órdenes completadas registradas.")
 
@@ -336,8 +348,6 @@ if archivo_cargado is not None:
             
             if not df_plan.empty:
                 st.markdown("#### 1. Exportar Reporte de Riesgo (CSV)")
-                st.write("Descarga con un clic la lista completa filtrada para adjuntarla a tu correo directivo.")
-                
                 cols_exportacion = ['OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Alerta_SLA']
                 df_exportacion = df_plan[[c for c in cols_exportacion if c in df_plan.columns]]
                 
@@ -352,8 +362,6 @@ if archivo_cargado is not None:
                 st.divider()
                 
                 st.markdown("#### 2. Constructor de Correo Rápido (Opcional)")
-                st.write("¿Quieres exigir solo por unas cuantas OVs? Selecciónalas en esta tabla para armar un texto automático.")
-                
                 df_plan.insert(0, 'Generar_Mensaje', False)
                 cols_compactas = ['Generar_Mensaje', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Estatus']
                 
@@ -362,7 +370,7 @@ if archivo_cargado is not None:
                     hide_index=True, use_container_width=True,
                     column_config={
                         "Generar_Mensaje": st.column_config.CheckboxColumn("Seleccionar", default=False),
-                        "Estatus": None # Ocultamos Estatus aquí para mantener la tabla limpia, pero lo usamos para el color
+                        "Estatus": None
                     }
                 )
                 
@@ -371,7 +379,6 @@ if archivo_cargado is not None:
                 if not plan_df.empty:
                     st.markdown("**Texto generado listo para copiar:**")
                     ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
-                    if not ovs_list: ovs_list = "[Sin número de OV]"
                     
                     suma_mxn = plan_df['Monto_MXN'].sum()
                     suma_usd = plan_df['Monto_USD'].sum()
