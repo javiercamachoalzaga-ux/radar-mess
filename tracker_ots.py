@@ -72,7 +72,6 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de OVs", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # LECTURA DEL ARCHIVO CON CORRECCIÓN DE ACENTOS (UTF-8)
         try:
             df_raw = pd.read_csv(archivo_cargado, encoding='utf-8-sig')
         except UnicodeDecodeError:
@@ -100,7 +99,6 @@ if archivo_cargado is not None:
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA OV", "CREACION", "FECHA"])
         df_clean['Factura'] = buscar_col(["FACTURA", "FOLIO FACTURA", "NO. FACTURA", "DOCUMENTO FACTURA", "UUID", "FOLIO FISCAL"])
 
-        # LIMPIEZA DE COLUMNAS PARA EVITAR LA LETRA "A" Y LOS "NONE"
         def limpiar_ov(val):
             val_str = str(val).strip()
             if val_str.upper() in ['NAN', 'NONE', '']: return ""
@@ -132,7 +130,6 @@ if archivo_cargado is not None:
 
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
-        
         df_clean['Peso_Ordenamiento'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
 
         df = df_clean.dropna(subset=['Cliente'])
@@ -147,25 +144,18 @@ if archivo_cargado is not None:
         # MOTOR DE AUDITORÍA Y SLA (7 Días Hábiles)
         # ==========================================
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        
         df['Fecha_Limite_Cálculo'] = df['Fecha_Creacion_DT'] + BDay(7)
         df['Fecha_Límite_Facturación'] = df['Fecha_Limite_Cálculo'].dt.strftime('%d/%m/%Y')
-        
         df['Dias_Retraso_Num'] = 0
 
         def auditar_sla(fila):
             estatus = str(fila['Estatus']).upper()
-            if pd.isna(fila['Fecha_Limite_Cálculo']):
-                return "[SIN FECHA] Revisar origen"
-            
+            if pd.isna(fila['Fecha_Limite_Cálculo']): return "[SIN FECHA] Revisar origen"
             hoy = pd.Timestamp.now().normalize()
             limite = fila['Fecha_Limite_Cálculo'].normalize()
 
             if "CANCELAD" in estatus: return "[CANCELADA]"
-            
-            # Al no tener Fecha de Factura, simplemente catalogamos como COMPLETADA
-            if "COMPLETAD" in estatus or "GANAD" in estatus:
-                return "[COMPLETADA]"
+            if "COMPLETAD" in estatus or "GANAD" in estatus: return "[COMPLETADA]"
 
             if hoy > limite:
                 retraso_actual = np.busday_count(limite.date(), hoy.date())
@@ -185,10 +175,29 @@ if archivo_cargado is not None:
         df['Dias_Retraso_Num'] = df['Alerta_SLA'].apply(extraer_dias_retraso)
 
         # ==========================================
-        # FILTRO ESTRATÉGICO
+        # FILTROS TÁCTICOS (BÚSQUEDA Y MONTOS)
         # ==========================================
         st.sidebar.divider()
-        st.sidebar.header("Filtros Estratégicos")
+        st.sidebar.header("🔍 Filtros Tácticos")
+        
+        busqueda_texto = st.sidebar.text_input("Buscar OV o Cliente:", placeholder="Ej. 12543 o SAFRAN")
+        if busqueda_texto:
+            df = df[(df['OV'].astype(str).str.contains(busqueda_texto, case=False, na=False)) |
+                    (df['Cliente'].astype(str).str.contains(busqueda_texto, case=False, na=False))]
+
+        max_monto = float(df['Peso_Ordenamiento'].max()) if not df.empty else 1000000.0
+        if pd.isna(max_monto) or max_monto == 0: max_monto = 100000.0
+        
+        rango_monto = st.sidebar.slider("Valor Total (Eq. MXN)", 
+                                      min_value=0.0, max_value=max_monto, 
+                                      value=(0.0, max_monto), step=5000.0)
+        df = df[(df['Peso_Ordenamiento'] >= rango_monto[0]) & (df['Peso_Ordenamiento'] <= rango_monto[1])]
+
+        # ==========================================
+        # FILTRO ESTRATÉGICO (RETRASOS)
+        # ==========================================
+        st.sidebar.divider()
+        st.sidebar.header("Filtro de Riesgo (SLA)")
         
         max_retraso = int(df['Dias_Retraso_Num'].max()) if not df.empty and df['Dias_Retraso_Num'].max() > 0 else 30
         filtro_dias_retraso = st.sidebar.slider(
@@ -204,16 +213,15 @@ if archivo_cargado is not None:
         df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Peso_Ordenamiento', ascending=False)
         
         st.sidebar.divider()
-        st.sidebar.header("Resumen Operativo")
+        st.sidebar.header("Resumen Operativo Filtrado")
         st.sidebar.metric("OVs en Retraso", f"{len(df_retraso)} Órdenes")
         st.sidebar.metric("Retraso (MXN)", f"${df_retraso['Monto_MXN'].sum():,.2f}")
         st.sidebar.metric("Retraso (USD)", f"${df_retraso['Monto_USD'].sum():,.2f}")
 
         tab_dash, tab_kpi, tab_retraso, tab_tiempo, tab_ganadas, tab_plan = st.tabs([
-            "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Compacto)"
+            "Resumen Global", "Dashboard Ejecutivo", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Reportes)"
         ])
 
-        # COLUMNAS VISTAS SIN FECHA DE FACTURA
         cols_vista = ['OV', 'Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
@@ -293,57 +301,59 @@ if archivo_cargado is not None:
             else: st.info("No hay órdenes completadas registradas.")
 
         # ==========================================
-        # TABLA COMPACTADA Y MEJORADA DE ACCIÓN
+        # TABLA COMPACTADA Y MOTOR DE REPORTES LIBERADO
         # ==========================================
         with tab_plan:
-            st.markdown("### Reporte de Exigencia a Operaciones")
-            st.write(f"Selecciona las OVs críticas (Filtro actual: **{filtro_dias_retraso} o más días de retraso**) para exigir su facturación.")
+            st.markdown("### Reporte Masivo y Exigencia a Operaciones")
+            st.write(f"Mostrando OVs en proceso con **{filtro_dias_retraso} o más días de retraso**.")
             
             df_plan = df_en_proceso[df_en_proceso['Dias_Retraso_Num'] >= filtro_dias_retraso].sort_values(by='Dias_Retraso_Num', ascending=False)
             
             if not df_plan.empty:
-                df_plan.insert(0, 'Generar_Reporte', False)
+                st.markdown("#### 1. Exportar Reporte de Riesgo (CSV)")
+                st.write("Descarga con un clic la lista completa filtrada para adjuntarla a tu correo directivo.")
                 
-                cols_compactas = ['Generar_Reporte', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Fecha_Límite_Facturación']
-                cols_compactas = [c for c in cols_compactas if c in df_plan.columns]
+                cols_exportacion = ['OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Alerta_SLA']
+                df_exportacion = df_plan[[c for c in cols_exportacion if c in df_plan.columns]]
                 
-                proyectos_accion = st.data_editor(
-                    df_plan[cols_compactas], 
-                    hide_index=True, use_container_width=True,
-                    column_config={"Generar_Reporte": st.column_config.CheckboxColumn("Incluir", default=False)}
+                csv_bulk = df_exportacion.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label=f"📥 Descargar Reporte Completo ({len(df_plan)} OVs)",
+                    data=csv_bulk,
+                    file_name=f"Reporte_OVs_Retrasadas_{filtro_dias_retraso}dias.csv",
+                    mime="text/csv",
                 )
                 
-                plan_df = proyectos_accion[proyectos_accion['Generar_Reporte'] == True].copy()
+                st.divider()
+                
+                st.markdown("#### 2. Constructor de Correo Rápido (Opcional)")
+                st.write("¿Quieres exigir solo por unas cuantas OVs? Selecciónalas en esta tabla para armar un texto automático.")
+                
+                df_plan.insert(0, 'Generar_Mensaje', False)
+                cols_compactas = ['Generar_Mensaje', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD']
+                
+                proyectos_accion = st.data_editor(
+                    df_plan[[c for c in cols_compactas if c in df_plan.columns]], 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Generar_Mensaje": st.column_config.CheckboxColumn("Seleccionar", default=False)}
+                )
+                
+                plan_df = proyectos_accion[proyectos_accion['Generar_Mensaje'] == True].copy()
                 
                 if not plan_df.empty:
-                    st.divider()
-                    col_rep1, col_rep2 = st.columns(2)
+                    st.markdown("**Texto generado listo para copiar:**")
+                    ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
+                    if not ovs_list: ovs_list = "[Sin número de OV]"
                     
-                    with col_rep1:
-                        st.markdown("#### 1. Descargar Reporte de Exigencia")
-                        csv = plan_df.drop(columns=['Generar_Reporte']).to_csv(index=False).encode('utf-8-sig')
-                        st.download_button(
-                            label="Descargar CSV para Correos",
-                            data=csv,
-                            file_name="Reporte_Exigencia_OVs.csv",
-                            mime="text/csv",
-                        )
+                    suma_mxn = plan_df['Monto_MXN'].sum()
+                    suma_usd = plan_df['Monto_USD'].sum()
+                    texto_dinero = []
+                    if suma_mxn > 0: texto_dinero.append(f"${suma_mxn:,.2f} MXN")
+                    if suma_usd > 0: texto_dinero.append(f"${suma_usd:,.2f} USD")
+                    string_dinero = " y ".join(texto_dinero) if texto_dinero else "$0.00"
                     
-                    with col_rep2:
-                        st.markdown("#### 2. Texto para Copiar")
-                        ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
-                        if not ovs_list: ovs_list = "[Sin número de OV]"
-                        
-                        suma_mxn = plan_df['Monto_MXN'].sum()
-                        suma_usd = plan_df['Monto_USD'].sum()
-                        
-                        texto_dinero = []
-                        if suma_mxn > 0: texto_dinero.append(f"${suma_mxn:,.2f} MXN")
-                        if suma_usd > 0: texto_dinero.append(f"${suma_usd:,.2f} USD")
-                        string_dinero = " y ".join(texto_dinero) if texto_dinero else "$0.00"
-                        
-                        mensaje = f"Hola equipo,\n\nSolicito su apoyo URGENTE para facturar las siguientes OVs que excedieron los 7 días hábiles:\n{ovs_list}\n\nValor total en riesgo: {string_dinero}.\n\nSaludos."
-                        st.code(mensaje, language="text")
+                    mensaje = f"Hola equipo,\n\nSolicito su apoyo URGENTE para facturar las siguientes OVs que excedieron los 7 días hábiles:\n{ovs_list}\n\nValor total en riesgo: {string_dinero}.\n\nSaludos."
+                    st.code(mensaje, language="text")
             else:
                 st.success(f"No tienes OVs con más de {filtro_dias_retraso} días hábiles de retraso.")
 
@@ -351,3 +361,9 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo de OVs para desplegar el panel.")
+ 
+
+       
+  
+
+                   
