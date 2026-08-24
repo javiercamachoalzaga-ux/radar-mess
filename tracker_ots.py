@@ -5,7 +5,7 @@ from pandas.tseries.offsets import BDay
 
 st.set_page_config(page_title="MESS | Control de OVs y Facturación", layout="wide")
 
-# --- DISEÑO ESTÉTICO CORPORATIVO (SIN EMOJIS, TIPOGRAFÍA MONTSERRAT) ---
+# --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap');
@@ -47,7 +47,6 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #f4f6f7 !important; border-right: 1px solid #e0e0e0; }
     [data-testid="stSidebar"] p, label, h1, h2, h3, span { color: #003a70 !important; font-weight: 600; }
     
-    /* Personalización de Dataframes para que respeten la fuente */
     .stDataFrame { font-family: 'Montserrat', sans-serif !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -68,7 +67,7 @@ except:
     pass
 
 st.markdown('<div class="titulo-radar">Control de OVs y Facturación</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Seguimiento Operativo y Tiempos de Cierre (SLA 7 Días Hábiles)</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Auditoría Operativa y SLA de 7 Días Hábiles</div>', unsafe_allow_html=True)
 
 archivo_cargado = st.sidebar.file_uploader("Subir CSV de OVs", type=["csv"])
 
@@ -78,7 +77,6 @@ if archivo_cargado is not None:
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
         df_clean = pd.DataFrame()
 
-        # EXTRACCIÓN INTELIGENTE ENFOCADA EN OV
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_raw.columns:
@@ -92,8 +90,8 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS", "ESTADO"])
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA", "FECHA OV", "FECHA DE REGISTRO", "CREACION"])
         df_clean['Factura'] = buscar_col(["FACTURA", "FOLIO FACTURA"])
+        df_clean['Fecha_Factura'] = buscar_col(["FECHA FACTURA", "FECHA DE FACTURACION", "FECHA FACTURACION"])
 
-        # EXTRACCIÓN DE MONTO
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
             if val_str == 'NAN' or val_str.strip() == '': return 0.0
@@ -122,108 +120,162 @@ if archivo_cargado is not None:
         df['Estatus'] = df['Estatus'].fillna('EN PROCESO').astype(str).str.strip().str.upper()
 
         # ==========================================
-        # CÁLCULO DE 7 DÍAS HÁBILES Y RETRASOS
+        # MOTOR DE AUDITORÍA Y SLA (7 Días Hábiles)
         # ==========================================
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        # Sumamos 7 días hábiles a la fecha de creación
+        df['Fecha_Factura_DT'] = pd.to_datetime(df['Fecha_Factura'], errors='coerce', dayfirst=True)
+        
         df['Fecha_Limite'] = df['Fecha_Creacion_DT'] + BDay(7)
+        
+        # Inicializamos la columna numérica de retraso
+        df['Dias_Retraso_Num'] = 0
 
-        def calcular_alerta(fila):
-            if "FACTURAD" in fila['Estatus'] or "PAGAD" in fila['Estatus']:
-                return "[CERRADO] Facturado"
-                
+        def auditar_sla(fila):
+            estatus = str(fila['Estatus']).upper()
             if pd.isna(fila['Fecha_Limite']):
                 return "[SIN FECHA] Revisar origen"
             
             hoy = pd.Timestamp.now().normalize()
             limite = fila['Fecha_Limite'].normalize()
+
+            if "CANCELAD" in estatus:
+                return "[CANCELADA]"
             
+            if "GANAD" in estatus:
+                if pd.isna(fila['Fecha_Factura_DT']):
+                    return "[GANADA] Sin registro de fecha de factura"
+                
+                f_factura = fila['Fecha_Factura_DT'].normalize()
+                if f_factura <= limite:
+                    return "[GANADA EN TIEMPO] Factura dentro del SLA"
+                else:
+                    retraso_factura = np.busday_count(limite.date(), f_factura.date())
+                    # Para las ganadas, registramos el retraso histórico pero no afectamos la mora viva
+                    return f"[GANADA CON RETRASO] Se facturó {retraso_factura} días tarde"
+
             if hoy > limite:
-                # np.busday_count calcula los días hábiles entre dos fechas
-                retraso = np.busday_count(limite.date(), hoy.date())
-                return f"[RETRASO] {retraso} días hábiles"
+                retraso_actual = np.busday_count(limite.date(), hoy.date())
+                return f"[RETRASO] {retraso_actual} días hábiles"
             else:
                 restantes = np.busday_count(hoy.date(), limite.date())
                 return f"[EN TIEMPO] {restantes} días hábiles restantes"
 
-        df['Alerta_SLA'] = df.apply(calcular_alerta, axis=1)
-
-        # SEPARACIÓN DE DATAFRAMES
-        df_activos = df[~df['Estatus'].str.contains('FACTURAD|PAGAD', na=False)].copy()
-        df_retraso = df_activos[df_activos['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Monto_MXN', ascending=False)
-        df_en_tiempo = df_activos[df_activos['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Monto_MXN', ascending=False)
+        df['Alerta_SLA'] = df.apply(auditar_sla, axis=1)
         
-        # DASHBOARD LATERAL
+        # Extraemos el valor numérico del retraso vivo para poder filtrar
+        def extraer_dias_retraso(alerta):
+            if "[RETRASO]" in alerta:
+                try: return int(alerta.split("]")[1].split("días")[0].strip())
+                except: return 0
+            return 0
+            
+        df['Dias_Retraso_Num'] = df['Alerta_SLA'].apply(extraer_dias_retraso)
+
+        # ==========================================
+        # FILTRO ESTRATÉGICO DE RETRASOS (SIDEBAR)
+        # ==========================================
+        st.sidebar.divider()
+        st.sidebar.header("Filtros Estratégicos")
+        
+        max_retraso = int(df['Dias_Retraso_Num'].max()) if not df.empty and df['Dias_Retraso_Num'].max() > 0 else 30
+        
+        filtro_dias_retraso = st.sidebar.slider(
+            "Min. Días Hábiles de Retraso", 
+            min_value=0, max_value=max_retraso, value=0, 
+            help="Desliza para enfocarte solo en las OVs más rezagadas."
+        )
+
+        # SEPARACIÓN DE DATAFRAMES PARA EL DASHBOARD
+        df_en_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
+        df_ganadas = df[df['Estatus'].str.contains('GANAD', na=False)].copy()
+
+        df_retraso = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Dias_Retraso_Num', ascending=False)
+        df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Monto_MXN', ascending=False)
+        
         st.sidebar.divider()
         st.sidebar.header("Resumen Operativo")
-        st.sidebar.metric("OVs en Retraso", f"{len(df_retraso)} Órdenes")
+        st.sidebar.metric("Total OVs en Retraso", f"{len(df_retraso)} Órdenes")
         st.sidebar.metric("Valor en Retraso (MXN)", f"${df_retraso['Monto_MXN'].sum() + (df_retraso['Monto_USD'].sum() * 19.50):,.2f}")
-        st.sidebar.divider()
 
         # PESTAÑAS CORPORATIVAS
-        tab_dash, tab_retraso, tab_tiempo, tab_plan = st.tabs([
-            "Resumen Global", "OVs con Retraso", "OVs en Tiempo", "Plan de Acción"
+        tab_dash, tab_retraso, tab_tiempo, tab_ganadas, tab_plan = st.tabs([
+            "Resumen Global", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Ganadas", "Plan de Acción"
         ])
 
-        cols_vista = ['OV', 'Cliente', 'Fecha_Creacion', 'Monto_MXN', 'Monto_USD', 'Estatus', 'Alerta_SLA']
+        cols_vista = ['OV', 'Dias_Retraso_Num', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Monto_MXN', 'Monto_USD', 'Estatus', 'Alerta_SLA']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
         with tab_dash:
-            st.markdown("### Estatus General de Órdenes de Venta")
+            st.markdown("### Estatus General de Órdenes de Venta (En Proceso)")
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("#### Foco Crítico (SLA Vencido)")
-                st.write("Órdenes que excedieron los 7 días hábiles sin ser facturadas.")
                 st.metric("Total MXN en Riesgo", f"${df_retraso['Monto_MXN'].sum():,.2f}")
                 st.metric("Total USD en Riesgo", f"${df_retraso['Monto_USD'].sum():,.2f}")
 
             with col2:
                 st.markdown("#### Operación Saludable (Dentro de SLA)")
-                st.write("Órdenes trabajando dentro de los 7 días hábiles permitidos.")
                 st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Monto_MXN'].sum():,.2f}")
                 st.metric("Total USD en Tiempo", f"${df_en_tiempo['Monto_USD'].sum():,.2f}")
 
         with tab_retraso:
             st.markdown("### Órdenes de Venta Fuera de Tiempo")
             if not df_retraso.empty:
-                st.data_editor(df_retraso[cols_vista], hide_index=True, use_container_width=True)
+                st.data_editor(df_retraso[cols_vista].drop(columns=['Dias_Retraso_Num']), hide_index=True, use_container_width=True)
             else:
                 st.success("Excelente. No hay órdenes de venta retrasadas.")
 
         with tab_tiempo:
             st.markdown("### Órdenes de Venta en Proceso Normal")
             if not df_en_tiempo.empty:
-                st.data_editor(df_en_tiempo[cols_vista], hide_index=True, use_container_width=True)
+                st.data_editor(df_en_tiempo[cols_vista].drop(columns=['Dias_Retraso_Num']), hide_index=True, use_container_width=True)
             else:
                 st.info("No hay órdenes de venta en proceso normal actualmente.")
 
+        with tab_ganadas:
+            st.markdown("### Auditoría de Eficiencia Operativa (Ganadas)")
+            if not df_ganadas.empty:
+                filtro_ganadas = st.selectbox("Filtrar auditoría:", ["Ver Todas", "Solo Ganadas en Tiempo", "Solo Ganadas con Retraso"])
+                df_g_mostrar = df_ganadas
+                
+                if filtro_ganadas == "Solo Ganadas en Tiempo":
+                    df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
+                elif filtro_ganadas == "Solo Ganadas con Retraso":
+                    df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
+                    
+                st.data_editor(df_g_mostrar[[c for c in cols_vista if c != 'Dias_Retraso_Num']].sort_values(by='Fecha_Creacion_DT', ascending=False), hide_index=True, use_container_width=True)
+            else:
+                st.info("No hay órdenes ganadas registradas para auditar.")
+
         with tab_plan:
-            st.markdown("### Seguimiento y Exigencia de Facturación")
-            st.write("Selecciona las OVs que vas a empujar hoy con el área operativa para su cierre y facturación inmediata.")
+            st.markdown("### Filtro Estratégico y Plan de Acción")
+            st.write(f"Mostrando OVs 'En Proceso' con **{filtro_dias_retraso} o más días hábiles de retraso** (Ajusta el filtro en el menú lateral).")
             
-            if not df_activos.empty:
-                df_activos.insert(0, 'Seleccion', False)
+            # Aplicamos el filtro estratégico
+            df_plan = df_en_proceso[df_en_proceso['Dias_Retraso_Num'] >= filtro_dias_retraso].sort_values(by='Dias_Retraso_Num', ascending=False)
+            
+            if not df_plan.empty:
+                df_plan.insert(0, 'Escalar_Hoy', False)
+                
+                # Ocultamos internamente el número pero mantenemos la alerta visible
+                cols_edicion = ['Escalar_Hoy'] + [c for c in cols_vista if c != 'Dias_Retraso_Num']
                 
                 proyectos_accion = st.data_editor(
-                    df_activos[['Seleccion'] + cols_vista], 
+                    df_plan[cols_edicion], 
                     hide_index=True, use_container_width=True,
-                    column_config={"Seleccion": st.column_config.CheckboxColumn("Selección", default=False)}
+                    column_config={"Escalar_Hoy": st.column_config.CheckboxColumn("Escalar Hoy", default=False)}
                 )
                 
-                plan_df = proyectos_accion[proyectos_accion['Seleccion'] == True]
+                plan_df = proyectos_accion[proyectos_accion['Escalar_Hoy'] == True]
                 if not plan_df.empty:
-                    st.markdown("#### OVs Seleccionadas para Seguimiento Hoy")
-                    st.dataframe(plan_df.drop(columns=['Seleccion']).style.format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), use_container_width=True)
+                    st.markdown("#### Lista de Exigencia Seleccionada")
+                    st.dataframe(plan_df.drop(columns=['Escalar_Hoy']).style.format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), use_container_width=True)
             else:
-                st.info("No hay OVs activas para dar seguimiento.")
+                st.success(f"No tienes OVs con más de {filtro_dias_retraso} días hábiles de retraso. Buen trabajo.")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.info("Sube tu archivo de OVs (Tracker_ov.csv) para desplegar el panel.")
-         
-         
-      
+    st.info("Sube tu archivo de OVs para desplegar el panel.")
        
-     
