@@ -145,15 +145,16 @@ if archivo_cargado is not None:
 
             if "CANCELAD" in estatus: return "[CANCELADA]"
             
-            if "GANAD" in estatus:
-                if pd.isna(fila['Fecha_Factura_DT']): return "[GANADA] Sin registro de fecha de factura"
+            # Ajuste de regla: Detección de COMPLETADAS (o GANADAS)
+            if "COMPLETAD" in estatus or "GANAD" in estatus:
+                if pd.isna(fila['Fecha_Factura_DT']): return "[COMPLETADA] Sin registro de fecha de factura"
                 
                 f_factura = fila['Fecha_Factura_DT'].normalize()
                 if f_factura <= limite:
-                    return "[GANADA EN TIEMPO] Factura dentro del SLA"
+                    return "[COMPLETADA EN TIEMPO] Factura dentro del SLA"
                 else:
                     retraso_factura = np.busday_count(limite.date(), f_factura.date())
-                    return f"[GANADA CON RETRASO] Se facturó {retraso_factura} días tarde"
+                    return f"[COMPLETADA CON RETRASO] Se facturó {retraso_factura} días tarde"
 
             if hoy > limite:
                 retraso_actual = np.busday_count(limite.date(), hoy.date())
@@ -186,7 +187,7 @@ if archivo_cargado is not None:
         )
 
         df_en_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
-        df_ganadas = df[df['Estatus'].str.contains('GANAD', na=False)].copy()
+        df_ganadas = df[df['Estatus'].str.contains('COMPLETAD|GANAD', na=False)].copy()
 
         df_retraso = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Dias_Retraso_Num', ascending=False)
         df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Monto_MXN', ascending=False)
@@ -196,9 +197,8 @@ if archivo_cargado is not None:
         st.sidebar.metric("Total OVs en Retraso", f"{len(df_retraso)} Órdenes")
         st.sidebar.metric("Valor en Retraso (MXN)", f"${df_retraso['Monto_MXN'].sum() + (df_retraso['Monto_USD'].sum() * 19.50):,.2f}")
 
-        # NUEVA ESTRUCTURA DE PESTAÑAS (INCLUYE DASHBOARD EJECUTIVO)
         tab_dash, tab_kpi, tab_retraso, tab_tiempo, tab_ganadas, tab_plan = st.tabs([
-            "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Ganadas", "Generador de Reportes"
+            "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Generador de Reportes"
         ])
 
         cols_vista = ['OV', 'Dias_Retraso_Num', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Estatus', 'Alerta_SLA']
@@ -214,14 +214,13 @@ if archivo_cargado is not None:
                 st.markdown("#### Operación Saludable (Dentro de SLA)")
                 st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Monto_MXN'].sum():,.2f}")
 
-        # === NUEVA PESTAÑA: DASHBOARD EJECUTIVO ===
         with tab_kpi:
             st.markdown("### Indicadores Estratégicos de Desempeño")
             col_kpi1, col_kpi2 = st.columns(2)
             
             with col_kpi1:
                 st.markdown("#### Récord de Eficiencia Operativa")
-                st.write("Histórico del SLA de 7 días hábiles (Proceso y Ganadas)")
+                st.write("Histórico del SLA de 7 días hábiles (Proceso y Completadas)")
                 
                 conteo_tiempo = len(df[df['Alerta_SLA'].str.contains('EN TIEMPO')])
                 conteo_retraso = len(df[df['Alerta_SLA'].str.contains('RETRASO')])
@@ -238,10 +237,9 @@ if archivo_cargado is not None:
 
             with col_kpi2:
                 st.markdown("#### Top Clientes por Facturación")
-                st.write("Las 10 cuentas con mayor ingreso liquidado (OVs Ganadas)")
+                st.write("Las 10 cuentas con mayor ingreso liquidado (OVs Completadas)")
                 
                 if not df_ganadas.empty:
-                    # Consolidar monto total equivalente en MXN
                     df_ganadas['Facturacion_Total_MXN'] = df_ganadas['Monto_MXN'] + (df_ganadas['Monto_USD'] * 19.50)
                     top_clientes = df_ganadas.groupby('Cliente')['Facturacion_Total_MXN'].sum().reset_index()
                     top_clientes = top_clientes.sort_values(by='Facturacion_Total_MXN', ascending=False).head(10)
@@ -249,7 +247,7 @@ if archivo_cargado is not None:
                     st.dataframe(top_clientes.style.format({'Facturacion_Total_MXN': '${:,.2f}'}), hide_index=True, use_container_width=True)
                     st.bar_chart(top_clientes.set_index('Cliente'))
                 else:
-                    st.info("No hay OVs marcadas como Ganadas para mostrar facturación consolidada.")
+                    st.info("No hay OVs marcadas como Completadas para mostrar facturación consolidada.")
 
         with tab_retraso:
             st.markdown("### Órdenes de Venta Fuera de Tiempo")
@@ -264,14 +262,14 @@ if archivo_cargado is not None:
             else: st.info("No hay órdenes de venta en proceso normal actualmente.")
 
         with tab_ganadas:
-            st.markdown("### Auditoría de Eficiencia Operativa (Ganadas)")
+            st.markdown("### Auditoría de Eficiencia Operativa (Completadas)")
             if not df_ganadas.empty:
-                filtro_ganadas = st.selectbox("Filtrar auditoría:", ["Ver Todas", "Solo Ganadas en Tiempo", "Solo Ganadas con Retraso"])
+                filtro_ganadas = st.selectbox("Filtrar auditoría:", ["Ver Todas", "Solo Completadas en Tiempo", "Solo Completadas con Retraso"])
                 df_g_mostrar = df_ganadas
-                if filtro_ganadas == "Solo Ganadas en Tiempo": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
-                elif filtro_ganadas == "Solo Ganadas con Retraso": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
+                if filtro_ganadas == "Solo Completadas en Tiempo": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
+                elif filtro_ganadas == "Solo Completadas con Retraso": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
                 st.data_editor(df_g_mostrar[[c for c in cols_vista if c != 'Dias_Retraso_Num']].sort_values(by='Fecha_Creacion_DT', ascending=False), hide_index=True, use_container_width=True)
-            else: st.info("No hay órdenes ganadas registradas para auditar.")
+            else: st.info("No hay órdenes completadas registradas para auditar.")
 
         with tab_plan:
             st.markdown("### Reporte de Exigencia a Operaciones")
@@ -322,4 +320,3 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo de OVs para desplegar el panel.")
-         
