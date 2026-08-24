@@ -92,7 +92,7 @@ if archivo_cargado is not None:
                     nombre_limpio = str(col).upper().strip()
                     if clave in nombre_limpio:
                         return df_raw[col].copy()
-            return pd.Series([''] * len(df_raw)) # Evitar los "None"
+            return pd.Series([''] * len(df_raw))
 
         df_clean['OV'] = buscar_col(["OV", "ORDEN DE VENTA", "ORDEN", "OT", "DOCUMENTO", "FOLIO", "NO. OV", "PEDIDO", "NUMERO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE", "NOMBRE CLIENTE", "RAZON SOCIAL", "EMPRESA"])
@@ -105,7 +105,6 @@ if archivo_cargado is not None:
         def limpiar_ov(val):
             val_str = str(val).strip()
             if val_str.upper() in ['NAN', 'NONE', '']: return ""
-            # Elimina la letra 'A' al inicio si va seguida de números
             return re.sub(r'^[Aa](\d+)', r'\1', val_str)
 
         def limpiar_none(val):
@@ -135,7 +134,9 @@ if archivo_cargado is not None:
 
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
-        df_clean['Total_Valor_MXN'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
+        
+        # Columna de ordenamiento interno
+        df_clean['Peso_Ordenamiento'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
 
         df = df_clean.dropna(subset=['Cliente'])
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
@@ -209,19 +210,20 @@ if archivo_cargado is not None:
         df_en_proceso = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         df_ganadas = df[df['Estatus'].str.contains('COMPLETAD|GANAD', na=False)].copy()
 
-        df_retraso = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Dias_Retraso_Num', ascending=False)
-        df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Total_Valor_MXN', ascending=False)
+        df_retraso = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Peso_Ordenamiento', ascending=False)
+        df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Peso_Ordenamiento', ascending=False)
         
         st.sidebar.divider()
         st.sidebar.header("Resumen Operativo")
-        st.sidebar.metric("Total OVs en Retraso", f"{len(df_retraso)} Órdenes")
-        st.sidebar.metric("Valor en Retraso (MXN)", f"${df_retraso['Total_Valor_MXN'].sum():,.2f}")
+        st.sidebar.metric("OVs en Retraso", f"{len(df_retraso)} Órdenes")
+        st.sidebar.metric("Retraso (MXN)", f"${df_retraso['Monto_MXN'].sum():,.2f}")
+        st.sidebar.metric("Retraso (USD)", f"${df_retraso['Monto_USD'].sum():,.2f}")
 
         tab_dash, tab_kpi, tab_retraso, tab_tiempo, tab_ganadas, tab_plan = st.tabs([
             "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Compacto)"
         ])
 
-        cols_vista = ['OV', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Total_Valor_MXN', 'Alerta_SLA']
+        cols_vista = ['OV', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
         with tab_dash:
@@ -229,26 +231,28 @@ if archivo_cargado is not None:
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("#### Foco Crítico (SLA Vencido)")
-                st.metric("Total MXN en Riesgo", f"${df_retraso['Total_Valor_MXN'].sum():,.2f}")
+                st.metric("Total MXN en Riesgo", f"${df_retraso['Monto_MXN'].sum():,.2f}")
+                st.metric("Total USD en Riesgo", f"${df_retraso['Monto_USD'].sum():,.2f}")
             with col2:
                 st.markdown("#### Operación Saludable (Dentro de SLA)")
-                st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Total_Valor_MXN'].sum():,.2f}")
+                st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Monto_MXN'].sum():,.2f}")
+                st.metric("Total USD en Tiempo", f"${df_en_tiempo['Monto_USD'].sum():,.2f}")
 
         with tab_kpi:
             st.markdown("### Indicadores Estratégicos de Desempeño")
             
-            # NUEVO DASHBOARD: TOP CLIENTES CON RIESGO DE FACTURACIÓN
+            # DASHBOARD: RIESGO DE FACTURACIÓN (Desglosado MXN y USD)
             st.markdown("#### Foco de Riesgo: Clientes con mayor valor en retraso")
             if not df_retraso.empty:
-                riesgo_clientes = df_retraso.groupby('Cliente').agg({'OV': 'count', 'Total_Valor_MXN': 'sum'}).reset_index()
+                riesgo_clientes = df_retraso.groupby('Cliente').agg({'OV': 'count', 'Monto_MXN': 'sum', 'Monto_USD': 'sum', 'Peso_Ordenamiento': 'sum'}).reset_index()
                 riesgo_clientes = riesgo_clientes.rename(columns={'OV': 'OVs_Atrasadas'})
-                riesgo_clientes = riesgo_clientes.sort_values(by='Total_Valor_MXN', ascending=False).head(10)
+                riesgo_clientes = riesgo_clientes.sort_values(by='Peso_Ordenamiento', ascending=False).head(10)
                 
-                col_r1, col_r2 = st.columns([2, 3])
+                col_r1, col_r2 = st.columns([3, 2])
                 with col_r1:
-                    st.dataframe(riesgo_clientes.style.format({'Total_Valor_MXN': '${:,.2f}'}), hide_index=True, use_container_width=True)
+                    st.dataframe(riesgo_clientes[['Cliente', 'OVs_Atrasadas', 'Monto_MXN', 'Monto_USD']].style.format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), hide_index=True, use_container_width=True)
                 with col_r2:
-                    st.bar_chart(riesgo_clientes.set_index('Cliente')['Total_Valor_MXN'])
+                    st.bar_chart(riesgo_clientes.set_index('Cliente')[['Monto_MXN', 'Monto_USD']])
             else:
                 st.success("No hay riesgo financiero por facturación retrasada en este momento.")
             
@@ -273,9 +277,9 @@ if archivo_cargado is not None:
             with col_kpi2:
                 st.markdown("#### Top 10 Clientes por Facturación (Completadas)")
                 if not df_ganadas.empty:
-                    top_clientes = df_ganadas.groupby('Cliente')['Total_Valor_MXN'].sum().reset_index()
-                    top_clientes = top_clientes.sort_values(by='Total_Valor_MXN', ascending=False).head(10)
-                    st.bar_chart(top_clientes.set_index('Cliente'))
+                    top_clientes = df_ganadas.groupby('Cliente').agg({'Monto_MXN': 'sum', 'Monto_USD': 'sum', 'Peso_Ordenamiento': 'sum'}).reset_index()
+                    top_clientes = top_clientes.sort_values(by='Peso_Ordenamiento', ascending=False).head(10)
+                    st.bar_chart(top_clientes.set_index('Cliente')[['Monto_MXN', 'Monto_USD']])
                 else:
                     st.info("Sin OVs completadas para mostrar facturación.")
 
@@ -315,8 +319,8 @@ if archivo_cargado is not None:
             if not df_plan.empty:
                 df_plan.insert(0, 'Generar_Reporte', False)
                 
-                # Columnas compactas para que quepan perfecto en pantalla
-                cols_compactas = ['Generar_Reporte', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Total_Valor_MXN', 'Fecha_Límite_Facturación']
+                # Columnas compactas con divisas separadas
+                cols_compactas = ['Generar_Reporte', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Fecha_Límite_Facturación']
                 cols_compactas = [c for c in cols_compactas if c in df_plan.columns]
                 
                 proyectos_accion = st.data_editor(
@@ -345,9 +349,17 @@ if archivo_cargado is not None:
                         st.markdown("#### 2. Texto para Copiar")
                         ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
                         if not ovs_list: ovs_list = "[Sin número de OV]"
-                        monto_total_mxn = plan_df['Total_Valor_MXN'].sum()
                         
-                        mensaje = f"Hola equipo,\n\nSolicito su apoyo URGENTE para facturar las siguientes OVs que excedieron los 7 días hábiles:\n{ovs_list}\n\nValor en riesgo: ${monto_total_mxn:,.2f} MXN.\n\nSaludos."
+                        # Generación dinámica del texto según las divisas
+                        suma_mxn = plan_df['Monto_MXN'].sum()
+                        suma_usd = plan_df['Monto_USD'].sum()
+                        
+                        texto_dinero = []
+                        if suma_mxn > 0: texto_dinero.append(f"${suma_mxn:,.2f} MXN")
+                        if suma_usd > 0: texto_dinero.append(f"${suma_usd:,.2f} USD")
+                        string_dinero = " y ".join(texto_dinero) if texto_dinero else "$0.00"
+                        
+                        mensaje = f"Hola equipo,\n\nSolicito su apoyo URGENTE para facturar las siguientes OVs que excedieron los 7 días hábiles:\n{ovs_list}\n\nValor total en riesgo: {string_dinero}.\n\nSaludos."
                         st.code(mensaje, language="text")
             else:
                 st.success(f"No tienes OVs con más de {filtro_dias_retraso} días hábiles de retraso.")
