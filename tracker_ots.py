@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 from pandas.tseries.offsets import BDay
 
 st.set_page_config(page_title="MESS | Control de OVs y Facturación", layout="wide")
@@ -71,8 +72,13 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV de OVs", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # LECTURA DEL ARCHIVO
-        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
+        # LECTURA DEL ARCHIVO CON CORRECCIÓN DE ACENTOS (UTF-8)
+        try:
+            df_raw = pd.read_csv(archivo_cargado, encoding='utf-8-sig')
+        except UnicodeDecodeError:
+            archivo_cargado.seek(0)
+            df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
+
         df_clean = pd.DataFrame()
 
         def buscar_col(palabras_clave):
@@ -81,14 +87,12 @@ if archivo_cargado is not None:
                     nombre_limpio = str(col).upper().strip()
                     if nombre_limpio == clave or nombre_limpio == f"{clave}.1":
                         return df_raw[col].copy()
-            
             for clave in palabras_clave:
                 for col in df_raw.columns:
                     nombre_limpio = str(col).upper().strip()
                     if clave in nombre_limpio:
                         return df_raw[col].copy()
-                        
-            return pd.Series([None] * len(df_raw))
+            return pd.Series([''] * len(df_raw)) # Evitar los "None"
 
         df_clean['OV'] = buscar_col(["OV", "ORDEN DE VENTA", "ORDEN", "OT", "DOCUMENTO", "FOLIO", "NO. OV", "PEDIDO", "NUMERO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE", "NOMBRE CLIENTE", "RAZON SOCIAL", "EMPRESA"])
@@ -97,9 +101,24 @@ if archivo_cargado is not None:
         df_clean['Factura'] = buscar_col(["FACTURA", "FOLIO FACTURA", "NO. FACTURA", "DOCUMENTO FACTURA", "UUID", "FOLIO FISCAL"])
         df_clean['Fecha_Factura'] = buscar_col(["FECHA FACTURA", "FECHA DE FACTURACION", "FECHA FACTURACION", "FECHA DE FACTURA", "FECHA EMISION"])
 
+        # LIMPIEZA DE COLUMNAS PARA EVITAR LA LETRA "A" Y LOS "NONE"
+        def limpiar_ov(val):
+            val_str = str(val).strip()
+            if val_str.upper() in ['NAN', 'NONE', '']: return ""
+            # Elimina la letra 'A' al inicio si va seguida de números
+            return re.sub(r'^[Aa](\d+)', r'\1', val_str)
+
+        def limpiar_none(val):
+            val_str = str(val).strip()
+            return "" if val_str.upper() in ['NAN', 'NONE', ''] else val_str
+
+        df_clean['OV'] = df_clean['OV'].apply(limpiar_ov)
+        df_clean['Factura'] = df_clean['Factura'].apply(limpiar_none)
+        df_clean['Fecha_Factura'] = df_clean['Fecha_Factura'].apply(limpiar_none)
+
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
-            if val_str == 'NAN' or val_str.strip() == '': return 0.0
+            if val_str in ['NAN', 'NONE', '']: return 0.0
             try: return float(''.join(c for c in val_str if c.isdigit() or c == '.'))
             except: return 0.0
 
@@ -116,10 +135,12 @@ if archivo_cargado is not None:
 
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
+        df_clean['Total_Valor_MXN'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
 
         df = df_clean.dropna(subset=['Cliente'])
         df['Cliente'] = df['Cliente'].astype(str).str.strip()
         df = df[df['Cliente'].str.upper() != 'NAN']
+        df = df[df['Cliente'] != '']
         
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].fillna('EN PROCESO').astype(str).str.strip().str.upper()
@@ -146,21 +167,21 @@ if archivo_cargado is not None:
             if "CANCELAD" in estatus: return "[CANCELADA]"
             
             if "COMPLETAD" in estatus or "GANAD" in estatus:
-                if pd.isna(fila['Fecha_Factura_DT']): return "[COMPLETADA] Sin registro de fecha de factura"
+                if pd.isna(fila['Fecha_Factura_DT']): return "[COMPLETADA] Sin fecha de factura"
                 
                 f_factura = fila['Fecha_Factura_DT'].normalize()
                 if f_factura <= limite:
-                    return "[COMPLETADA EN TIEMPO] Factura dentro del SLA"
+                    return "[COMPLETADA EN TIEMPO] SLA cumplido"
                 else:
                     retraso_factura = np.busday_count(limite.date(), f_factura.date())
-                    return f"[COMPLETADA CON RETRASO] Se facturó {retraso_factura} días tarde"
+                    return f"[COMPLETADA CON RETRASO] {retraso_factura} días tarde"
 
             if hoy > limite:
                 retraso_actual = np.busday_count(limite.date(), hoy.date())
                 return f"[RETRASO] {retraso_actual} días hábiles"
             else:
                 restantes = np.busday_count(hoy.date(), limite.date())
-                return f"[EN TIEMPO] {restantes} días hábiles restantes"
+                return f"[EN TIEMPO] {restantes} días restantes"
 
         df['Alerta_SLA'] = df.apply(auditar_sla, axis=1)
         
@@ -189,18 +210,18 @@ if archivo_cargado is not None:
         df_ganadas = df[df['Estatus'].str.contains('COMPLETAD|GANAD', na=False)].copy()
 
         df_retraso = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO', na=False)].sort_values(by='Dias_Retraso_Num', ascending=False)
-        df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Monto_MXN', ascending=False)
+        df_en_tiempo = df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO', na=False)].sort_values(by='Total_Valor_MXN', ascending=False)
         
         st.sidebar.divider()
         st.sidebar.header("Resumen Operativo")
         st.sidebar.metric("Total OVs en Retraso", f"{len(df_retraso)} Órdenes")
-        st.sidebar.metric("Valor en Retraso (MXN)", f"${df_retraso['Monto_MXN'].sum() + (df_retraso['Monto_USD'].sum() * 19.50):,.2f}")
+        st.sidebar.metric("Valor en Retraso (MXN)", f"${df_retraso['Total_Valor_MXN'].sum():,.2f}")
 
         tab_dash, tab_kpi, tab_retraso, tab_tiempo, tab_ganadas, tab_plan = st.tabs([
-            "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Generador de Reportes"
+            "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Compacto)"
         ])
 
-        cols_vista = ['OV', 'Dias_Retraso_Num', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Estatus', 'Alerta_SLA']
+        cols_vista = ['OV', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Total_Valor_MXN', 'Alerta_SLA']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
         with tab_dash:
@@ -208,57 +229,67 @@ if archivo_cargado is not None:
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("#### Foco Crítico (SLA Vencido)")
-                st.metric("Total MXN en Riesgo", f"${df_retraso['Monto_MXN'].sum():,.2f}")
+                st.metric("Total MXN en Riesgo", f"${df_retraso['Total_Valor_MXN'].sum():,.2f}")
             with col2:
                 st.markdown("#### Operación Saludable (Dentro de SLA)")
-                st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Monto_MXN'].sum():,.2f}")
+                st.metric("Total MXN en Tiempo", f"${df_en_tiempo['Total_Valor_MXN'].sum():,.2f}")
 
         with tab_kpi:
             st.markdown("### Indicadores Estratégicos de Desempeño")
-            col_kpi1, col_kpi2 = st.columns(2)
             
+            # NUEVO DASHBOARD: TOP CLIENTES CON RIESGO DE FACTURACIÓN
+            st.markdown("#### Foco de Riesgo: Clientes con mayor valor en retraso")
+            if not df_retraso.empty:
+                riesgo_clientes = df_retraso.groupby('Cliente').agg({'OV': 'count', 'Total_Valor_MXN': 'sum'}).reset_index()
+                riesgo_clientes = riesgo_clientes.rename(columns={'OV': 'OVs_Atrasadas'})
+                riesgo_clientes = riesgo_clientes.sort_values(by='Total_Valor_MXN', ascending=False).head(10)
+                
+                col_r1, col_r2 = st.columns([2, 3])
+                with col_r1:
+                    st.dataframe(riesgo_clientes.style.format({'Total_Valor_MXN': '${:,.2f}'}), hide_index=True, use_container_width=True)
+                with col_r2:
+                    st.bar_chart(riesgo_clientes.set_index('Cliente')['Total_Valor_MXN'])
+            else:
+                st.success("No hay riesgo financiero por facturación retrasada en este momento.")
+            
+            st.divider()
+            
+            col_kpi1, col_kpi2 = st.columns(2)
             with col_kpi1:
                 st.markdown("#### Récord de Eficiencia Operativa")
                 st.write("Histórico del SLA de 7 días hábiles (Proceso y Completadas)")
-                
                 conteo_tiempo = len(df[df['Alerta_SLA'].str.contains('EN TIEMPO')])
                 conteo_retraso = len(df[df['Alerta_SLA'].str.contains('RETRASO')])
                 
                 if conteo_tiempo > 0 or conteo_retraso > 0:
                     df_sla_record = pd.DataFrame({
-                        "Estatus Operativo": ["Cumplieron SLA (En Tiempo)", "Rompieron SLA (Con Retraso)"],
+                        "Estatus Operativo": ["Cumplieron SLA", "Rompieron SLA"],
                         "Total de OVs": [conteo_tiempo, conteo_retraso]
                     })
-                    st.dataframe(df_sla_record, hide_index=True, use_container_width=True)
                     st.bar_chart(df_sla_record.set_index("Estatus Operativo"))
                 else:
-                    st.info("No hay datos suficientes para calcular el récord de eficiencia.")
+                    st.info("Faltan datos para calcular eficiencia.")
 
             with col_kpi2:
-                st.markdown("#### Top Clientes por Facturación")
-                st.write("Las 10 cuentas con mayor ingreso liquidado (OVs Completadas)")
-                
+                st.markdown("#### Top 10 Clientes por Facturación (Completadas)")
                 if not df_ganadas.empty:
-                    df_ganadas['Facturacion_Total_MXN'] = df_ganadas['Monto_MXN'] + (df_ganadas['Monto_USD'] * 19.50)
-                    top_clientes = df_ganadas.groupby('Cliente')['Facturacion_Total_MXN'].sum().reset_index()
-                    top_clientes = top_clientes.sort_values(by='Facturacion_Total_MXN', ascending=False).head(10)
-                    
-                    st.dataframe(top_clientes.style.format({'Facturacion_Total_MXN': '${:,.2f}'}), hide_index=True, use_container_width=True)
+                    top_clientes = df_ganadas.groupby('Cliente')['Total_Valor_MXN'].sum().reset_index()
+                    top_clientes = top_clientes.sort_values(by='Total_Valor_MXN', ascending=False).head(10)
                     st.bar_chart(top_clientes.set_index('Cliente'))
                 else:
-                    st.info("No hay OVs marcadas como Completadas para mostrar facturación consolidada.")
+                    st.info("Sin OVs completadas para mostrar facturación.")
 
         with tab_retraso:
             st.markdown("### Órdenes de Venta Fuera de Tiempo")
             if not df_retraso.empty:
-                st.data_editor(df_retraso[cols_vista].drop(columns=['Dias_Retraso_Num']), hide_index=True, use_container_width=True)
-            else: st.success("Excelente. No hay órdenes de venta retrasadas.")
+                st.data_editor(df_retraso[cols_vista], hide_index=True, use_container_width=True)
+            else: st.success("No hay órdenes de venta retrasadas.")
 
         with tab_tiempo:
             st.markdown("### Órdenes de Venta en Proceso Normal")
             if not df_en_tiempo.empty:
-                st.data_editor(df_en_tiempo[cols_vista].drop(columns=['Dias_Retraso_Num']), hide_index=True, use_container_width=True)
-            else: st.info("No hay órdenes de venta en proceso normal actualmente.")
+                st.data_editor(df_en_tiempo[cols_vista], hide_index=True, use_container_width=True)
+            else: st.info("No hay órdenes en proceso normal.")
 
         with tab_ganadas:
             st.markdown("### Auditoría de Eficiencia Operativa (Completadas)")
@@ -268,53 +299,56 @@ if archivo_cargado is not None:
                 if filtro_ganadas == "Solo Completadas en Tiempo": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
                 elif filtro_ganadas == "Solo Completadas con Retraso": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
                 
-                # CORRECCIÓN DE ORDENAMIENTO
                 df_ordenado = df_g_mostrar.sort_values(by='Fecha_Creacion_DT', ascending=False)
-                st.data_editor(df_ordenado[[c for c in cols_vista if c != 'Dias_Retraso_Num']], hide_index=True, use_container_width=True)
-            else: st.info("No hay órdenes completadas registradas para auditar.")
+                st.data_editor(df_ordenado[cols_vista], hide_index=True, use_container_width=True)
+            else: st.info("No hay órdenes completadas para auditar.")
 
+        # ==========================================
+        # TABLA COMPACTADA Y MEJORADA DE ACCIÓN
+        # ==========================================
         with tab_plan:
             st.markdown("### Reporte de Exigencia a Operaciones")
-            st.write(f"Selecciona las OVs con **{filtro_dias_retraso} o más días de retraso** para generar tu reporte oficial.")
+            st.write(f"Selecciona las OVs críticas (Filtro actual: **{filtro_dias_retraso} o más días de retraso**) para exigir su facturación.")
             
             df_plan = df_en_proceso[df_en_proceso['Dias_Retraso_Num'] >= filtro_dias_retraso].sort_values(by='Dias_Retraso_Num', ascending=False)
             
             if not df_plan.empty:
                 df_plan.insert(0, 'Generar_Reporte', False)
-                cols_edicion = ['Generar_Reporte'] + [c for c in cols_vista if c != 'Dias_Retraso_Num']
+                
+                # Columnas compactas para que quepan perfecto en pantalla
+                cols_compactas = ['Generar_Reporte', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Total_Valor_MXN', 'Fecha_Límite_Facturación']
+                cols_compactas = [c for c in cols_compactas if c in df_plan.columns]
                 
                 proyectos_accion = st.data_editor(
-                    df_plan[cols_edicion], 
+                    df_plan[cols_compactas], 
                     hide_index=True, use_container_width=True,
-                    column_config={"Generar_Reporte": st.column_config.CheckboxColumn("Incluir en Reporte", default=False)}
+                    column_config={"Generar_Reporte": st.column_config.CheckboxColumn("Incluir", default=False)}
                 )
                 
                 plan_df = proyectos_accion[proyectos_accion['Generar_Reporte'] == True].copy()
                 
                 if not plan_df.empty:
                     st.divider()
-                    st.markdown("#### 1. Descargar Reporte (Excel / CSV)")
-                    st.write("Adjunta este archivo al correo para el equipo de facturación.")
+                    col_rep1, col_rep2 = st.columns(2)
                     
-                    csv = plan_df.drop(columns=['Generar_Reporte']).to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="Descargar Reporte de OVs Atrasadas",
-                        data=csv,
-                        file_name="Reporte_OVs_Riesgo.csv",
-                        mime="text/csv",
-                    )
+                    with col_rep1:
+                        st.markdown("#### 1. Descargar Reporte de Exigencia")
+                        csv = plan_df.drop(columns=['Generar_Reporte']).to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label="Descargar CSV para Correos",
+                            data=csv,
+                            file_name="Reporte_Exigencia_OVs.csv",
+                            mime="text/csv",
+                        )
                     
-                    st.markdown("#### 2. Mensaje Rápido de Seguimiento")
-                    st.write("Copia este texto para mandarlo directo por correo o WhatsApp.")
-                    
-                    ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if str(ov).upper() != 'NONE'])
-                    if not ovs_list: ovs_list = "[OVs sin número identificado]"
-                    
-                    monto_total_mxn = plan_df['Monto_MXN'].sum() + (plan_df['Monto_USD'].sum() * 19.50)
-                    
-                    mensaje = f"Hola equipo,\n\nSolicito su apoyo urgente para revisar, cerrar y facturar las siguientes OVs que ya excedieron el SLA interno de 7 días hábiles:\n{ovs_list}\n\nTenemos en riesgo un total de ${monto_total_mxn:,.2f} MXN (Eq.). Quedo a la espera de sus comentarios o número de factura.\n\nSaludos."
-                    st.code(mensaje, language="text")
-                    
+                    with col_rep2:
+                        st.markdown("#### 2. Texto para Copiar")
+                        ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
+                        if not ovs_list: ovs_list = "[Sin número de OV]"
+                        monto_total_mxn = plan_df['Total_Valor_MXN'].sum()
+                        
+                        mensaje = f"Hola equipo,\n\nSolicito su apoyo URGENTE para facturar las siguientes OVs que excedieron los 7 días hábiles:\n{ovs_list}\n\nValor en riesgo: ${monto_total_mxn:,.2f} MXN.\n\nSaludos."
+                        st.code(mensaje, language="text")
             else:
                 st.success(f"No tienes OVs con más de {filtro_dias_retraso} días hábiles de retraso.")
 
@@ -322,10 +356,3 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo de OVs para desplegar el panel.")
- 
-
-
-       
-            
-     
-         
