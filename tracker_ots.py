@@ -175,7 +175,22 @@ if archivo_cargado is not None:
         df['Dias_Retraso_Num'] = df['Alerta_SLA'].apply(extraer_dias_retraso)
 
         # ==========================================
-        # FILTROS TÁCTICOS (BÚSQUEDA Y MONTOS)
+        # MOTOR DE COLORES (FORMATO CONDICIONAL)
+        # ==========================================
+        def aplicar_colores(row):
+            estatus = str(row.get('Estatus', '')).upper()
+            retraso = pd.to_numeric(row.get('Dias_Retraso_Num', 0), errors='coerce')
+            
+            # Verde claro para Completadas/Ganadas
+            if "COMPLETAD" in estatus or "GANAD" in estatus:
+                return ['background-color: #d4edda; color: #155724; font-weight: 500;'] * len(row)
+            # Rojo claro para retrasos críticos (> 20 días)
+            elif retraso > 20:
+                return ['background-color: #f8d7da; color: #721c24; font-weight: 500;'] * len(row)
+            return [''] * len(row)
+
+        # ==========================================
+        # FILTROS TÁCTICOS
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("🔍 Filtros Tácticos")
@@ -193,9 +208,6 @@ if archivo_cargado is not None:
                                       value=(0.0, max_monto), step=5000.0)
         df = df[(df['Peso_Ordenamiento'] >= rango_monto[0]) & (df['Peso_Ordenamiento'] <= rango_monto[1])]
 
-        # ==========================================
-        # FILTRO ESTRATÉGICO (RETRASOS)
-        # ==========================================
         st.sidebar.divider()
         st.sidebar.header("Filtro de Riesgo (SLA)")
         
@@ -222,7 +234,8 @@ if archivo_cargado is not None:
             "Resumen Global", "Dashboard Ejecutivo", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Reportes)"
         ])
 
-        cols_vista = ['OV', 'Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA']
+        # Aseguramos que Dias_Retraso_Num y Estatus estén en cols_vista para que el motor de color funcione (las ocultaremos de la vista)
+        cols_vista = ['OV', 'Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA', 'Dias_Retraso_Num', 'Estatus']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
         with tab_dash:
@@ -284,24 +297,36 @@ if archivo_cargado is not None:
         with tab_retraso:
             st.markdown("### Órdenes de Venta Fuera de Tiempo")
             if not df_retraso.empty:
-                st.data_editor(df_retraso[cols_vista], hide_index=True, use_container_width=True)
+                st.data_editor(
+                    df_retraso[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Dias_Retraso_Num": None} # Oculta la columna numérica
+                )
             else: st.success("No hay órdenes de venta retrasadas.")
 
         with tab_tiempo:
             st.markdown("### Órdenes de Venta en Proceso Normal")
             if not df_en_tiempo.empty:
-                st.data_editor(df_en_tiempo[cols_vista], hide_index=True, use_container_width=True)
+                st.data_editor(
+                    df_en_tiempo[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Dias_Retraso_Num": None}
+                )
             else: st.info("No hay órdenes en proceso normal.")
 
         with tab_ganadas:
             st.markdown("### Órdenes de Venta Completadas")
             if not df_ganadas.empty:
                 df_ordenado = df_ganadas.sort_values(by='Fecha_Creacion_DT', ascending=False)
-                st.data_editor(df_ordenado[cols_vista], hide_index=True, use_container_width=True)
+                st.data_editor(
+                    df_ordenado[cols_vista].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Dias_Retraso_Num": None}
+                )
             else: st.info("No hay órdenes completadas registradas.")
 
         # ==========================================
-        # TABLA COMPACTADA Y MOTOR DE REPORTES LIBERADO
+        # TABLA COMPACTADA Y MOTOR DE REPORTES
         # ==========================================
         with tab_plan:
             st.markdown("### Reporte Masivo y Exigencia a Operaciones")
@@ -330,12 +355,15 @@ if archivo_cargado is not None:
                 st.write("¿Quieres exigir solo por unas cuantas OVs? Selecciónalas en esta tabla para armar un texto automático.")
                 
                 df_plan.insert(0, 'Generar_Mensaje', False)
-                cols_compactas = ['Generar_Mensaje', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD']
+                cols_compactas = ['Generar_Mensaje', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Estatus']
                 
                 proyectos_accion = st.data_editor(
-                    df_plan[[c for c in cols_compactas if c in df_plan.columns]], 
+                    df_plan[[c for c in cols_compactas if c in df_plan.columns]].style.apply(aplicar_colores, axis=1).format({'Monto_MXN': '${:,.2f}', 'Monto_USD': '${:,.2f}'}), 
                     hide_index=True, use_container_width=True,
-                    column_config={"Generar_Mensaje": st.column_config.CheckboxColumn("Seleccionar", default=False)}
+                    column_config={
+                        "Generar_Mensaje": st.column_config.CheckboxColumn("Seleccionar", default=False),
+                        "Estatus": None # Ocultamos Estatus aquí para mantener la tabla limpia, pero lo usamos para el color
+                    }
                 )
                 
                 plan_df = proyectos_accion[proyectos_accion['Generar_Mensaje'] == True].copy()
@@ -361,9 +389,3 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo de OVs para desplegar el panel.")
- 
-
-       
-  
-
-                   
