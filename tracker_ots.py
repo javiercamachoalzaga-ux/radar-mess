@@ -99,7 +99,6 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS", "ESTADO", "STATUS"])
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA OV", "CREACION", "FECHA"])
         df_clean['Factura'] = buscar_col(["FACTURA", "FOLIO FACTURA", "NO. FACTURA", "DOCUMENTO FACTURA", "UUID", "FOLIO FISCAL"])
-        df_clean['Fecha_Factura'] = buscar_col(["FECHA FACTURA", "FECHA DE FACTURACION", "FECHA FACTURACION", "FECHA DE FACTURA", "FECHA EMISION"])
 
         # LIMPIEZA DE COLUMNAS PARA EVITAR LA LETRA "A" Y LOS "NONE"
         def limpiar_ov(val):
@@ -113,7 +112,6 @@ if archivo_cargado is not None:
 
         df_clean['OV'] = df_clean['OV'].apply(limpiar_ov)
         df_clean['Factura'] = df_clean['Factura'].apply(limpiar_none)
-        df_clean['Fecha_Factura'] = df_clean['Fecha_Factura'].apply(limpiar_none)
 
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
@@ -135,7 +133,6 @@ if archivo_cargado is not None:
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
         
-        # Columna de ordenamiento interno
         df_clean['Peso_Ordenamiento'] = df_clean['Monto_MXN'] + (df_clean['Monto_USD'] * 19.50)
 
         df = df_clean.dropna(subset=['Cliente'])
@@ -150,7 +147,6 @@ if archivo_cargado is not None:
         # MOTOR DE AUDITORÍA Y SLA (7 Días Hábiles)
         # ==========================================
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df['Fecha_Factura_DT'] = pd.to_datetime(df['Fecha_Factura'], errors='coerce', dayfirst=True)
         
         df['Fecha_Limite_Cálculo'] = df['Fecha_Creacion_DT'] + BDay(7)
         df['Fecha_Límite_Facturación'] = df['Fecha_Limite_Cálculo'].dt.strftime('%d/%m/%Y')
@@ -167,15 +163,9 @@ if archivo_cargado is not None:
 
             if "CANCELAD" in estatus: return "[CANCELADA]"
             
+            # Al no tener Fecha de Factura, simplemente catalogamos como COMPLETADA
             if "COMPLETAD" in estatus or "GANAD" in estatus:
-                if pd.isna(fila['Fecha_Factura_DT']): return "[COMPLETADA] Sin fecha de factura"
-                
-                f_factura = fila['Fecha_Factura_DT'].normalize()
-                if f_factura <= limite:
-                    return "[COMPLETADA EN TIEMPO] SLA cumplido"
-                else:
-                    retraso_factura = np.busday_count(limite.date(), f_factura.date())
-                    return f"[COMPLETADA CON RETRASO] {retraso_factura} días tarde"
+                return "[COMPLETADA]"
 
             if hoy > limite:
                 retraso_actual = np.busday_count(limite.date(), hoy.date())
@@ -223,7 +213,8 @@ if archivo_cargado is not None:
             "Resumen Global", "Dashboard Ejecutivo (KPIs)", "En Proceso (Retraso)", "En Proceso (En Tiempo)", "Auditoría Completadas", "Plan de Acción (Compacto)"
         ])
 
-        cols_vista = ['OV', 'Factura', 'Fecha_Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA']
+        # COLUMNAS VISTAS SIN FECHA DE FACTURA
+        cols_vista = ['OV', 'Factura', 'Cliente', 'Fecha_Creacion', 'Fecha_Límite_Facturación', 'Monto_MXN', 'Monto_USD', 'Alerta_SLA']
         cols_vista = [c for c in cols_vista if c in df.columns]
 
         with tab_dash:
@@ -241,7 +232,6 @@ if archivo_cargado is not None:
         with tab_kpi:
             st.markdown("### Indicadores Estratégicos de Desempeño")
             
-            # DASHBOARD: RIESGO DE FACTURACIÓN (Desglosado MXN y USD)
             st.markdown("#### Foco de Riesgo: Clientes con mayor valor en retraso")
             if not df_retraso.empty:
                 riesgo_clientes = df_retraso.groupby('Cliente').agg({'OV': 'count', 'Monto_MXN': 'sum', 'Monto_USD': 'sum', 'Peso_Ordenamiento': 'sum'}).reset_index()
@@ -260,17 +250,17 @@ if archivo_cargado is not None:
             
             col_kpi1, col_kpi2 = st.columns(2)
             with col_kpi1:
-                st.markdown("#### Récord de Eficiencia Operativa")
-                st.write("Histórico del SLA de 7 días hábiles (Proceso y Completadas)")
-                conteo_tiempo = len(df[df['Alerta_SLA'].str.contains('EN TIEMPO')])
-                conteo_retraso = len(df[df['Alerta_SLA'].str.contains('RETRASO')])
+                st.markdown("#### Eficiencia Actual (OVs En Proceso)")
+                st.write("Proporción de OVs activas dentro del SLA vs. Retrasadas")
+                conteo_tiempo = len(df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('EN TIEMPO')])
+                conteo_retraso = len(df_en_proceso[df_en_proceso['Alerta_SLA'].str.contains('RETRASO')])
                 
                 if conteo_tiempo > 0 or conteo_retraso > 0:
                     df_sla_record = pd.DataFrame({
-                        "Estatus Operativo": ["Cumplieron SLA", "Rompieron SLA"],
+                        "Estatus Activo": ["Sanos (En Tiempo)", "Riesgo (Con Retraso)"],
                         "Total de OVs": [conteo_tiempo, conteo_retraso]
                     })
-                    st.bar_chart(df_sla_record.set_index("Estatus Operativo"))
+                    st.bar_chart(df_sla_record.set_index("Estatus Activo"))
                 else:
                     st.info("Faltan datos para calcular eficiencia.")
 
@@ -296,16 +286,11 @@ if archivo_cargado is not None:
             else: st.info("No hay órdenes en proceso normal.")
 
         with tab_ganadas:
-            st.markdown("### Auditoría de Eficiencia Operativa (Completadas)")
+            st.markdown("### Órdenes de Venta Completadas")
             if not df_ganadas.empty:
-                filtro_ganadas = st.selectbox("Filtrar auditoría:", ["Ver Todas", "Solo Completadas en Tiempo", "Solo Completadas con Retraso"])
-                df_g_mostrar = df_ganadas
-                if filtro_ganadas == "Solo Completadas en Tiempo": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("EN TIEMPO")]
-                elif filtro_ganadas == "Solo Completadas con Retraso": df_g_mostrar = df_ganadas[df_ganadas['Alerta_SLA'].str.contains("CON RETRASO")]
-                
-                df_ordenado = df_g_mostrar.sort_values(by='Fecha_Creacion_DT', ascending=False)
+                df_ordenado = df_ganadas.sort_values(by='Fecha_Creacion_DT', ascending=False)
                 st.data_editor(df_ordenado[cols_vista], hide_index=True, use_container_width=True)
-            else: st.info("No hay órdenes completadas para auditar.")
+            else: st.info("No hay órdenes completadas registradas.")
 
         # ==========================================
         # TABLA COMPACTADA Y MEJORADA DE ACCIÓN
@@ -319,7 +304,6 @@ if archivo_cargado is not None:
             if not df_plan.empty:
                 df_plan.insert(0, 'Generar_Reporte', False)
                 
-                # Columnas compactas con divisas separadas
                 cols_compactas = ['Generar_Reporte', 'OV', 'Cliente', 'Dias_Retraso_Num', 'Monto_MXN', 'Monto_USD', 'Fecha_Límite_Facturación']
                 cols_compactas = [c for c in cols_compactas if c in df_plan.columns]
                 
@@ -350,7 +334,6 @@ if archivo_cargado is not None:
                         ovs_list = ", ".join([str(ov) for ov in plan_df['OV'].dropna().tolist() if ov != ""])
                         if not ovs_list: ovs_list = "[Sin número de OV]"
                         
-                        # Generación dinámica del texto según las divisas
                         suma_mxn = plan_df['Monto_MXN'].sum()
                         suma_usd = plan_df['Monto_USD'].sum()
                         
