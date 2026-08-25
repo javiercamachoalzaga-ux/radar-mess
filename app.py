@@ -399,4 +399,55 @@ if archivo_cargado is not None:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
-              
+# ==========================================
+# MÓDULO: AGENDA COMERCIAL DIARIA
+# ==========================================
+with tab_agenda: # Asegúrate de haber agregado "Agenda Diaria" a tu lista de st.tabs()
+    st.markdown("### Agenda Comercial del Día")
+    st.write(f"Plan de acción en campo y oficina para hoy: **{pd.Timestamp.now().strftime('%d/%m/%Y')}**")
+    
+    # Simulación de columna si no existe (cámbiala por la columna real de tu CSV)
+    if 'Tipo_Accion' not in df.columns:
+        # Por defecto buscará si dice Llamada o Visita en alguna columna de comentarios
+        df['Tipo_Accion'] = np.where(df['Estatus'].astype(str).str.contains('VISITA', case=False), 'Visita Presencial', 'Llamada')
+
+    # Filtros rápidos para enfocar la agenda
+    tipo_contacto = st.multiselect(
+        "Filtrar Actividades:", 
+        ["Llamada", "Visita Presencial", "Correo/Cotización"], 
+        default=["Llamada", "Visita Presencial"]
+    )
+    
+    df_agenda = df[df['Tipo_Accion'].isin(tipo_contacto)].copy()
+    
+    if not df_agenda.empty:
+        df_llamadas = df_agenda[df_agenda['Tipo_Accion'] == "Llamada"]
+        df_visitas = df_agenda[df_agenda['Tipo_Accion'] == "Visita Presencial"]
+        
+        col_agenda1, col_agenda2 = st.columns(2)
+        
+        with col_agenda1:
+            st.markdown("#### 📞 Bloque de Llamadas")
+            if not df_llamadas.empty:
+                df_llamadas.insert(0, 'Completado', False)
+                st.data_editor(
+                    df_llamadas[['Completado', 'Cliente', 'Monto_MXN', 'Estatus']], 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Completado": st.column_config.CheckboxColumn("Hecho", default=False)}
+                )
+            else:
+                st.info("No tienes llamadas estratégicas programadas hoy.")
+                
+        with col_agenda2:
+            st.markdown("#### 🚗 Ruta de Visitas")
+            if not df_visitas.empty:
+                df_visitas.insert(0, 'Completado', False)
+                st.data_editor(
+                    df_visitas[['Completado', 'Cliente', 'Monto_MXN', 'Estatus']], 
+                    hide_index=True, use_container_width=True,
+                    column_config={"Completado": st.column_config.CheckboxColumn("Hecho", default=False)}
+                )
+            else:
+                st.info("No tienes visitas a planta programadas hoy.")
+    else:
+        st.success("Día libre o sin actividades programadas en el radar. Excelente momento para prospección en frío.")              
