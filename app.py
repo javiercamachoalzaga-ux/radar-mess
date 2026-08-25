@@ -6,12 +6,12 @@ from datetime import datetime
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 
 # ==========================================
-# INICIALIZACION DE MEMORIA PARA AGENDA
+# INICIALIZACIÓN DE MEMORIA PARA AGENDA
 # ==========================================
 if 'agenda_radar' not in st.session_state:
     st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq', 'Tipo_Accion', 'Completado'])
 
-# --- DISENO ESTETICO CORPORATIVO ---
+# --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
@@ -38,7 +38,7 @@ st.markdown("""
         text-transform: uppercase;
     }
 
-    /* Tarjetas de Metricas */
+    /* Tarjetas de Métricas */
     div[data-testid="metric-container"] {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -62,7 +62,7 @@ st.markdown("""
         color: #2c3e50 !important;
     }
 
-    /* Pestanas (Tabs) Estilizadas */
+    /* Pestañas (Tabs) Estilizadas */
     button[role="tab"] {
         font-weight: 700 !important;
         font-size: 14px !important;
@@ -75,7 +75,7 @@ st.markdown("""
         border-bottom-color: #003a70 !important;
     }
     
-    /* === CORRECCION DE CONTRASTE EN SIDEBAR === */
+    /* === CORRECCIÓN DE CONTRASTE EN SIDEBAR === */
     [data-testid="stSidebar"] {
         background-color: #f4f6f7 !important;
         border-right: 1px solid #e0e0e0;
@@ -100,12 +100,12 @@ st.markdown("""
 
 def check_password():
     st.sidebar.header("Acceso Restringido")
-    pwd = st.sidebar.text_input("Contrasena", type="password")
+    pwd = st.sidebar.text_input("Contraseña", type="password")
     if "mi_contrasena" in st.secrets and pwd == st.secrets["mi_contrasena"]: return True
     return False
 
 if not check_password():
-    st.info("Ingresa tu contrasena en el menu lateral para acceder al sistema.")
+    st.info("Ingresa tu contraseña en el menú lateral para acceder al sistema.")
     st.stop()
 
 try:
@@ -197,10 +197,10 @@ if archivo_cargado is not None:
         df['Valor_USD_Eq'] = df['Monto_USD'] + (df['Monto_MXN'] / TC_ESTIMADO)
 
         # ==========================================
-        # FILTROS TACTICOS (MENU LATERAL)
+        # FILTROS TÁCTICOS (MENÚ LATERAL)
         # ==========================================
         st.sidebar.divider()
-        st.sidebar.header("Filtros Tacticos")
+        st.sidebar.header("Filtros Tácticos")
         
         busqueda_proyecto = st.sidebar.text_input("Buscar ID de Proyecto o Cliente:", placeholder="Ej. 111822 o SAFRAN")
         if busqueda_proyecto:
@@ -216,12 +216,12 @@ if archivo_cargado is not None:
                                       value=(0.0, max_monto), 
                                       step=5000.0)
 
-        tipo_filtro_fecha = st.sidebar.selectbox("Filtrar por Fecha:", ["Sin Filtro", "Fecha de Creacion", "Fecha de Cierre"])
+        tipo_filtro_fecha = st.sidebar.selectbox("Filtrar por Fecha:", ["Sin Filtro", "Fecha de Creación", "Fecha de Cierre"])
         
         df = df[(df['Peso_Interno_Orden'] >= rango_monto[0]) & (df['Peso_Interno_Orden'] <= rango_monto[1])]
 
         if tipo_filtro_fecha != "Sin Filtro":
-            col_fecha = 'Fecha_Creacion_DT' if tipo_filtro_fecha == "Fecha de Creacion" else 'Fecha_Cierre_DT'
+            col_fecha = 'Fecha_Creacion_DT' if tipo_filtro_fecha == "Fecha de Creación" else 'Fecha_Cierre_DT'
             min_date = df[col_fecha].min()
             max_date = df[col_fecha].max()
             
@@ -234,60 +234,24 @@ if archivo_cargado is not None:
                     if incluir_vacios: df = df[mask | df[col_fecha].isna()]
                     else: df = df[mask]
             else:
-                st.sidebar.warning(f"No hay registros validos para el filtro de fecha.")
+                st.sidebar.warning("No hay registros válidos para el filtro de fecha.")
 
         st.sidebar.divider()
-        st.sidebar.header("Tuberia (Filtrada)")
+        st.sidebar.header("Tubería (Filtrada)")
         st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
         st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
 
-        # ==========================================
-        # PANEL MUST-WIN (PRIORIDAD MÁXIMA - MES CORRIENTE)
-        # ==========================================
-        st.sidebar.divider()
-        st.sidebar.markdown("### 🏆 MUST-WIN: Cierres del Mes")
-        
+        # Identificadores de fecha actuales
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
-        
         meses_es = {1:"ENERO", 2:"FEBRERO", 3:"MARZO", 4:"ABRIL", 5:"MAYO", 6:"JUNIO", 
                     7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
         nombre_mes = meses_es.get(mes_actual, "MES ACTUAL")
-        
-        st.sidebar.caption(f"Top 3 cotizaciones vivas programadas para cerrar en {nombre_mes} {anio_actual}.")
-        
-        if not df.empty:
-            df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
-                        (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
-            
-            if not df_mes.empty:
-                top_must_win = df_mes.sort_values(by='Peso_Interno_Orden', ascending=False).head(3)
-                
-                for idx, row in top_must_win.iterrows():
-                    if row['Monto_USD'] > 0:
-                        monto_str = f"${row['Monto_USD']:,.2f} USD"
-                    else:
-                        monto_str = f"${row['Monto_MXN']:,.2f} MXN"
-                    
-                    fecha_cierre_str = row['Fecha_Cierre_DT'].strftime('%d/%m/%Y')
-                        
-                    st.sidebar.markdown(f"""
-                    <div style="background-color: #ffffff; padding: 12px; border-left: 5px solid #d35400; margin-bottom: 12px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <strong style="color: #003a70; font-size: 14px; text-transform: uppercase;">{row['Cliente']}</strong><br>
-                        <span style="font-size: 11px; color: #7f8c8d; font-weight: 700;">ID: {row['ID_Proyecto']} | ÁREA: {row['Area']}</span><br>
-                        <strong style="color: #27ae60; font-size: 15px;">{monto_str}</strong><br>
-                        <span style="font-size: 11px; color: #c0392b; font-weight: 700;">📅 Cierre Proyectado: {fecha_cierre_str}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.sidebar.warning(f"Atencion: No tienes cotizaciones con fecha de cierre registrada para {nombre_mes}.")
-        else:
-            st.sidebar.info("Ajusta los filtros o carga tu archivo.")
 
         # ==========================================
-        # 🎯 DASHBOARD DE CUMPLIMIENTO MENSUAL (BUDGET FIJO)
+        # DASHBOARD DE CUMPLIMIENTO MENSUAL (BUDGET FIJO)
         # ==========================================
-        st.markdown("### 🎯 Dashboard de Cumplimiento Mensual (Mes Corriente)")
+        st.markdown("### Dashboard de Cumplimiento Mensual (Mes Corriente)")
         
         BUDGET_ALTA_GAMA = 28000.00
         BUDGET_LABORATORIOS = 15000.00
@@ -326,7 +290,7 @@ if archivo_cargado is not None:
         st.divider()
 
         # ==========================================
-        # ASIGNACION VIP Y 80-20
+        # ASIGNACIÓN VIP Y 80-20
         # ==========================================
         top_10 = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Prioridad'] = df['Cliente'].apply(lambda c: "VIP" if any(m in c.upper() for m in top_10) else "Normal")
@@ -341,13 +305,13 @@ if archivo_cargado is not None:
 
         if 'Fecha_Creacion' in df.columns:
             df['SLA'] = (pd.Timestamp.now().normalize() - df['Fecha_Creacion_DT']).dt.days
-            df['SLA'] = df['SLA'].apply(lambda d: "S/F" if pd.isna(d) else ("+3 Dias" if d >= 3 else ("2 Dias" if d == 2 else "Reciente")))
+            df['SLA'] = df['SLA'].apply(lambda d: "S/F" if pd.isna(d) else ("+3 Días" if d >= 3 else ("2 Días" if d == 2 else "Reciente")))
         else:
             df['SLA'] = "N/A"
 
         def estrategia(fila):
             if fila['Prioridad'] == "VIP": return "[RIESGO] Visita presencial" if "+3" in fila['SLA'] else ("[ALERTA] Llamada consultiva" if "2" in fila['SLA'] else "[SEGUIMIENTO] Correo")
-            else: return "[ALTO VALOR] Priorizar cierre" if fila['Peso_Interno_Orden'] > 15000 else ("[80/20] Descartar rapido" if "+3" in fila['SLA'] else "[CONTACTO] Llamada")
+            else: return "[ALTO VALOR] Priorizar cierre" if fila['Peso_Interno_Orden'] > 15000 else ("[80/20] Descartar rápido" if "+3" in fila['SLA'] else "[CONTACTO] Llamada")
 
         df['Estrategia_Cierre'] = df.apply(estrategia, axis=1)
         
@@ -359,14 +323,14 @@ if archivo_cargado is not None:
         cols_vista = [c for c in cols_ideales if c in df.columns]
 
         # ==========================================
-        # RENDERIZADO DE PESTANAS
+        # RENDERIZADO DE PESTAÑAS
         # ==========================================
         tab_dash_vip, tab_dash_8020, tab_dash_areas, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
-            "Dash VIP", "Dash 80/20", "Dash Areas", "Proyectos Vivos", "Plan de Accion", "Op. VIP", "Op. 80/20", "General"
+            "Dash VIP", "Dash 80/20", "Dash Áreas", "Proyectos Vivos", "Plan de Acción", "Op. VIP", "Op. 80/20", "General"
         ])
 
         with tab_dash_vip:
-            st.markdown("### Concentracion de Capital: Cuentas VIP")
+            st.markdown("### Concentración de Capital: Cuentas VIP")
             if not df_vip.empty:
                 col_m, col_u = st.columns(2)
                 col_m.metric("Capital VIP (MXN)", f"${df_vip['Monto_MXN'].sum():,.2f}")
@@ -388,7 +352,7 @@ if archivo_cargado is not None:
                 st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
         with tab_dash_areas:
-            st.markdown("### Distribucion por Unidades de Negocio")
+            st.markdown("### Distribución por Unidades de Negocio")
             if not df.empty and 'Area' in df.columns:
                 resumen_area = df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
                 resumen_area = resumen_area.sort_values(by='Monto_MXN', ascending=False)
@@ -397,10 +361,10 @@ if archivo_cargado is not None:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.bar_chart(resumen_area.set_index('Area'), use_container_width=True)
             else:
-                st.info("No se encontro informacion de Areas en el archivo actual.")
+                st.info("No se encontró información de Áreas en el archivo actual.")
 
         with tab_proy:
-            st.markdown("### Seleccion de Prioridades (Proyectos Vivos)")
+            st.markdown("### Selección de Prioridades (Proyectos Vivos)")
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
@@ -444,9 +408,34 @@ if archivo_cargado is not None:
         # DASHBOARD DE AGENDA ESTRATÉGICA
         # ==========================================
         with tab_plan:
+            
+            # --- PANEL MUST-WIN (TOP 10) ---
+            st.markdown("### Proyectos Prioritarios Must-Win (Top 10)")
+            st.caption(f"Cotizaciones de mayor impacto programadas para cierre en {nombre_mes} {anio_actual}.")
+            
+            if not df.empty:
+                df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
+                            (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
+                
+                if not df_mes.empty:
+                    top_must_win = df_mes.sort_values(by='Peso_Interno_Orden', ascending=False).head(10)
+                    
+                    df_mw_mostrar = top_must_win[['Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq', 'Fecha_Cierre']].copy()
+                    df_mw_mostrar['Valor_USD_Eq'] = df_mw_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
+                    df_mw_mostrar.rename(columns={'ID_Proyecto': 'ID Proyecto', 'Unidad_Presupuesto': 'Unidad Estratégica', 'Valor_USD_Eq': 'Impacto USD (Eq)', 'Fecha_Cierre': 'Fecha Límite'}, inplace=True)
+                    
+                    st.dataframe(df_mw_mostrar, hide_index=True, use_container_width=True)
+                else:
+                    st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
+            else:
+                st.info("Ajusta los filtros o carga tu archivo para visualizar las prioridades.")
+            
+            st.divider()
+            
+            # --- PLANIFICADOR DE ACTIVIDADES ---
             st.markdown("### Plan de Acción Estratégico (Priorizado por Budget)")
             
-            with st.expander("➕ Programar Nueva Actividad", expanded=False):
+            with st.expander("Programar Nueva Actividad", expanded=False):
                 with st.form("form_agenda_radar"):
                     col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
                     
@@ -501,7 +490,6 @@ if archivo_cargado is not None:
                 
                 total_tareas = len(df_dia)
                 
-                # Métricas Rápidas del Día
                 col_m1, col_m2, col_m3 = st.columns(3)
                 col_m1.metric("Valor del Día", f"${df_dia['Valor_USD_Eq'].sum():,.0f} USD")
                 col_m2.metric("Total Actividades", f"{total_tareas}")
@@ -509,7 +497,6 @@ if archivo_cargado is not None:
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # Visualización de Data Editor para la agenda (más compacto y manipulable)
                 df_mostrar = df_dia[['Completado', 'Unidad_Presupuesto', 'Tipo_Accion', 'Cliente', 'Valor_USD_Eq']].copy()
                 df_mostrar['Valor_USD_Eq'] = df_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
                 df_mostrar = df_mostrar.rename(columns={'Unidad_Presupuesto': 'Unidad', 'Valor_USD_Eq': 'Monto (USD)'})
@@ -528,7 +515,6 @@ if archivo_cargado is not None:
                     }
                 )
                 
-                # Actualizar el estado de completado en session_state basado en la edición de la tabla
                 tareas_completadas = proyectos_actualizados['Completado'].sum()
                 for i, idx in enumerate(df_dia.index):
                      st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
@@ -574,4 +560,4 @@ if archivo_cargado is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.info("Sube tu archivo bruto para desplegar el panel tactico.")    
+    st.info("Sube tu archivo bruto para desplegar el panel táctico.")
