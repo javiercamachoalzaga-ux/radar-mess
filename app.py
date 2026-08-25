@@ -51,7 +51,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# INICIALIZACION DE MEMORIA
+# INICIALIZACION DE MEMORIA PARA AGENDA
 # ==========================================
 if 'agenda_radar' not in st.session_state:
     st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'Tipo_Accion', 'Completado'])
@@ -91,13 +91,14 @@ if archivo_cargado is not None:
             archivo_cargado.seek(0)
             df = pd.read_csv(archivo_cargado, encoding='latin-1')
 
-        # Limpieza de nombres de columnas para evitar espacios en blanco ocultos
+        # Limpieza de nombres de columnas
         df.columns = df.columns.str.strip()
 
-        # Variables para metricas globales seguras
+        # Metricas globales seguras
         monto_mxn_total = 0.0
         monto_usd_total = 0.0
 
+        # Lector automatico de divisas
         if 'Total_MXN' in df.columns:
             df['Total_MXN'] = pd.to_numeric(df['Total_MXN'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce').fillna(0.0)
             monto_mxn_total = df['Total_MXN'].sum()
@@ -108,6 +109,12 @@ if archivo_cargado is not None:
 
         if 'Cliente' not in df.columns:
             df['Cliente'] = "Cliente Desconocido"
+            
+        if 'Estatus' not in df.columns:
+            df['Estatus'] = "EN PROCESO"
+            
+        # Filtramos para no mostrar los ganados/perdidos en la prospeccion
+        df_activos = df[~df['Estatus'].astype(str).str.upper().isin(['GANADA', 'PERDIDA', 'COMPLETADA', 'FACTURADA'])].copy()
 
         # ==========================================
         # ESTRUCTURA DE PESTANAS (TABS)
@@ -121,7 +128,7 @@ if archivo_cargado is not None:
 
         # --- PESTANA 1: RESUMEN GLOBAL ---
         with tab_dash:
-            st.markdown("### Metricas del Pipeline")
+            st.markdown("### Metricas del Pipeline Activo")
             col_m1, col_m2 = st.columns(2)
             
             with col_m1:
@@ -133,9 +140,9 @@ if archivo_cargado is not None:
                 st.metric("Total USD Activo", f"${monto_usd_total:,.2f}")
 
             st.divider()
-            st.markdown("#### Distribucion de Cartera")
+            st.markdown("#### Distribucion de Cartera por Area")
             if 'Area' in df.columns:
-                resumen_area = df.groupby('Area').agg({'Total_MXN': 'sum'}).reset_index()
+                resumen_area = df_activos.groupby('Area').agg({'Total_MXN': 'sum'}).reset_index()
                 st.bar_chart(resumen_area.set_index('Area'))
             else:
                 st.info("No se encontro la columna 'Area' para graficar la distribucion.")
@@ -143,14 +150,13 @@ if archivo_cargado is not None:
         # --- PESTANA 2: PROYECTOS ---
         with tab_proyectos:
             st.markdown("### Base de Datos Activa")
-            st.dataframe(df, hide_index=True, use_container_width=True)
+            st.dataframe(df_activos, hide_index=True, use_container_width=True)
 
         # --- PESTANA 3: CLIENTES VIP ---
         with tab_vip:
             st.markdown("### Cuentas Estrategicas (Top Facturacion)")
-            if 'Total_MXN' in df.columns:
-                vip_df = df.groupby('Cliente').agg({'Total_MXN': 'sum', 'Total_USD': 'sum'}).reset_index()
-                # Calculo de peso total para ordenar a los clientes
+            if 'Total_MXN' in df_activos.columns:
+                vip_df = df_activos.groupby('Cliente').agg({'Total_MXN': 'sum', 'Total_USD': 'sum'}).reset_index()
                 vip_df['Peso_Total'] = vip_df['Total_MXN'] + (vip_df['Total_USD'] * 19.50)
                 vip_df = vip_df.sort_values(by='Peso_Total', ascending=False).head(15)
                 
@@ -173,10 +179,10 @@ if archivo_cargado is not None:
                 col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
                 
                 with col_f1:
-                    if 'ID_Proyecto' in df.columns:
-                        lista_clientes = (df['Cliente'].astype(str) + " (ID: " + df['ID_Proyecto'].astype(str) + ")").unique()
+                    if 'ID_Proyecto' in df_activos.columns:
+                        lista_clientes = (df_activos['Cliente'].astype(str) + " (ID: " + df_activos['ID_Proyecto'].astype(str) + ")").unique()
                     else:
-                        lista_clientes = df['Cliente'].astype(str).unique()
+                        lista_clientes = df_activos['Cliente'].astype(str).unique()
                         
                     cliente_sel = st.selectbox("1. Selecciona la Cuenta:", lista_clientes)
                     
