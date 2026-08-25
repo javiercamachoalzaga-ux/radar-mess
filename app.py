@@ -9,7 +9,7 @@ st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 # INICIALIZACION DE MEMORIA PARA AGENDA
 # ==========================================
 if 'agenda_radar' not in st.session_state:
-    st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'Tipo_Accion', 'Completado'])
+    st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq', 'Tipo_Accion', 'Completado'])
 
 # --- DISENO ESTETICO CORPORATIVO ---
 st.markdown("""
@@ -180,6 +180,23 @@ if archivo_cargado is not None:
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
+        # CLASIFICACIÓN GLOBAL POR UNIDAD DE NEGOCIO
+        # ==========================================
+        def categorizar_unidad(area):
+            area_upper = str(area).upper()
+            if any(kw in area_upper for kw in ["ALTA GAMA", "EQUIPO", "CMM", "ZEISS", "SCANNER", "SCANTECH", "KREON", "BATY", "MITUTOYO"]): 
+                return "ALTA GAMA"
+            elif any(kw in area_upper for kw in ["LABORATORIO", "CALIBRACIÓN", "CALIBRACION", "SERVICIO", "DIMENSIONAL"]): 
+                return "LABORATORIOS"
+            else: 
+                return "PRODUCTOS" 
+
+        df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
+        
+        TC_ESTIMADO = 19.50 
+        df['Valor_USD_Eq'] = df['Monto_USD'] + (df['Monto_MXN'] / TC_ESTIMADO)
+
+        # ==========================================
         # FILTROS TACTICOS (MENU LATERAL)
         # ==========================================
         st.sidebar.divider()
@@ -223,6 +240,90 @@ if archivo_cargado is not None:
         st.sidebar.header("Tuberia (Filtrada)")
         st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
         st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
+
+        # ==========================================
+        # PANEL MUST-WIN (PRIORIDAD MÁXIMA - MES CORRIENTE)
+        # ==========================================
+        st.sidebar.divider()
+        st.sidebar.markdown("### 🏆 MUST-WIN: Cierres del Mes")
+        
+        mes_actual = pd.Timestamp.now().month
+        anio_actual = pd.Timestamp.now().year
+        
+        meses_es = {1:"ENERO", 2:"FEBRERO", 3:"MARZO", 4:"ABRIL", 5:"MAYO", 6:"JUNIO", 
+                    7:"JULIO", 8:"AGOSTO", 9:"SEPTIEMBRE", 10:"OCTUBRE", 11:"NOVIEMBRE", 12:"DICIEMBRE"}
+        nombre_mes = meses_es.get(mes_actual, "MES ACTUAL")
+        
+        st.sidebar.caption(f"Top 3 cotizaciones vivas programadas para cerrar en {nombre_mes} {anio_actual}.")
+        
+        if not df.empty:
+            df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
+                        (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
+            
+            if not df_mes.empty:
+                top_must_win = df_mes.sort_values(by='Peso_Interno_Orden', ascending=False).head(3)
+                
+                for idx, row in top_must_win.iterrows():
+                    if row['Monto_USD'] > 0:
+                        monto_str = f"${row['Monto_USD']:,.2f} USD"
+                    else:
+                        monto_str = f"${row['Monto_MXN']:,.2f} MXN"
+                    
+                    fecha_cierre_str = row['Fecha_Cierre_DT'].strftime('%d/%m/%Y')
+                        
+                    st.sidebar.markdown(f"""
+                    <div style="background-color: #ffffff; padding: 12px; border-left: 5px solid #d35400; margin-bottom: 12px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <strong style="color: #003a70; font-size: 14px; text-transform: uppercase;">{row['Cliente']}</strong><br>
+                        <span style="font-size: 11px; color: #7f8c8d; font-weight: 700;">ID: {row['ID_Proyecto']} | ÁREA: {row['Area']}</span><br>
+                        <strong style="color: #27ae60; font-size: 15px;">{monto_str}</strong><br>
+                        <span style="font-size: 11px; color: #c0392b; font-weight: 700;">📅 Cierre Proyectado: {fecha_cierre_str}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.sidebar.warning(f"Atencion: No tienes cotizaciones con fecha de cierre registrada para {nombre_mes}.")
+        else:
+            st.sidebar.info("Ajusta los filtros o carga tu archivo.")
+
+        # ==========================================
+        # 🎯 DASHBOARD DE CUMPLIMIENTO MENSUAL (BUDGET FIJO)
+        # ==========================================
+        st.markdown("### 🎯 Dashboard de Cumplimiento Mensual (Mes Corriente)")
+        
+        BUDGET_ALTA_GAMA = 28000.00
+        BUDGET_LABORATORIOS = 15000.00
+        BUDGET_PRODUCTOS = 45000.00
+        
+        df_mes_tracker = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
+                            (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
+        
+        pipe_alta = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'ALTA GAMA']['Valor_USD_Eq'].sum()
+        pipe_labs = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'LABORATORIOS']['Valor_USD_Eq'].sum()
+        pipe_prod = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'PRODUCTOS']['Valor_USD_Eq'].sum()
+        
+        datos_budget = {
+            'Unidad': ['ALTA GAMA', 'LABORATORIOS', 'PRODUCTOS'],
+            'Radar (USD)': [pipe_alta, pipe_labs, pipe_prod],
+            'Meta (USD)': [BUDGET_ALTA_GAMA, BUDGET_LABORATORIOS, BUDGET_PRODUCTOS]
+        }
+        df_chart = pd.DataFrame(datos_budget).set_index('Unidad')
+
+        pct_alta = min(pipe_alta / BUDGET_ALTA_GAMA, 1.0) if BUDGET_ALTA_GAMA > 0 else 0
+        pct_labs = min(pipe_labs / BUDGET_LABORATORIOS, 1.0) if BUDGET_LABORATORIOS > 0 else 0
+        pct_prod = min(pipe_prod / BUDGET_PRODUCTOS, 1.0) if BUDGET_PRODUCTOS > 0 else 0
+
+        col_b1, col_b2 = st.columns([2, 1])
+
+        with col_b1:
+            st.markdown("#### Progreso General (Radar vs Presupuesto)")
+            st.bar_chart(df_chart, use_container_width=True)
+            
+        with col_b2:
+             st.markdown("#### Estatus de Cobertura")
+             st.metric("Alta Gama (Meta: $28K USD)", f"${pipe_alta:,.0f} USD", f"{pct_alta*100:.1f}%")
+             st.metric("Laboratorios (Meta: $15K USD)", f"${pipe_labs:,.0f} USD", f"{pct_labs*100:.1f}%")
+             st.metric("Productos (Meta: $45K USD)", f"${pipe_prod:,.0f} USD", f"{pct_prod*100:.1f}%")
+             
+        st.divider()
 
         # ==========================================
         # ASIGNACION VIP Y 80-20
@@ -287,7 +388,7 @@ if archivo_cargado is not None:
                 st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
         with tab_dash_areas:
-            st.markdown("### Distribucion por Unidades de Negocio (Equipos vs Laboratorios)")
+            st.markdown("### Distribucion por Unidades de Negocio")
             if not df.empty and 'Area' in df.columns:
                 resumen_area = df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
                 resumen_area = resumen_area.sort_values(by='Monto_MXN', ascending=False)
@@ -298,12 +399,8 @@ if archivo_cargado is not None:
             else:
                 st.info("No se encontro informacion de Areas en el archivo actual.")
 
-        proyectos_editados = pd.DataFrame()
-
         with tab_proy:
             st.markdown("### Seleccion de Prioridades (Proyectos Vivos)")
-            st.caption("Marca la casilla 'Atender Hoy' para enviar los proyectos a tu Plan de Accion.")
-            
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
@@ -337,132 +434,115 @@ if archivo_cargado is not None:
                         res_proy = res_proy[[c for c in cols_orden if c in res_proy.columns]]
 
                     res_proy = res_proy.sort_values(by='Total_MXN', ascending=False)
-                    res_proy.insert(0, 'Atender Hoy', False)
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    proyectos_editados = st.data_editor(
-                        res_proy, 
-                        hide_index=True, 
-                        use_container_width=True, 
-                        key="editor_proyectos",
-                        column_config={"Atender Hoy": st.column_config.CheckboxColumn("Atender Hoy", default=False)}
-                    )
+                    st.dataframe(res_proy, hide_index=True, use_container_width=True)
                 else: st.info("No hay proyectos agrupados y vivos que cumplan con los filtros.")
             else: st.info("Falta la columna 'PROYECTO'.")
 
         # ==========================================
-        # PLAN DE ACCION Y AGENDA INTEGRADA
+        # DASHBOARD DE AGENDA ESTRATÉGICA
         # ==========================================
         with tab_plan:
-            st.markdown("### Plan de Accion del Dia")
-            if not proyectos_editados.empty:
-                plan_df = proyectos_editados[proyectos_editados['Atender Hoy'] == True].copy()
-                
-                if not plan_df.empty:
-                    st.success("Objetivos fijados. Este es tu objetivo de cierre para la jornada.")
-                    col1, col2 = st.columns(2)
-                    col1.metric("Objetivo MXN a Cerrar", f"${plan_df['Total_MXN'].sum():,.2f}")
-                    col2.metric("Objetivo USD a Cerrar", f"${plan_df['Total_USD'].sum():,.2f}")
+            st.markdown("### Plan de Acción Estratégico (Priorizado por Budget)")
+            
+            with st.expander("➕ Programar Nueva Actividad", expanded=False):
+                with st.form("form_agenda_radar"):
+                    col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
                     
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    st.dataframe(plan_df.drop(columns=['Atender Hoy']).style.format({'Total_MXN': '${:,.2f}', 'Total_USD': '${:,.2f}'}), use_container_width=True)
-                else:
-                    st.info("Aun no has seleccionado ningun proyecto. Ve a la pestana 'Proyectos Vivos' y marca tus prioridades.")
-            else:
-                st.info("Ajusta tus filtros o carga tu archivo para generar tu plan de accion.")
-
-            st.divider()
-            
-            # --- MODULO AGENDA ---
-            st.markdown("### Agenda Comercial y Seguimiento")
-            
-            with st.form("form_agenda_radar"):
-                col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
-                
-                with col_f1:
-                    if 'ID_Proyecto' in df.columns:
-                        lista_clientes = (df['Cliente'].astype(str) + " (ID: " + df['ID_Proyecto'].astype(str) + ")").unique()
-                    else:
-                        lista_clientes = df['Cliente'].astype(str).unique()
+                    with col_f1:
+                        df_vivos = df.dropna(subset=['ID_Proyecto']).copy()
+                        if not df_vivos.empty:
+                            df_vivos['Etiqueta_Select'] = df_vivos['Cliente'].astype(str) + " | ID: " + df_vivos['ID_Proyecto'].astype(str) + " | " + df_vivos['Unidad_Presupuesto']
+                            lista_clientes = df_vivos['Etiqueta_Select'].unique().tolist()
+                        else:
+                            lista_clientes = ["Sin proyectos válidos"]
+                            
+                        cliente_sel = st.selectbox("1. Selecciona la Cuenta:", lista_clientes)
                         
-                    cliente_sel = st.selectbox("1. Selecciona la Cuenta:", lista_clientes)
+                    with col_f2:
+                        accion_sel = st.selectbox("2. Acción:", ["Visita Presencial", "Llamada Consultiva", "Correo / Cotización", "Cierre / Negociación"])
+                        
+                    with col_f3:
+                        fecha_sel = st.date_input("3. Fecha:", pd.Timestamp.now().date())
+                        
+                    btn_agendar = st.form_submit_button("Agregar a la Ruta")
                     
-                with col_f2:
-                    accion_sel = st.selectbox("2. Tipo de Accion:", ["Llamada", "Visita Presencial", "Correo Electronico"])
-                    
-                with col_f3:
-                    fecha_sel = st.date_input("3. Fecha Programada:", pd.Timestamp.now().date())
-                    
-                btn_agendar = st.form_submit_button("Agregar a la Agenda")
-                
-                if btn_agendar:
-                    nueva_tarea = pd.DataFrame([{
-                        'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
-                        'Fecha': fecha_sel,
-                        'Cliente': cliente_sel,
-                        'Tipo_Accion': accion_sel,
-                        'Completado': False
-                    }])
-                    st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
-                    st.success("Actividad registrada exitosamente en el calendario.")
-                    
-            st.divider()
+                    if btn_agendar and cliente_sel != "Sin proyectos válidos":
+                        id_proy_str = cliente_sel.split("| ID: ")[1].split(" |")[0].strip()
+                        fila_proy = df[df['ID_Proyecto'].astype(str) == id_proy_str].iloc[0]
+                        
+                        nueva_tarea = pd.DataFrame([{
+                            'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
+                            'Fecha': fecha_sel,
+                            'Cliente': fila_proy['Cliente'],
+                            'ID_Proyecto': fila_proy['ID_Proyecto'],
+                            'Unidad_Presupuesto': fila_proy['Unidad_Presupuesto'],
+                            'Valor_USD_Eq': fila_proy['Valor_USD_Eq'],
+                            'Tipo_Accion': accion_sel,
+                            'Completado': False
+                        }])
+                        st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
+                        st.success("Actividad registrada.")
+                        
+            # --- DASHBOARD DIARIO DE RUTAS ---
+            fecha_vista = st.date_input("Seleccionar día de ejecución:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
             
-            st.markdown("#### Planificador de Actividades")
-            fecha_vista = st.date_input("Seleccionar dia de ejecucion:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
-            
+            for col_req in ['ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq']:
+                if col_req not in st.session_state.agenda_radar.columns:
+                    st.session_state.agenda_radar[col_req] = None
+                    
             df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
             
-            if not df_dia.empty:
-                df_llamadas = df_dia[df_dia['Tipo_Accion'] == "Llamada"]
-                df_visitas = df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]
-                df_correos = df_dia[df_dia['Tipo_Accion'] == "Correo Electronico"]
+            if not df_dia.empty and df_dia['Unidad_Presupuesto'].notna().all():
+                pct_dict = {"ALTA GAMA": pct_alta, "LABORATORIOS": pct_labs, "PRODUCTOS": pct_prod}
+                df_dia['Cobertura_Actual'] = df_dia['Unidad_Presupuesto'].map(pct_dict).fillna(1.0)
+                df_dia = df_dia.sort_values(by=['Cobertura_Actual', 'Valor_USD_Eq'], ascending=[True, False])
                 
                 total_tareas = len(df_dia)
-                tareas_completadas = 0
                 
-                col_a1, col_a2, col_a3 = st.columns(3)
+                # Métricas Rápidas del Día
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Valor del Día", f"${df_dia['Valor_USD_Eq'].sum():,.0f} USD")
+                col_m2.metric("Total Actividades", f"{total_tareas}")
+                col_m3.metric("Visitas Críticas", len(df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]))
                 
-                with col_a1:
-                    st.markdown("**Llamadas**")
-                    if not df_llamadas.empty:
-                        for idx, row in df_llamadas.iterrows():
-                            marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
-                            if marcado: tareas_completadas += 1
-                            st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
-                    else: st.caption("Sin registros.")
-                    
-                with col_a2:
-                    st.markdown("**Visitas**")
-                    if not df_visitas.empty:
-                        for idx, row in df_visitas.iterrows():
-                            marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
-                            if marcado: tareas_completadas += 1
-                            st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
-                    else: st.caption("Sin registros.")
-                    
-                with col_a3:
-                    st.markdown("**Correos**")
-                    if not df_correos.empty:
-                        for idx, row in df_correos.iterrows():
-                            marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
-                            if marcado: tareas_completadas += 1
-                            st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
-                    else: st.caption("Sin registros.")
-                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # Visualización de Data Editor para la agenda (más compacto y manipulable)
+                df_mostrar = df_dia[['Completado', 'Unidad_Presupuesto', 'Tipo_Accion', 'Cliente', 'Valor_USD_Eq']].copy()
+                df_mostrar['Valor_USD_Eq'] = df_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
+                df_mostrar = df_mostrar.rename(columns={'Unidad_Presupuesto': 'Unidad', 'Valor_USD_Eq': 'Monto (USD)'})
+                
+                proyectos_actualizados = st.data_editor(
+                    df_mostrar,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="editor_agenda",
+                    column_config={
+                        "Completado": st.column_config.CheckboxColumn("Hecho", default=False),
+                        "Monto (USD)": st.column_config.TextColumn("Impacto", disabled=True),
+                        "Unidad": st.column_config.TextColumn("Unidad", disabled=True),
+                        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                        "Tipo_Accion": st.column_config.TextColumn("Acción", disabled=True)
+                    }
+                )
+                
+                # Actualizar el estado de completado en session_state basado en la edición de la tabla
+                tareas_completadas = proyectos_actualizados['Completado'].sum()
+                for i, idx in enumerate(df_dia.index):
+                     st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
+                     
                 st.divider()
-                progreso = int((tareas_completadas / total_tareas) * 100)
-                st.markdown(f"**Nivel de Avance: {progreso}%** ({tareas_completadas} de {total_tareas} cuentas atendidas)")
+                progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
+                st.markdown(f"**Nivel de Avance del Día: {progreso}%**")
                 st.progress(progreso)
                 
-                if progreso == 100:
-                    st.success("Operacion diaria finalizada con exito.")
-                    
-                if st.button("Depurar actividades completadas"):
+                if st.button("Depurar agenda completada"):
                     st.session_state.agenda_radar = st.session_state.agenda_radar[~((st.session_state.agenda_radar['Fecha'] == fecha_vista) & (st.session_state.agenda_radar['Completado'] == True))]
                     st.rerun()
             else:
-                st.info("Sin agenda registrada para esta fecha. Utiliza el panel superior para programar cuentas.")
+                st.info("No hay actividades registradas para esta fecha.")
 
         with tab_op_vip:
             st.markdown("### Detalle Operativo VIP")
@@ -494,4 +574,4 @@ if archivo_cargado is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.info("Sube tu archivo bruto de Scott para desplegar el panel tactico.")
+    st.info("Sube tu archivo bruto para desplegar el panel tactico.")    
