@@ -177,8 +177,8 @@ if archivo_cargado is not None:
         df['Cliente'] = df['Cliente'].astype(str).str.strip().str.upper()
         df = df[df['Cliente'] != 'NAN']
         
-        # REGLA: Unificación de ITP e Industrias de Tuberías Aeronáuticas
-        df['Cliente'] = df['Cliente'].apply(lambda c: "ITP" if "TUBERIAS AERONAUTICAS" in c or "ITP" in c else c)
+        # REGLA MEJORADA: Unificación de ITP e Industrias de Tuberías Aeronáuticas (evitando errores por acentos)
+        df['Cliente'] = df['Cliente'].apply(lambda c: "ITP" if "TUBERIAS AERONAUTICAS" in c or "TUBERÍAS AERONÁUTICAS" in c or "ITP" in c else c)
 
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
@@ -339,7 +339,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (EXCLUSIÓN SIN DUPLICADOS)
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (CORRECCIÓN DE BÚSQUEDA SUBSTRING)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -401,14 +401,26 @@ if archivo_cargado is not None:
                         
                     st.divider()
 
-                    # 2. TOP 10 CORPORATIVO (Excluyendo estrictamente al cliente de Cuenta Clave para evitar duplicados)
-                    top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS ENERGY", "STEERINGMEX", "TREMEC", "WATLOW"]
+                    # 2. TOP 10 CORPORATIVO (Corrección de búsqueda dinámica por Substring)
+                    top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
                     
-                    # Filtramos la lista corporativa para remover la Cuenta Clave si estuviera incluida
-                    top_10_filtrado = [c for c in top_10_fijo if c != cliente_clave_top]
+                    # Removemos dinámicamente de la lista maestra la raíz del cliente clave, para no duplicarlo
+                    top_10_filtrado = [marca for marca in top_10_fijo if marca not in cliente_clave_top]
                     
-                    df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_filtrado)].copy()
-                    df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_filtrado)].copy()
+                    # Función para detectar si la marca del TOP 10 está CONTENIDA en el nombre del cliente
+                    def es_top_10(nombre_cliente):
+                        for marca in top_10_filtrado:
+                            if marca in nombre_cliente:
+                                return True
+                        return False
+                    
+                    if not df_remanente_1.empty:
+                        df_remanente_1['Es_Top10'] = df_remanente_1['Cliente'].apply(es_top_10)
+                        df_top = df_remanente_1[df_remanente_1['Es_Top10']].copy()
+                        df_remanente_2 = df_remanente_1[~df_remanente_1['Es_Top10']].copy()
+                    else:
+                        df_top = pd.DataFrame()
+                        df_remanente_2 = pd.DataFrame()
 
                     # 3 y 4. 80/20 Y DESARROLLO (Resto de la tubería)
                     if not df_remanente_2.empty:
@@ -487,7 +499,7 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO (FICHA EJECUTIVA DE NEGOCIACIÓN)
+        # PESTAÑA 3: AGENDA DE TRABAJO Y MEMORÁNDUMS
         # ==========================================
         with tab_agenda:
             st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
@@ -540,7 +552,7 @@ if archivo_cargado is not None:
                      
                 st.divider()
                 
-                # --- MÓDULO DE INTELIGENCIA COMERCIAL (FICHA GERENCIAL Y CORREOS FORMALES) ---
+                # --- MÓDULO DE INTELIGENCIA COMERCIAL ---
                 st.markdown("### Ficha Ejecutiva y Memorándum de Negociación")
                 st.caption("Selecciona una cuenta de tu agenda para generar la minuta de revisión directiva o el correo formal de seguimiento.")
                 
@@ -548,7 +560,8 @@ if archivo_cargado is not None:
                 cliente_ficha = st.selectbox("Seleccionar cuenta:", clientes_dia_lista)
                 
                 if cliente_ficha:
-                    df_cliente_seleccion = df[df['Cliente'] == cliente_ficha]
+                    # Traemos los proyectos desde el dataframe filtrado del MES, no de todo el histórico
+                    df_cliente_seleccion = df_mes_plan[df_mes_plan['Cliente'] == cliente_ficha]
                     total_cotiz_cliente = len(df_cliente_seleccion)
                     suma_usd_cli = df_cliente_seleccion['Monto_USD'].sum()
                     suma_mxn_cli = df_cliente_seleccion['Monto_MXN'].sum()
@@ -574,7 +587,7 @@ MESS Servicios Metrológicos"""
                     else:
                         st.markdown("#### Ficha Gerencial de Negociación (Memorándum)")
                         st.markdown(f"**Cuenta:** {cliente_ficha}")
-                        st.markdown(f"**Volumen Activo:** {total_cotiz_cliente} cotizaciones en proceso")
+                        st.markdown(f"**Volumen Activo en el Mes:** {total_cotiz_cliente} cotizaciones en proceso")
                         st.markdown(f"**Impacto Económico Consolidado:** ${suma_usd_cli:,.2f} USD | ${suma_mxn_cli:,.2f} MXN")
                         
                         st.markdown("---")
