@@ -400,7 +400,7 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (POR DÍAS)
+# MÓDULO: AGENDA COMERCIAL DIARIA (PLANIFICADOR)
 # ==========================================
 st.divider()
 
@@ -411,19 +411,23 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
         # 1. SELECTOR DE DÍAS
         fecha_agenda = st.date_input("Selecciona el día a planificar:", pd.Timestamp.now().date())
     
-    # Trabajamos solo con las OVs que están "En Proceso" (las completadas ya no importan aquí)
-    df_agenda = df_en_proceso.copy()
+    # CORRECCIÓN: Usamos el dataframe base 'df' de tu Radar en lugar de df_en_proceso
+    df_agenda = df.copy()
+    
+    # Si tienes columna de Estatus en tu Radar, filtramos para no mostrar cuentas ganadas/perdidas
+    if 'Estatus' in df_agenda.columns:
+        df_agenda = df_agenda[~df_agenda['Estatus'].astype(str).str.upper().isin(['GANADA', 'PERDIDA', 'COMPLETADA', 'FACTURADA'])]
     
     # 2. CLASIFICACIÓN INTELIGENTE (Llamadas, Visitas, Correos)
     def clasificar_tarea(fila):
-        # Busca pistas en el estatus para saber qué tipo de acción es
-        texto = str(fila.get('Estatus', '')).upper()
-        if any(palabra in texto for palabra in ['VISITA', 'PLANTA', 'REUNION', 'PRESENCIAL']):
+        # Busca pistas en toda la fila del cliente para saber qué acción es
+        texto = str(fila.values).upper()
+        if any(palabra in texto for palabra in ['VISITA', 'PLANTA', 'REUNION', 'PRESENCIAL', 'CITA']):
             return 'Visita Presencial'
-        elif any(palabra in texto for palabra in ['CORREO', 'EMAIL', 'MAIL', 'COTIZA', 'MENSAJE']):
+        elif any(palabra in texto for palabra in ['CORREO', 'EMAIL', 'MAIL', 'COTIZA', 'MENSAJE', 'WHATSAPP']):
             return 'Correo/Cotización'
         else:
-            return 'Llamada' # Acción por defecto
+            return 'Llamada' # Acción por defecto si no detecta las otras palabras
             
     if 'Tipo_Accion' not in df_agenda.columns:
         df_agenda['Tipo_Accion'] = df_agenda.apply(clasificar_tarea, axis=1)
@@ -438,14 +442,23 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
         
     df_agenda = df_agenda[df_agenda['Tipo_Accion'].isin(tipo_contacto)]
     
-    # 3. FILTRAMOS LAS OVS POR EL DÍA SELECCIONADO
+    # BLINDAJE DE COLUMNAS (Para evitar errores si el Excel del Radar no tiene estas columnas exactas)
+    if 'Fecha_Limite_Cálculo' not in df_agenda.columns:
+        df_agenda['Fecha_Limite_Cálculo'] = pd.to_datetime(pd.Timestamp.now().date())
+    if 'Dias_Retraso_Num' not in df_agenda.columns:
+        df_agenda['Dias_Retraso_Num'] = 0
+    if 'Peso_Ordenamiento' not in df_agenda.columns:
+        if 'Monto_MXN' in df_agenda.columns:
+            df_agenda['Peso_Ordenamiento'] = df_agenda['Monto_MXN']
+        else:
+            df_agenda['Peso_Ordenamiento'] = 0
+            
+    # 3. FILTRAMOS LAS TAREAS POR EL DÍA SELECCIONADO
     hoy_date = pd.Timestamp.now().date()
     
-    # Si la fecha elegida es "Hoy", mostramos las que vencen hoy + TODAS las retrasadas.
     if fecha_agenda == hoy_date:
         df_dia = df_agenda[(df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda) | (df_agenda['Dias_Retraso_Num'] > 0)].copy()
-        titulo_dia = "🔥 Tareas para Hoy (Incluye OVs Retrasadas)"
-    # Si elige otro día (ej. mañana), mostramos SOLO las que vencen exactamente ese día.
+        titulo_dia = "🔥 Tareas para Hoy (Incluye Retrasadas)"
     else:
         df_dia = df_agenda[df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda].copy()
         titulo_dia = f"🗓️ Tareas programadas para el {fecha_agenda.strftime('%d/%m/%Y')}"
@@ -466,8 +479,8 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
             st.markdown("#### 📞 Llamadas")
             if not df_llamadas.empty:
                 for idx, row in df_llamadas.iterrows():
-                    # Agregamos el Monto y OV para tener contexto rápido
-                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"ll_{idx}"):
+                    cliente = str(row.get('Cliente', 'Desconocido'))
+                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"ll_{idx}"):
                         tareas_completadas += 1
             else: st.caption("Libre.")
             
@@ -475,7 +488,8 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
             st.markdown("#### 🚗 Visitas")
             if not df_visitas.empty:
                 for idx, row in df_visitas.iterrows():
-                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"vi_{idx}"):
+                    cliente = str(row.get('Cliente', 'Desconocido'))
+                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"vi_{idx}"):
                         tareas_completadas += 1
             else: st.caption("Libre.")
             
@@ -483,7 +497,8 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
             st.markdown("#### ✉️ Correos")
             if not df_correos.empty:
                 for idx, row in df_correos.iterrows():
-                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"co_{idx}"):
+                    cliente = str(row.get('Cliente', 'Desconocido'))
+                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"co_{idx}"):
                         tareas_completadas += 1
             else: st.caption("Libre.")
             
@@ -497,4 +512,4 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
             st.success("¡Excelente trabajo! Has completado tu cuota comercial del día.")
             st.balloons()
     else:
-        st.success(f"No hay OVs con fecha límite para el {fecha_agenda.strftime('%d/%m/%Y')}. ¡Día libre para prospección en frío!")
+        st.success(f"No hay tareas programadas para el {fecha_agenda.strftime('%d/%m/%Y')}. ¡Día libre para prospección en frío!")
