@@ -400,7 +400,7 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (BLINDADA)
+# MÓDULO: AGENDA COMERCIAL DIARIA (TO-DO LIST)
 # ==========================================
 st.divider()
 
@@ -409,7 +409,7 @@ with st.expander("📅 AGENDA COMERCIAL DEL DÍA", expanded=True):
     
     df_agenda = df.copy()
     
-    # Creamos la separación entre visitas y llamadas
+    # Clasificador de acciones (Llamadas vs Visitas)
     if 'Tipo_Accion' not in df_agenda.columns:
         df_agenda['Tipo_Accion'] = np.where(
             df_agenda['Estatus'].astype(str).str.contains('VISITA', case=False, na=False), 
@@ -417,66 +417,53 @@ with st.expander("📅 AGENDA COMERCIAL DEL DÍA", expanded=True):
             'Llamada'
         )
 
-    # Filtramos solo lo que entra en agenda
-    df_agenda_filtrada = df_agenda[df_agenda['Tipo_Accion'].isin(["Llamada", "Visita Presencial"])].copy()
+    # Filtramos las listas
+    df_llamadas = df_agenda[df_agenda['Tipo_Accion'] == "Llamada"].copy()
+    df_visitas = df_agenda[df_agenda['Tipo_Accion'] == "Visita Presencial"].copy()
     
-    if not df_agenda_filtrada.empty:
-        df_llamadas = df_agenda_filtrada[df_agenda_filtrada['Tipo_Accion'] == "Llamada"].copy()
-        df_visitas = df_agenda_filtrada[df_agenda_filtrada['Tipo_Accion'] == "Visita Presencial"].copy()
-        
-        # 1. FORZAR TIPO DE DATO BOOLEANO PARA QUE EL SISTEMA LO LEA
+    total_tareas = len(df_llamadas) + len(df_visitas)
+    tareas_completadas = 0
+    
+    col_a1, col_a2 = st.columns(2)
+    
+    with col_a1:
+        st.markdown("#### 📞 Bloque de Llamadas")
         if not df_llamadas.empty:
-            df_llamadas['Hecho'] = False
+            # Creamos un Checkbox real por cada cliente
+            for idx, row in df_llamadas.iterrows():
+                cliente = str(row.get('Cliente', 'Desconocido'))
+                estatus = str(row.get('Estatus', ''))
+                
+                # Si el checkbox se marca, suma 1 a las tareas completadas
+                if st.checkbox(f"**{cliente}** ({estatus})", key=f"llamada_{idx}"):
+                    tareas_completadas += 1
+        else:
+            st.info("Sin llamadas programadas.")
+            
+    with col_a2:
+        st.markdown("#### 🚗 Ruta de Visitas")
         if not df_visitas.empty:
-            df_visitas['Hecho'] = False
+            # Creamos un Checkbox real por cada cliente
+            for idx, row in df_visitas.iterrows():
+                cliente = str(row.get('Cliente', 'Desconocido'))
+                estatus = str(row.get('Estatus', ''))
+                
+                # Si el checkbox se marca, suma 1 a las tareas completadas
+                if st.checkbox(f"**{cliente}** ({estatus})", key=f"visita_{idx}"):
+                    tareas_completadas += 1
+        else:
+            st.info("Sin visitas programadas.")
             
-        total_tareas = len(df_llamadas) + len(df_visitas)
-        tareas_completadas = 0
+    # --- BARRA DE PROGRESO INMEDIATA ---
+    st.divider()
+    if total_tareas > 0:
+        progreso = int((tareas_completadas / total_tareas) * 100)
         
-        col_a1, col_a2 = st.columns(2)
+        st.markdown(f"**Nivel de Ejecución: {progreso}%** ({tareas_completadas} de {total_tareas} tareas realizadas)")
+        st.progress(progreso)
         
-        with col_a1:
-            st.markdown("#### 📞 Bloque de Llamadas")
-            if not df_llamadas.empty:
-                cols_show = ['Hecho', 'Cliente', 'Estatus']
-                cols_show = [c for c in cols_show if c in df_llamadas.columns]
-                
-                df_llamadas_edit = st.data_editor(
-                    df_llamadas[cols_show], 
-                    hide_index=True, use_container_width=True,
-                    key="agenda_llamadas"
-                )
-                # Cálculo matemático estricto: contar cuántos son True
-                tareas_completadas += (df_llamadas_edit['Hecho'] == True).sum()
-            else:
-                st.info("Sin llamadas programadas.")
-                
-        with col_a2:
-            st.markdown("#### 🚗 Ruta de Visitas")
-            if not df_visitas.empty:
-                cols_show_v = ['Hecho', 'Cliente', 'Estatus']
-                cols_show_v = [c for c in cols_show_v if c in df_visitas.columns]
-                
-                df_visitas_edit = st.data_editor(
-                    df_visitas[cols_show_v], 
-                    hide_index=True, use_container_width=True,
-                    key="agenda_visitas"
-                )
-                # Cálculo matemático estricto: contar cuántos son True
-                tareas_completadas += (df_visitas_edit['Hecho'] == True).sum()
-            else:
-                st.info("Sin visitas programadas.")
-                
-        # --- BARRA DE PROGRESO ---
-        st.divider()
-        if total_tareas > 0:
-            progreso = int((tareas_completadas / total_tareas) * 100)
-            
-            st.markdown(f"**Nivel de Ejecución: {progreso}%** ({tareas_completadas} de {total_tareas} tareas realizadas)")
-            st.progress(progreso)
-            
-            if progreso == 100:
-                st.success("¡Excelente trabajo! Has barrido con éxito tu agenda comercial de hoy.")
-                st.balloons()
+        if progreso == 100:
+            st.success("¡Excelente trabajo! Has barrido con éxito tu agenda comercial de hoy.")
+            st.balloons()
     else:
         st.success("Sin actividades en agenda. Excelente momento para prospección en frío.")
