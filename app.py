@@ -170,8 +170,8 @@ if archivo_cargado is not None:
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
         
-        if 'Area' not in df.columns: df['Area'] = 'SIN AREA'
-        df['Area'] = df['Area'].fillna('SIN AREA').astype(str).str.strip().str.upper()
+        if 'Area' not in df.columns: df['Area'] = 'SIN ÁREA'
+        df['Area'] = df['Area'].fillna('SIN ÁREA').astype(str).str.strip().str.upper()
         
         df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
@@ -237,7 +237,7 @@ if archivo_cargado is not None:
                 st.sidebar.warning("No hay registros válidos para el filtro de fecha.")
 
         st.sidebar.divider()
-        st.sidebar.header("Tubería (Filtrada)")
+        st.sidebar.header("Tubería Filtrada")
         st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
         st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
 
@@ -249,9 +249,9 @@ if archivo_cargado is not None:
         nombre_mes = meses_es.get(mes_actual, "MES ACTUAL")
 
         # ==========================================
-        # DASHBOARD DE CUMPLIMIENTO MENSUAL (BUDGET FIJO)
+        # DASHBOARD DE CUMPLIMIENTO MENSUAL
         # ==========================================
-        st.markdown("### Dashboard de Cumplimiento Mensual (Mes Corriente)")
+        st.markdown("### Dashboard de Cumplimiento Mensual")
         
         BUDGET_ALTA_GAMA = 28000.00
         BUDGET_LABORATORIOS = 15000.00
@@ -266,8 +266,8 @@ if archivo_cargado is not None:
         
         datos_budget = {
             'Unidad': ['ALTA GAMA', 'LABORATORIOS', 'PRODUCTOS'],
-            'Radar (USD)': [pipe_alta, pipe_labs, pipe_prod],
-            'Meta (USD)': [BUDGET_ALTA_GAMA, BUDGET_LABORATORIOS, BUDGET_PRODUCTOS]
+            'Radar USD': [pipe_alta, pipe_labs, pipe_prod],
+            'Meta USD': [BUDGET_ALTA_GAMA, BUDGET_LABORATORIOS, BUDGET_PRODUCTOS]
         }
         df_chart = pd.DataFrame(datos_budget).set_index('Unidad')
 
@@ -278,14 +278,14 @@ if archivo_cargado is not None:
         col_b1, col_b2 = st.columns([2, 1])
 
         with col_b1:
-            st.markdown("#### Progreso General (Radar vs Presupuesto)")
+            st.markdown("#### Progreso General contra Presupuesto")
             st.bar_chart(df_chart, use_container_width=True)
             
         with col_b2:
              st.markdown("#### Estatus de Cobertura")
-             st.metric("Alta Gama (Meta: $28K USD)", f"${pipe_alta:,.0f} USD", f"{pct_alta*100:.1f}%")
-             st.metric("Laboratorios (Meta: $15K USD)", f"${pipe_labs:,.0f} USD", f"{pct_labs*100:.1f}%")
-             st.metric("Productos (Meta: $45K USD)", f"${pipe_prod:,.0f} USD", f"{pct_prod*100:.1f}%")
+             st.metric("Alta Gama (Meta: $28K)", f"${pipe_alta:,.0f} USD", f"{pct_alta*100:.1f}%")
+             st.metric("Laboratorios (Meta: $15K)", f"${pipe_labs:,.0f} USD", f"{pct_labs*100:.1f}%")
+             st.metric("Productos (Meta: $45K)", f"${pipe_prod:,.0f} USD", f"{pct_prod*100:.1f}%")
              
         st.divider()
 
@@ -305,13 +305,13 @@ if archivo_cargado is not None:
 
         if 'Fecha_Creacion' in df.columns:
             df['SLA'] = (pd.Timestamp.now().normalize() - df['Fecha_Creacion_DT']).dt.days
-            df['SLA'] = df['SLA'].apply(lambda d: "S/F" if pd.isna(d) else ("+3 Días" if d >= 3 else ("2 Días" if d == 2 else "Reciente")))
+            df['SLA'] = df['SLA'].apply(lambda d: "Sin Fecha" if pd.isna(d) else ("+3 Dias" if d >= 3 else ("2 Dias" if d == 2 else "Reciente")))
         else:
-            df['SLA'] = "N/A"
+            df['SLA'] = "No Aplica"
 
         def estrategia(fila):
-            if fila['Prioridad'] == "VIP": return "[RIESGO] Visita presencial" if "+3" in fila['SLA'] else ("[ALERTA] Llamada consultiva" if "2" in fila['SLA'] else "[SEGUIMIENTO] Correo")
-            else: return "[ALTO VALOR] Priorizar cierre" if fila['Peso_Interno_Orden'] > 15000 else ("[80/20] Descartar rápido" if "+3" in fila['SLA'] else "[CONTACTO] Llamada")
+            if fila['Prioridad'] == "VIP": return "RIESGO Visita presencial" if "+3" in fila['SLA'] else ("ALERTA Llamada consultiva" if "2" in fila['SLA'] else "SEGUIMIENTO Correo")
+            else: return "ALTO VALOR Priorizar cierre" if fila['Peso_Interno_Orden'] > 15000 else ("80/20 Descartar rapido" if "+3" in fila['SLA'] else "CONTACTO Llamada")
 
         df['Estrategia_Cierre'] = df.apply(estrategia, axis=1)
         
@@ -325,16 +325,166 @@ if archivo_cargado is not None:
         # ==========================================
         # RENDERIZADO DE PESTAÑAS
         # ==========================================
-        tab_dash_vip, tab_dash_8020, tab_dash_areas, tab_proy, tab_plan, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
-            "Dash VIP", "Dash 80/20", "Dash Áreas", "Proyectos Vivos", "Plan de Acción", "Op. VIP", "Op. 80/20", "General"
+        tab_plan, tab_dash_vip, tab_dash_8020, tab_dash_areas, tab_proy, tab_op_vip, tab_op_8020, tab_gral = st.tabs([
+            "Plan de Accion", "Dash VIP", "Dash 80/20", "Dash Areas", "Proyectos Vivos", "Operativo VIP", "Operativo 80/20", "General"
         ])
 
+        # ==========================================
+        # PLAN DE ACCIÓN Y AGENDA ESTRATÉGICA
+        # ==========================================
+        with tab_plan:
+            st.markdown("### Segmentacion Estrategica del Mes Corriente")
+            st.caption(f"Proyectos clasificados por nivel de prioridad para cierre en {nombre_mes} {anio_actual}.")
+            
+            if not df.empty:
+                df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
+                                 (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
+                
+                if not df_mes_plan.empty:
+                    # Logica de clasificacion cruzada: Volumen de cotizaciones y Monto
+                    conteo_cotizaciones = df_mes_plan.groupby('Cliente')['Cotizacion'].nunique().reset_index()
+                    conteo_cotizaciones.rename(columns={'Cotizacion': 'Num_Cotizaciones'}, inplace=True)
+                    df_mes_plan = pd.merge(df_mes_plan, conteo_cotizaciones, on='Cliente', how='left')
+
+                    def clasificar_prioridad(fila):
+                        if fila['Num_Cotizaciones'] >= 3 or fila['Valor_USD_Eq'] >= 10000:
+                            return "ALTA (Cierre Estrategico)"
+                        elif fila['Valor_USD_Eq'] <= 2500 and fila['Num_Cotizaciones'] == 1:
+                            return "BAJA (Mantenimiento)"
+                        else:
+                            return "MEDIA (Desarrollo Tactico)"
+
+                    df_mes_plan['Nivel_Prioridad'] = df_mes_plan.apply(clasificar_prioridad, axis=1)
+                    
+                    df_mes_plan['Impacto USD'] = df_mes_plan['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
+                    columnas_mostrar = ['Nivel_Prioridad', 'Unidad_Presupuesto', 'Cliente', 'ID_Proyecto', 'Impacto USD', 'Num_Cotizaciones', 'Fecha_Cierre']
+                    
+                    df_alta = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "ALTA (Cierre Estrategico)"].sort_values(by='Valor_USD_Eq', ascending=False)
+                    df_media = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "MEDIA (Desarrollo Tactico)"].sort_values(by='Valor_USD_Eq', ascending=False)
+                    df_baja = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "BAJA (Mantenimiento)"].sort_values(by='Valor_USD_Eq', ascending=False)
+
+                    st.markdown("#### Prioridad Alta")
+                    if not df_alta.empty: st.dataframe(df_alta[columnas_mostrar], hide_index=True, use_container_width=True)
+                    else: st.info("Sin proyectos de alta prioridad para este mes.")
+
+                    st.markdown("#### Prioridad Media")
+                    if not df_media.empty: st.dataframe(df_media[columnas_mostrar], hide_index=True, use_container_width=True)
+                    else: st.info("Sin proyectos de prioridad media para este mes.")
+
+                    st.markdown("#### Prioridad Baja")
+                    if not df_baja.empty: st.dataframe(df_baja[columnas_mostrar], hide_index=True, use_container_width=True)
+                    else: st.info("Sin proyectos de prioridad baja para este mes.")
+                else:
+                    st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
+            else:
+                st.info("Ajusta los filtros o carga tu archivo para visualizar las prioridades.")
+            
+            st.divider()
+            
+            # --- PLANIFICADOR DE ACTIVIDADES ---
+            st.markdown("### Planificador de Agenda")
+            
+            with st.expander("Programar Nueva Actividad", expanded=False):
+                with st.form("form_agenda_radar"):
+                    col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
+                    
+                    with col_f1:
+                        if not df_mes_plan.empty:
+                            df_mes_plan['Etiqueta_Select'] = df_mes_plan['Nivel_Prioridad'].str.split().str[0] + " | " + df_mes_plan['Cliente'].astype(str) + " | ID: " + df_mes_plan['ID_Proyecto'].astype(str)
+                            df_vivos_ordenados = df_mes_plan.sort_values(by=['Nivel_Prioridad', 'Valor_USD_Eq'], ascending=[True, False])
+                            lista_clientes = df_vivos_ordenados['Etiqueta_Select'].unique().tolist()
+                        else:
+                            lista_clientes = ["Sin proyectos validos"]
+                            
+                        cliente_sel = st.selectbox("1. Selecciona la Cuenta:", lista_clientes)
+                        
+                    with col_f2:
+                        accion_sel = st.selectbox("2. Accion:", ["Visita Presencial", "Llamada Consultiva", "Correo y Cotizacion", "Cierre y Negociacion"])
+                        
+                    with col_f3:
+                        fecha_sel = st.date_input("3. Fecha:", pd.Timestamp.now().date())
+                        
+                    btn_agendar = st.form_submit_button("Agregar a la Ruta")
+                    
+                    if btn_agendar and cliente_sel != "Sin proyectos validos":
+                        id_proy_str = cliente_sel.split("| ID: ")[1].strip()
+                        fila_proy = df_mes_plan[df_mes_plan['ID_Proyecto'].astype(str) == id_proy_str].iloc[0]
+                        
+                        nueva_tarea = pd.DataFrame([{
+                            'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
+                            'Fecha': fecha_sel,
+                            'Cliente': fila_proy['Cliente'],
+                            'ID_Proyecto': fila_proy['ID_Proyecto'],
+                            'Unidad_Presupuesto': fila_proy['Unidad_Presupuesto'],
+                            'Valor_USD_Eq': fila_proy['Valor_USD_Eq'],
+                            'Tipo_Accion': accion_sel,
+                            'Completado': False
+                        }])
+                        st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
+                        st.success("Actividad registrada.")
+                        
+            # --- DASHBOARD DIARIO DE RUTAS ---
+            fecha_vista = st.date_input("Seleccionar dia de ejecucion:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
+            
+            for col_req in ['ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq']:
+                if col_req not in st.session_state.agenda_radar.columns:
+                    st.session_state.agenda_radar[col_req] = None
+                    
+            df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
+            
+            if not df_dia.empty and df_dia['Unidad_Presupuesto'].notna().all():
+                pct_dict = {"ALTA GAMA": pct_alta, "LABORATORIOS": pct_labs, "PRODUCTOS": pct_prod}
+                df_dia['Cobertura_Actual'] = df_dia['Unidad_Presupuesto'].map(pct_dict).fillna(1.0)
+                df_dia = df_dia.sort_values(by=['Cobertura_Actual', 'Valor_USD_Eq'], ascending=[True, False])
+                
+                total_tareas = len(df_dia)
+                
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Valor del Dia", f"${df_dia['Valor_USD_Eq'].sum():,.0f} USD")
+                col_m2.metric("Total Actividades", f"{total_tareas}")
+                col_m3.metric("Visitas Criticas", len(df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]))
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                df_mostrar = df_dia[['Completado', 'Unidad_Presupuesto', 'Tipo_Accion', 'Cliente', 'Valor_USD_Eq']].copy()
+                df_mostrar['Valor_USD_Eq'] = df_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
+                df_mostrar = df_mostrar.rename(columns={'Unidad_Presupuesto': 'Unidad', 'Valor_USD_Eq': 'Monto USD'})
+                
+                proyectos_actualizados = st.data_editor(
+                    df_mostrar,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="editor_agenda",
+                    column_config={
+                        "Completado": st.column_config.CheckboxColumn("Hecho", default=False),
+                        "Monto USD": st.column_config.TextColumn("Impacto", disabled=True),
+                        "Unidad": st.column_config.TextColumn("Unidad", disabled=True),
+                        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                        "Tipo_Accion": st.column_config.TextColumn("Accion", disabled=True)
+                    }
+                )
+                
+                tareas_completadas = proyectos_actualizados['Completado'].sum()
+                for i, idx in enumerate(df_dia.index):
+                     st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
+                     
+                st.divider()
+                progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
+                st.markdown(f"**Nivel de Avance del Dia: {progreso}%**")
+                st.progress(progreso)
+                
+                if st.button("Depurar agenda completada"):
+                    st.session_state.agenda_radar = st.session_state.agenda_radar[~((st.session_state.agenda_radar['Fecha'] == fecha_vista) & (st.session_state.agenda_radar['Completado'] == True))]
+                    st.rerun()
+            else:
+                st.info("No hay actividades registradas para esta fecha.")
+
         with tab_dash_vip:
-            st.markdown("### Concentración de Capital: Cuentas VIP")
+            st.markdown("### Concentracion de Capital: Cuentas VIP")
             if not df_vip.empty:
                 col_m, col_u = st.columns(2)
-                col_m.metric("Capital VIP (MXN)", f"${df_vip['Monto_MXN'].sum():,.2f}")
-                col_u.metric("Capital VIP (USD)", f"${df_vip['Monto_USD'].sum():,.2f}")
+                col_m.metric("Capital VIP MXN", f"${df_vip['Monto_MXN'].sum():,.2f}")
+                col_u.metric("Capital VIP USD", f"${df_vip['Monto_USD'].sum():,.2f}")
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
             else:
@@ -344,15 +494,15 @@ if archivo_cargado is not None:
             st.markdown("### Oportunidades de Alto Impacto (80/20)")
             if not df_80_20.empty:
                 col_m, col_u = st.columns(2)
-                col_m.metric("Capital 80/20 (MXN)", f"${df_80_20['Monto_MXN'].sum():,.2f}")
-                col_u.metric("Capital 80/20 (USD)", f"${df_80_20['Monto_USD'].sum():,.2f}")
+                col_m.metric("Capital 80/20 MXN", f"${df_80_20['Monto_MXN'].sum():,.2f}")
+                col_u.metric("Capital 80/20 USD", f"${df_80_20['Monto_USD'].sum():,.2f}")
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.bar_chart(df_80_20.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
             else:
                 st.info("No hay datos suficientes para el segmento 80/20 con los filtros actuales.")
 
         with tab_dash_areas:
-            st.markdown("### Distribución por Unidades de Negocio")
+            st.markdown("### Distribucion por Unidades de Negocio")
             if not df.empty and 'Area' in df.columns:
                 resumen_area = df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index()
                 resumen_area = resumen_area.sort_values(by='Monto_MXN', ascending=False)
@@ -361,10 +511,10 @@ if archivo_cargado is not None:
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.bar_chart(resumen_area.set_index('Area'), use_container_width=True)
             else:
-                st.info("No se encontró información de Áreas en el archivo actual.")
+                st.info("No se encontro informacion de Areas en el archivo actual.")
 
         with tab_proy:
-            st.markdown("### Selección de Prioridades (Proyectos Vivos)")
+            st.markdown("### Seleccion de Prioridades (Proyectos Vivos)")
             if 'ID_Proyecto' in df.columns:
                 df_proyectos = df.dropna(subset=['ID_Proyecto']).copy()
                 if not df_proyectos.empty:
@@ -389,9 +539,9 @@ if archivo_cargado is not None:
                             f_cierre = pd.to_datetime(fila['Fecha_Cierre'], errors='coerce', dayfirst=True)
                             if pd.isna(f_cierre): return "Sin Fecha"
                             dias = (f_cierre.normalize() - pd.Timestamp.now().normalize()).days
-                            if dias < 0: return f"VENCIDO ({abs(dias)}d)"
-                            elif dias <= 5: return f"Vence en {dias}d"
-                            else: return f"Vigente ({dias}d)"
+                            if dias < 0: return f"VENCIDO ({abs(dias)} dias)"
+                            elif dias <= 5: return f"Vence en {dias} dias"
+                            else: return f"Vigente ({dias} dias)"
                                 
                         res_proy['Vigencia'] = res_proy.apply(calcular_vigencia, axis=1)
                         cols_orden = ['ID_Proyecto', 'Cliente', 'Area', 'Vigencia', 'Fecha_Cierre', 'Total_MXN', 'Total_USD', 'Descripcion', 'Cotizaciones']
@@ -402,133 +552,7 @@ if archivo_cargado is not None:
                     st.markdown("<br>", unsafe_allow_html=True)
                     st.dataframe(res_proy, hide_index=True, use_container_width=True)
                 else: st.info("No hay proyectos agrupados y vivos que cumplan con los filtros.")
-            else: st.info("Falta la columna 'PROYECTO'.")
-
-        # ==========================================
-        # DASHBOARD DE AGENDA ESTRATÉGICA
-        # ==========================================
-        with tab_plan:
-            
-            # --- PANEL MUST-WIN (TOP 10) ---
-            st.markdown("### Proyectos Prioritarios Must-Win (Top 10)")
-            st.caption(f"Cotizaciones de mayor impacto programadas para cierre en {nombre_mes} {anio_actual}.")
-            
-            if not df.empty:
-                df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
-                            (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
-                
-                if not df_mes.empty:
-                    top_must_win = df_mes.sort_values(by='Peso_Interno_Orden', ascending=False).head(10)
-                    
-                    df_mw_mostrar = top_must_win[['Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq', 'Fecha_Cierre']].copy()
-                    df_mw_mostrar['Valor_USD_Eq'] = df_mw_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
-                    df_mw_mostrar.rename(columns={'ID_Proyecto': 'ID Proyecto', 'Unidad_Presupuesto': 'Unidad Estratégica', 'Valor_USD_Eq': 'Impacto USD (Eq)', 'Fecha_Cierre': 'Fecha Límite'}, inplace=True)
-                    
-                    st.dataframe(df_mw_mostrar, hide_index=True, use_container_width=True)
-                else:
-                    st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
-            else:
-                st.info("Ajusta los filtros o carga tu archivo para visualizar las prioridades.")
-            
-            st.divider()
-            
-            # --- PLANIFICADOR DE ACTIVIDADES ---
-            st.markdown("### Plan de Acción Estratégico (Priorizado por Budget)")
-            
-            with st.expander("Programar Nueva Actividad", expanded=False):
-                with st.form("form_agenda_radar"):
-                    col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
-                    
-                    with col_f1:
-                        df_vivos = df.dropna(subset=['ID_Proyecto']).copy()
-                        if not df_vivos.empty:
-                            df_vivos['Etiqueta_Select'] = df_vivos['Cliente'].astype(str) + " | ID: " + df_vivos['ID_Proyecto'].astype(str) + " | " + df_vivos['Unidad_Presupuesto']
-                            lista_clientes = df_vivos['Etiqueta_Select'].unique().tolist()
-                        else:
-                            lista_clientes = ["Sin proyectos válidos"]
-                            
-                        cliente_sel = st.selectbox("1. Selecciona la Cuenta:", lista_clientes)
-                        
-                    with col_f2:
-                        accion_sel = st.selectbox("2. Acción:", ["Visita Presencial", "Llamada Consultiva", "Correo / Cotización", "Cierre / Negociación"])
-                        
-                    with col_f3:
-                        fecha_sel = st.date_input("3. Fecha:", pd.Timestamp.now().date())
-                        
-                    btn_agendar = st.form_submit_button("Agregar a la Ruta")
-                    
-                    if btn_agendar and cliente_sel != "Sin proyectos válidos":
-                        id_proy_str = cliente_sel.split("| ID: ")[1].split(" |")[0].strip()
-                        fila_proy = df[df['ID_Proyecto'].astype(str) == id_proy_str].iloc[0]
-                        
-                        nueva_tarea = pd.DataFrame([{
-                            'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
-                            'Fecha': fecha_sel,
-                            'Cliente': fila_proy['Cliente'],
-                            'ID_Proyecto': fila_proy['ID_Proyecto'],
-                            'Unidad_Presupuesto': fila_proy['Unidad_Presupuesto'],
-                            'Valor_USD_Eq': fila_proy['Valor_USD_Eq'],
-                            'Tipo_Accion': accion_sel,
-                            'Completado': False
-                        }])
-                        st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
-                        st.success("Actividad registrada.")
-                        
-            # --- DASHBOARD DIARIO DE RUTAS ---
-            fecha_vista = st.date_input("Seleccionar día de ejecución:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
-            
-            for col_req in ['ID_Proyecto', 'Unidad_Presupuesto', 'Valor_USD_Eq']:
-                if col_req not in st.session_state.agenda_radar.columns:
-                    st.session_state.agenda_radar[col_req] = None
-                    
-            df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
-            
-            if not df_dia.empty and df_dia['Unidad_Presupuesto'].notna().all():
-                pct_dict = {"ALTA GAMA": pct_alta, "LABORATORIOS": pct_labs, "PRODUCTOS": pct_prod}
-                df_dia['Cobertura_Actual'] = df_dia['Unidad_Presupuesto'].map(pct_dict).fillna(1.0)
-                df_dia = df_dia.sort_values(by=['Cobertura_Actual', 'Valor_USD_Eq'], ascending=[True, False])
-                
-                total_tareas = len(df_dia)
-                
-                col_m1, col_m2, col_m3 = st.columns(3)
-                col_m1.metric("Valor del Día", f"${df_dia['Valor_USD_Eq'].sum():,.0f} USD")
-                col_m2.metric("Total Actividades", f"{total_tareas}")
-                col_m3.metric("Visitas Críticas", len(df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]))
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                df_mostrar = df_dia[['Completado', 'Unidad_Presupuesto', 'Tipo_Accion', 'Cliente', 'Valor_USD_Eq']].copy()
-                df_mostrar['Valor_USD_Eq'] = df_mostrar['Valor_USD_Eq'].apply(lambda x: f"${x:,.2f}")
-                df_mostrar = df_mostrar.rename(columns={'Unidad_Presupuesto': 'Unidad', 'Valor_USD_Eq': 'Monto (USD)'})
-                
-                proyectos_actualizados = st.data_editor(
-                    df_mostrar,
-                    hide_index=True,
-                    use_container_width=True,
-                    key="editor_agenda",
-                    column_config={
-                        "Completado": st.column_config.CheckboxColumn("Hecho", default=False),
-                        "Monto (USD)": st.column_config.TextColumn("Impacto", disabled=True),
-                        "Unidad": st.column_config.TextColumn("Unidad", disabled=True),
-                        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
-                        "Tipo_Accion": st.column_config.TextColumn("Acción", disabled=True)
-                    }
-                )
-                
-                tareas_completadas = proyectos_actualizados['Completado'].sum()
-                for i, idx in enumerate(df_dia.index):
-                     st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
-                     
-                st.divider()
-                progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
-                st.markdown(f"**Nivel de Avance del Día: {progreso}%**")
-                st.progress(progreso)
-                
-                if st.button("Depurar agenda completada"):
-                    st.session_state.agenda_radar = st.session_state.agenda_radar[~((st.session_state.agenda_radar['Fecha'] == fecha_vista) & (st.session_state.agenda_radar['Completado'] == True))]
-                    st.rerun()
-            else:
-                st.info("No hay actividades registradas para esta fecha.")
+            else: st.info("Falta la columna de PROYECTO.")
 
         with tab_op_vip:
             st.markdown("### Detalle Operativo VIP")
@@ -549,7 +573,7 @@ if archivo_cargado is not None:
                 st.info("Sin registros.")
 
         with tab_gral:
-            st.markdown("### Seguimiento General (Menor Prioridad)")
+            st.markdown("### Seguimiento General")
             if not df_resto.empty:
                 sel = st.selectbox("Filtrar Base:", ["Todos"] + sorted(df_resto['Cliente'].unique().tolist()), key="f_gral")
                 df_m = df_resto if sel == "Todos" else df_resto[df_resto['Cliente'] == sel]
@@ -560,4 +584,4 @@ if archivo_cargado is not None:
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles: {e}")
 else:
-    st.info("Sube tu archivo bruto para desplegar el panel táctico.")
+    st.info("Sube tu archivo bruto para desplegar el panel tactico.")
