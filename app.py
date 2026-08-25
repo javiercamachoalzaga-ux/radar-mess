@@ -123,7 +123,7 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # Lectura robusta con recodificación para evitar caracteres extraños (acentos, eñes)
+        # Lectura robusta con codificación adaptable
         try:
             df_raw = pd.read_csv(archivo_cargado, encoding='utf-8')
         except:
@@ -341,7 +341,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN 
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (CASCADA DE 4 SEGMENTOS)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -376,31 +376,25 @@ if archivo_cargado is not None:
 
         with tab_ejecucion:
             st.markdown("### Estructura de Cierre del Mes Corriente")
-            st.caption(f"Proyectos clasificados para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
+            st.caption(f"Proyectos clasificados en cascada para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
             
             if not df.empty:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
                 if not df_mes_plan.empty:
-                    # Conteo de cotizaciones por cliente para la lógica de Cuenta Clave y TOP
-                    conteo_cotizaciones = df_mes_plan.groupby('Cliente')['Cotizacion'].nunique().reset_index()
-                    conteo_cotizaciones.rename(columns={'Cotizacion': 'Num_Cotizaciones'}, inplace=True)
-                    df_mes_plan = pd.merge(df_mes_plan, conteo_cotizaciones, on='Cliente', how='left')
-                    
-                    # Criterio Cuenta Clave: 1 o 2 clientes con mayor cantidad de cotizaciones y montos
-                    resumen_clientes = df_mes_plan.groupby('Cliente').agg({
+                    # PASO 1: CUENTA CLAVE (Máximo 1 o 2 clientes por volumen de cotizaciones y mayor monto)
+                    resumen_cc = df_mes_plan.groupby('Cliente').agg({
                         'Cotizacion': 'nunique',
                         'Peso_Interno_Orden': 'sum'
                     }).reset_index()
-                    resumen_clientes = resumen_clientes.sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
+                    resumen_cc = resumen_cc.sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
                     
-                    clientes_clave_lista = resumen_clientes.head(2)['Cliente'].tolist() if len(resumen_clientes) >= 2 else resumen_clientes.head(1)['Cliente'].tolist()
-                    
+                    clientes_clave_lista = resumen_cc.head(2)['Cliente'].tolist() if len(resumen_cc) >= 2 else resumen_cc.head(1)['Cliente'].tolist()
                     df_cuenta_clave = df_mes_plan[df_mes_plan['Cliente'].isin(clientes_clave_lista)].copy()
-                    df_resto_plan = df_mes_plan[~df_mes_plan['Cliente'].isin(clientes_clave_lista)].copy()
+                    df_remanente_1 = df_mes_plan[~df_mes_plan['Cliente'].isin(clientes_clave_lista)].copy()
                     
-                    st.markdown("#### CUENTA CLAVE (Máximo 2 Clientes con Mayor Volumen y Monto)")
+                    st.markdown("#### CUENTA CLAVE (Máximo 2 Clientes - Volumen Masivo y Monto Superior)")
                     if not df_cuenta_clave.empty:
                         render_table_interactiva(df_cuenta_clave, "cc")
                     else:
@@ -408,48 +402,51 @@ if archivo_cargado is not None:
                         
                     st.divider()
 
-                    # Criterio TOP: Estrictamente los 10 principales clientes restantes por peso financiero
-                    if not df_resto_plan.empty:
-                        resumen_resto = df_resto_plan.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
-                        resumen_resto = resumen_resto.sort_values(by='Peso_Interno_Orden', ascending=False)
-                        top_10_clientes = resumen_resto.head(10)['Cliente'].tolist()
+                    # PASO 2: TOP (Estrictamente los 10 principales clientes restantes por peso financiero)
+                    if not df_remanente_1.empty:
+                        resumen_top = df_remanente_1.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
+                        resumen_top = resumen_top.sort_values(by='Peso_Interno_Orden', ascending=False)
+                        top_10_clientes = resumen_top.head(10)['Cliente'].tolist()
                         
-                        df_resto_plan['Es_Top'] = df_resto_plan['Cliente'].isin(top_10_clientes)
-                        
-                        def clasificar_segmento(fila):
-                            if fila['Es_Top']:
-                                return "TOP"
-                            elif fila['Monto_USD'] <= 2500 and fila['Monto_MXN'] <= 45000:
-                                return "DESARROLLO"
-                            else:
-                                return "80/20"
+                        df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
+                        df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
+                    else:
+                        df_top = pd.DataFrame()
+                        df_remanente_2 = pd.DataFrame()
 
-                        df_resto_plan['Nivel_Segmento'] = df_resto_plan.apply(clasificar_segmento, axis=1)
-                        
-                        df_top = df_resto_plan[df_resto_plan['Nivel_Segmento'] == "TOP"].sort_values(by='Peso_Interno_Orden', ascending=False)
-                        df_8020 = df_resto_plan[df_resto_plan['Nivel_Segmento'] == "80/20"].sort_values(by='Peso_Interno_Orden', ascending=False)
-                        df_desarrollo = df_resto_plan[df_resto_plan['Nivel_Segmento'] == "DESARROLLO"].sort_values(by='Peso_Interno_Orden', ascending=False)
-                        
-                        def renderizar_subpestanas(df_datos, prefijo):
-                            tab_a, tab_l, tab_p = st.tabs(["Alta Gama", "Laboratorios", "Productos"])
-                            with tab_a:
-                                render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'ALTA GAMA'], f"{prefijo}_ag")
-                            with tab_l:
-                                render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'LABORATORIOS'], f"{prefijo}_lb")
-                            with tab_p:
-                                render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
+                    # PASO 3 y 4: 80/20 (Soporte Táctico) y DESARROLLO (Siembra a Futuro)
+                    if not df_remanente_2.empty:
+                        # Criterio 80/20: Proyectos individuales significativos o cuentas con 2-3 cotizaciones
+                        def es_8020(fila):
+                            return fila['Monto_USD'] > 3000 or fila['Monto_MXN'] > 60000 or fila['Clasificacion_VIP'] == "VIP"
 
-                        st.markdown("#### TOP (Estrictamente los 10 Principales Clientes)")
-                        if not df_top.empty: renderizar_subpestanas(df_top, "top")
-                        else: st.info("Sin proyectos en segmento TOP.")
-                        
-                        st.markdown("#### 80/20 (Soporte Táctico)")
-                        if not df_8020.empty: renderizar_subpestanas(df_8020, "8020")
-                        else: st.info("Sin proyectos en segmento 80/20.")
-                        
-                        st.markdown("#### DESARROLLO (Siembra a Futuro)")
-                        if not df_desarrollo.empty: renderizar_subpestanas(df_desarrollo, "des")
-                        else: st.info("Sin proyectos en segmento Desarrollo.")
+                        df_remanente_2['Es_8020'] = df_remanente_2.apply(es_8020, axis=1)
+                        df_8020 = df_remanente_2[df_remanente_2['Es_8020']].copy()
+                        df_desarrollo = df_remanente_2[~df_remanente_2['Es_8020']].copy()
+                    else:
+                        df_8020 = pd.DataFrame()
+                        df_desarrollo = pd.DataFrame()
+
+                    def renderizar_subpestanas(df_datos, prefijo):
+                        tab_a, tab_l, tab_p = st.tabs(["Alta Gama", "Laboratorios", "Productos"])
+                        with tab_a:
+                            render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'ALTA GAMA'], f"{prefijo}_ag")
+                        with tab_l:
+                            render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'LABORATORIOS'], f"{prefijo}_lb")
+                        with tab_p:
+                            render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
+
+                    st.markdown("#### TOP (Estrictamente los 10 Principales Clientes)")
+                    if not df_top.empty: renderizar_subpestanas(df_top, "top")
+                    else: st.info("Sin proyectos en segmento TOP.")
+                    
+                    st.markdown("#### 80/20 (Soporte Táctico y Volumen Sano)")
+                    if not df_8020.empty: renderizar_subpestanas(df_8020, "8020")
+                    else: st.info("Sin proyectos en segmento 80/20.")
+                    
+                    st.markdown("#### DESARROLLO (Siembra y Seguimiento Ágil)")
+                    if not df_desarrollo.empty: renderizar_subpestanas(df_desarrollo, "des")
+                    else: st.info("Sin proyectos en segmento Desarrollo.")
 
                 else:
                     st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
@@ -495,7 +492,7 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO (CON INTELIGENCIA DOCUMENTAL MEJORADA)
+        # PESTAÑA 3: AGENDA DE TRABAJO (CON INTELIGENCIA DOCUMENTAL)
         # ==========================================
         with tab_agenda:
             st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
