@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from datetime import datetime
 
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
@@ -123,13 +124,12 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
+        # LECTURA ROBUSTA DESDE MEMORIA PARA EVITAR CARACTERES ROTOS EN ESPAÑOL
+        contenido_archivo = archivo_cargado.read()
         try:
-            df_raw = pd.read_csv(archivo_cargado, encoding='utf-8')
-        except:
-            try:
-                df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
-            except:
-                df_raw = pd.read_csv(archivo_cargado, encoding='cp1252')
+            df_raw = pd.read_csv(io.BytesIO(contenido_archivo), encoding='latin-1')
+        except Exception:
+            df_raw = pd.read_csv(io.BytesIO(contenido_archivo), encoding='utf-8')
 
         df_clean = pd.DataFrame()
 
@@ -177,7 +177,7 @@ if archivo_cargado is not None:
         df['Cliente'] = df['Cliente'].astype(str).str.strip().str.upper()
         df = df[df['Cliente'] != 'NAN']
         
-        # REGLA MEJORADA: Unificación de ITP e Industrias de Tuberías Aeronáuticas (evitando errores por acentos)
+        # REGLA: Unificación de ITP e Industrias de Tuberías Aeronáuticas
         df['Cliente'] = df['Cliente'].apply(lambda c: "ITP" if "TUBERIAS AERONAUTICAS" in c or "TUBERÍAS AERONÁUTICAS" in c or "ITP" in c else c)
 
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
@@ -339,7 +339,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (CORRECCIÓN DE BÚSQUEDA SUBSTRING)
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN 
         # ==========================================
         lista_global_seleccionados = []
         
@@ -401,13 +401,13 @@ if archivo_cargado is not None:
                         
                     st.divider()
 
-                    # 2. TOP 10 CORPORATIVO (Corrección de búsqueda dinámica por Substring)
+                    # 2. TOP 10 CORPORATIVO
                     top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
                     
                     # Removemos dinámicamente de la lista maestra la raíz del cliente clave, para no duplicarlo
                     top_10_filtrado = [marca for marca in top_10_fijo if marca not in cliente_clave_top]
                     
-                    # Función para detectar si la marca del TOP 10 está CONTENIDA en el nombre del cliente
+                    # Motor de Búsqueda Flexible para atrapar clientes como "CNH INDUSTRIAL" usando la raíz "CNH"
                     def es_top_10(nombre_cliente):
                         for marca in top_10_filtrado:
                             if marca in nombre_cliente:
@@ -422,7 +422,7 @@ if archivo_cargado is not None:
                         df_top = pd.DataFrame()
                         df_remanente_2 = pd.DataFrame()
 
-                    # 3 y 4. 80/20 Y DESARROLLO (Resto de la tubería)
+                    # 3 y 4. 80/20 Y DESARROLLO
                     if not df_remanente_2.empty:
                         def es_8020(fila):
                             return fila['Monto_USD'] > 2500 or fila['Monto_MXN'] > 50000
@@ -499,7 +499,7 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO Y MEMORÁNDUMS
+        # PESTAÑA 3: AGENDA DE TRABAJO (FICHA EJECUTIVA DE NEGOCIACIÓN)
         # ==========================================
         with tab_agenda:
             st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
@@ -560,7 +560,6 @@ if archivo_cargado is not None:
                 cliente_ficha = st.selectbox("Seleccionar cuenta:", clientes_dia_lista)
                 
                 if cliente_ficha:
-                    # Traemos los proyectos desde el dataframe filtrado del MES, no de todo el histórico
                     df_cliente_seleccion = df_mes_plan[df_mes_plan['Cliente'] == cliente_ficha]
                     total_cotiz_cliente = len(df_cliente_seleccion)
                     suma_usd_cli = df_cliente_seleccion['Monto_USD'].sum()
