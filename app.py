@@ -400,60 +400,60 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (PLANIFICADOR MANUAL)
+# MÓDULO: AGENDA COMERCIAL (RADAR DE VENTAS)
 # ==========================================
 st.divider()
 
-# 1. INICIALIZAR LA MEMORIA DE LA AGENDA EN STREAMLIT
-if 'memoria_agenda' not in st.session_state:
-    st.session_state.memoria_agenda = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'Tipo_Accion', 'Completado'])
+# 1. Memoria de la agenda para el Radar
+if 'agenda_radar' not in st.session_state:
+    st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'Tipo_Accion', 'Completado'])
 
-with st.expander("📅 AGENDA COMERCIAL (Planificador de Proyectos)", expanded=True):
+with st.expander("📅 AGENDA COMERCIAL Y PROSPECCIÓN", expanded=True):
     
-    # 2. SECCIÓN DE ASIGNACIÓN (AGREGAR PROYECTOS AL DÍA)
-    st.markdown("#### ➕ Programar Nuevo Seguimiento")
+    # 2. SECCIÓN DE ASIGNACIÓN
+    st.markdown("#### ➕ Programar Seguimiento a Proyecto")
     
-    with st.form("formulario_agendar"):
+    with st.form("formulario_agenda_radar"):
         col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
         
         with col_f1:
-            # Creamos un menú desplegable con todos tus proyectos activos del Radar
-            if 'ID_Proyecto' in df.columns:
-                lista_proyectos = (df['Cliente'].astype(str) + " (ID: " + df['ID_Proyecto'].astype(str) + ")").unique()
-            else:
-                lista_proyectos = df['Cliente'].astype(str).unique()
+            # Intentamos leer tu DataFrame principal del Radar (usualmente se llama 'df')
+            try:
+                if 'ID_Proyecto' in df.columns:
+                    lista_clientes = (df['Cliente'].astype(str) + " (ID: " + df['ID_Proyecto'].astype(str) + ")").unique()
+                else:
+                    lista_clientes = df['Cliente'].astype(str).unique()
+            except:
+                lista_clientes = ["Carga un archivo primero para ver tus clientes"]
                 
-            proyecto_sel = st.selectbox("1. Selecciona el Proyecto a trabajar:", lista_proyectos)
+            cliente_sel = st.selectbox("1. Selecciona el Cliente/Proyecto:", lista_clientes)
             
         with col_f2:
             accion_sel = st.selectbox("2. ¿Qué acción harás?", ["Llamada", "Visita Presencial", "Correo/Cotización"])
             
         with col_f3:
-            fecha_sel = st.date_input("3. ¿Para qué día?", pd.Timestamp.now().date())
+            fecha_sel = st.date_input("3. Fecha programada:", pd.Timestamp.now().date())
             
-        # Botón para inyectar la tarea a la memoria
-        btn_agendar = st.form_submit_button("Agendar Acción")
+        btn_agendar = st.form_submit_button("Agendar a mi día")
         
-        if btn_agendar and proyecto_sel:
+        if btn_agendar and cliente_sel != "Carga un archivo primero para ver tus clientes":
             nueva_tarea = pd.DataFrame([{
-                'ID_Tarea': len(st.session_state.memoria_agenda) + 1,
+                'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1,1000),
                 'Fecha': fecha_sel,
-                'Cliente': proyecto_sel,
+                'Cliente': cliente_sel,
                 'Tipo_Accion': accion_sel,
                 'Completado': False
             }])
-            # Guardamos en la sesión
-            st.session_state.memoria_agenda = pd.concat([st.session_state.memoria_agenda, nueva_tarea], ignore_index=True)
-            st.success(f"✅ ¡Proyecto asignado exitosamente a la agenda del {fecha_sel.strftime('%d/%m/%Y')}!")
+            st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
+            st.success(f"✅ Seguimiento agendado para el {fecha_sel.strftime('%d/%m/%Y')}.")
             
     st.divider()
     
-    # 3. VISUALIZACIÓN DE LA AGENDA Y CASILLAS DE COMPLETADO
-    st.markdown("### 🗓️ Tu Agenda de Trabajo")
-    fecha_vista = st.date_input("Selecciona el día que quieres revisar/ejecutar:", pd.Timestamp.now().date(), key="vista_agenda")
+    # 3. TABLERO DE EJECUCIÓN (TO-DO LIST)
+    st.markdown("### 🎯 Tu Plan de Acción")
+    fecha_vista = st.date_input("Revisar agenda del día:", pd.Timestamp.now().date(), key="vista_agenda_radar")
     
-    # Extraemos solo las tareas del día que elegiste
-    df_dia = st.session_state.memoria_agenda[st.session_state.memoria_agenda['Fecha'] == fecha_vista].copy()
+    df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
     
     if not df_dia.empty:
         df_llamadas = df_dia[df_dia['Tipo_Accion'] == "Llamada"]
@@ -469,44 +469,42 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador de Proyectos)", expanded=T
             st.markdown("#### 📞 Llamadas")
             if not df_llamadas.empty:
                 for idx, row in df_llamadas.iterrows():
-                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
                     if marcado: tareas_completadas += 1
-                    # Guarda el check al instante en memoria
-                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
+                    st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
         with col_a2:
             st.markdown("#### 🚗 Visitas")
             if not df_visitas.empty:
                 for idx, row in df_visitas.iterrows():
-                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
                     if marcado: tareas_completadas += 1
-                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
+                    st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
         with col_a3:
             st.markdown("#### ✉️ Correos")
             if not df_correos.empty:
                 for idx, row in df_correos.iterrows():
-                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"tk_{row['ID_Tarea']}")
                     if marcado: tareas_completadas += 1
-                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
+                    st.session_state.agenda_radar.loc[st.session_state.agenda_radar['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
-        # --- BARRA DE PROGRESO DEL DÍA ---
+        # BARRA DE PROGRESO
         st.divider()
         progreso = int((tareas_completadas / total_tareas) * 100)
-        st.markdown(f"**Nivel de Ejecución del Día: {progreso}%** ({tareas_completadas} de {total_tareas} tareas)")
+        st.markdown(f"**Avance del Día: {progreso}%** ({tareas_completadas} de {total_tareas} cuentas contactadas)")
         st.progress(progreso)
         
         if progreso == 100:
-            st.success("¡Excelente trabajo! Has completado tu cuota comercial del día.")
+            st.success("¡Meta diaria cumplida! Has cerrado todas tus actividades comerciales de hoy.")
             st.balloons()
             
-        # Botón para limpiar visualmente las que ya hiciste
-        if st.button("🧹 Limpiar tareas completadas"):
-            st.session_state.memoria_agenda = st.session_state.memoria_agenda[~((st.session_state.memoria_agenda['Fecha'] == fecha_vista) & (st.session_state.memoria_agenda['Completado'] == True))]
+        if st.button("🧹 Limpiar completadas de hoy"):
+            st.session_state.agenda_radar = st.session_state.agenda_radar[~((st.session_state.agenda_radar['Fecha'] == fecha_vista) & (st.session_state.agenda_radar['Completado'] == True))]
             st.rerun()
             
     else:
-        st.info(f"No tienes proyectos agendados para el {fecha_vista.strftime('%d/%m/%Y')}. Usa el formulario de arriba para jalar cuentas del Radar a tu agenda.")
+        st.info(f"No tienes proyectos agendados para el {fecha_vista.strftime('%d/%m/%Y')}. Selecciona un cliente arriba para agregarlo a tu día.")
