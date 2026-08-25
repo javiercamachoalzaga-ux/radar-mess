@@ -178,7 +178,6 @@ if archivo_cargado is not None:
         
         df = df[df['Estatus'].str.contains('PROCESO', na=False)].copy()
         
-        # Valor interno unicamente para ordenar jerarquias (no se muestra al usuario)
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
 
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
@@ -309,7 +308,7 @@ if archivo_cargado is not None:
             col_f1, col_f2 = st.columns(2)
             
             with col_f1:
-                st.markdown("### Concentracion de Capital: Cuentas VIP")
+                st.markdown("### Concentracion de Capital VIP")
                 df_vip_finanzas = df[df['Clasificacion_VIP'] == "VIP"]
                 if not df_vip_finanzas.empty:
                     st.bar_chart(df_vip_finanzas.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
@@ -317,7 +316,7 @@ if archivo_cargado is not None:
                     st.info("No hay cotizaciones vivas para cuentas VIP.")
 
             with col_f2:
-                st.markdown("### Distribucion por Unidades de Negocio")
+                st.markdown("### Distribucion General por Unidades")
                 if not df.empty and 'Area' in df.columns:
                     resumen_area = df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Area')
                     st.bar_chart(resumen_area, use_container_width=True)
@@ -328,75 +327,110 @@ if archivo_cargado is not None:
         # PESTAÑA 2: CENTRO DE EJECUCIÓN (PLAN DE ACCIÓN)
         # ==========================================
         with tab_ejecucion:
-            st.markdown("### Segmentacion Estrategica del Mes Corriente")
-            st.caption(f"Proyectos clasificados por nivel de prioridad para cierre en {nombre_mes} {anio_actual}.")
+            st.markdown("### Estructura de Cierre del Mes Corriente")
+            st.caption(f"Segmentacion operativa para facturacion proyectada en {nombre_mes} {anio_actual}.")
             
             if not df.empty:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
                 if not df_mes_plan.empty:
-                    # Conteo de volumen para el algoritmo cruzado
                     conteo_cotizaciones = df_mes_plan.groupby('Cliente')['Cotizacion'].nunique().reset_index()
                     conteo_cotizaciones.rename(columns={'Cotizacion': 'Num_Cotizaciones'}, inplace=True)
                     df_mes_plan = pd.merge(df_mes_plan, conteo_cotizaciones, on='Cliente', how='left')
-
-                    # Algoritmo Integrado de Prioridad
-                    def clasificar_prioridad(fila):
-                        if fila['Clasificacion_VIP'] == "VIP" or fila['Num_Cotizaciones'] >= 3 or fila['Monto_USD'] >= 10000 or fila['Monto_MXN'] >= 190000:
-                            return "ALTA (Cierre Estrategico)"
-                        elif (fila['Monto_USD'] <= 2500 and fila['Monto_MXN'] <= 45000) and fila['Num_Cotizaciones'] == 1:
-                            return "BAJA (Mantenimiento)"
-                        else:
-                            return "MEDIA (Desarrollo Tactico)"
-
-                    df_mes_plan['Nivel_Prioridad'] = df_mes_plan.apply(clasificar_prioridad, axis=1)
                     
-                    # Preparacion de datos visuales
                     df_mes_plan['Monto USD'] = df_mes_plan['Monto_USD'].apply(lambda x: f"${x:,.2f}" if x > 0 else "-")
                     df_mes_plan['Monto MXN'] = df_mes_plan['Monto_MXN'].apply(lambda x: f"${x:,.2f}" if x > 0 else "-")
                     
-                    columnas_mostrar = ['Cliente', 'Descripcion', 'Monto USD', 'Monto MXN', 'ID_Proyecto', 'Num_Cotizaciones']
+                    columnas_base = ['Cliente', 'Descripcion', 'Unidad_Presupuesto', 'Monto USD', 'Monto MXN', 'ID_Proyecto']
                     
-                    df_alta = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "ALTA (Cierre Estrategico)"].sort_values(by='Peso_Interno_Orden', ascending=False)
-                    df_media = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "MEDIA (Desarrollo Tactico)"].sort_values(by='Peso_Interno_Orden', ascending=False)
-                    df_baja = df_mes_plan[df_mes_plan['Nivel_Prioridad'] == "BAJA (Mantenimiento)"].sort_values(by='Peso_Interno_Orden', ascending=False)
+                    # 1. Separar Cuentas Clave (4 o más cotizaciones)
+                    cuentas_clave_nombres = df_mes_plan[df_mes_plan['Num_Cotizaciones'] >= 4]['Cliente'].unique()
+                    df_cuentas_clave = df_mes_plan[df_mes_plan['Cliente'].isin(cuentas_clave_nombres)].copy()
+                    df_resto_plan = df_mes_plan[~df_mes_plan['Cliente'].isin(cuentas_clave_nombres)].copy()
+                    
+                    st.markdown("#### Cuentas Clave (Atencion Integral)")
+                    if not df_cuentas_clave.empty:
+                        df_cc_mostrar = df_cuentas_clave.sort_values(by=['Cliente', 'Peso_Interno_Orden'], ascending=[True, False])
+                        st.dataframe(df_cc_mostrar[columnas_base], hide_index=True, use_container_width=True)
+                    else:
+                        st.info("No hay cuentas con volumen critico (4+ cotizaciones) este mes.")
+                        
+                    st.divider()
 
-                    st.markdown("#### Prioridad Alta (Enfoque de Cierre e Ingreso Maximo)")
-                    if not df_alta.empty: st.dataframe(df_alta[columnas_mostrar], hide_index=True, use_container_width=True)
-                    else: st.info("Sin proyectos de alta prioridad para este mes.")
+                    # 2. Logica para el resto de proyectos
+                    def clasificar_prioridad(fila):
+                        if fila['Clasificacion_VIP'] == "VIP" or fila['Monto_USD'] >= 10000 or fila['Monto_MXN'] >= 190000:
+                            return "ALTA"
+                        elif fila['Monto_USD'] <= 2500 and fila['Monto_MXN'] <= 45000:
+                            return "BAJA"
+                        else:
+                            return "MEDIA"
 
-                    st.markdown("#### Prioridad Media (Maduracion Tactica)")
-                    if not df_media.empty: st.dataframe(df_media[columnas_mostrar], hide_index=True, use_container_width=True)
-                    else: st.info("Sin proyectos de prioridad media para este mes.")
+                    if not df_resto_plan.empty:
+                        df_resto_plan['Nivel_Prioridad'] = df_resto_plan.apply(clasificar_prioridad, axis=1)
+                        
+                        df_alta = df_resto_plan[df_resto_plan['Nivel_Prioridad'] == "ALTA"].sort_values(by='Peso_Interno_Orden', ascending=False)
+                        df_media = df_resto_plan[df_resto_plan['Nivel_Prioridad'] == "MEDIA"].sort_values(by='Peso_Interno_Orden', ascending=False)
+                        df_baja = df_resto_plan[df_resto_plan['Nivel_Prioridad'] == "BAJA"].sort_values(by='Peso_Interno_Orden', ascending=False)
+                        
+                        def mostrar_pestanas_unidad(df_datos):
+                            tab_a, tab_l, tab_p = st.tabs(["Alta Gama", "Laboratorios", "Productos"])
+                            
+                            with tab_a:
+                                df_a = df_datos[df_datos['Unidad_Presupuesto'] == 'ALTA GAMA']
+                                if not df_a.empty: st.dataframe(df_a[columnas_base], hide_index=True, use_container_width=True)
+                                else: st.info("Sin registros en esta categoria.")
+                                
+                            with tab_l:
+                                df_l = df_datos[df_datos['Unidad_Presupuesto'] == 'LABORATORIOS']
+                                if not df_l.empty: st.dataframe(df_l[columnas_base], hide_index=True, use_container_width=True)
+                                else: st.info("Sin registros en esta categoria.")
+                                
+                            with tab_p:
+                                df_p = df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS']
+                                if not df_p.empty: st.dataframe(df_p[columnas_base], hide_index=True, use_container_width=True)
+                                else: st.info("Sin registros en esta categoria.")
 
-                    st.markdown("#### Prioridad Baja (Seguimiento de Volumen)")
-                    if not df_baja.empty: st.dataframe(df_baja[columnas_mostrar], hide_index=True, use_container_width=True)
-                    else: st.info("Sin proyectos de prioridad baja para este mes.")
+                        st.markdown("#### Prioridad Alta")
+                        if not df_alta.empty: mostrar_pestanas_unidad(df_alta)
+                        else: st.info("Sin proyectos de alta prioridad.")
+                        
+                        st.markdown("#### Prioridad Media")
+                        if not df_media.empty: mostrar_pestanas_unidad(df_media)
+                        else: st.info("Sin proyectos de prioridad media.")
+                        
+                        st.markdown("#### Prioridad Baja")
+                        if not df_baja.empty: mostrar_pestanas_unidad(df_baja)
+                        else: st.info("Sin proyectos de prioridad baja.")
+
+                    # Generacion de etiquetas para el formulario (Cuentas clave incluidas)
+                    def generar_etiqueta(row):
+                        prefijo = "CUENTA CLAVE | " if row['Num_Cotizaciones'] >= 4 else f"{row.get('Nivel_Prioridad', 'MEDIA')} | "
+                        desc = str(row['Descripcion'])[:40] + "..."
+                        return f"{prefijo}{row['Cliente']} | {desc} | ID: {row['ID_Proyecto']}"
+                        
+                    df_mes_plan['Nivel_Prioridad'] = df_mes_plan.apply(lambda r: "ALTA" if r['Num_Cotizaciones'] >= 4 else (clasificar_prioridad(r) if r['Num_Cotizaciones'] < 4 else "MEDIA"), axis=1)
+                    df_mes_plan['Etiqueta_Select'] = df_mes_plan.apply(generar_etiqueta, axis=1)
+                    
+                    df_vivos_ordenados = df_mes_plan.sort_values(by=['Num_Cotizaciones', 'Peso_Interno_Orden'], ascending=[False, False])
+                    lista_clientes = df_vivos_ordenados['Etiqueta_Select'].unique().tolist()
                 else:
                     st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
+                    lista_clientes = ["Sin proyectos validos"]
             else:
                 st.info("Ajusta los filtros o carga tu archivo para visualizar las prioridades.")
+                lista_clientes = ["Sin proyectos validos"]
             
             st.divider()
             
-            # --- PLANIFICADOR DE ACTIVIDADES (VISIBLE Y DIRECTO) ---
+            # --- PLANIFICADOR DE ACTIVIDADES ---
             st.markdown("### Planificador de Agenda Diario")
             
             with st.form("form_agenda_radar"):
                 col_f1, col_f2, col_f3 = st.columns([2.5, 1, 1])
                 
                 with col_f1:
-                    if not df_mes_plan.empty:
-                        # Etiqueta enriquecida con Descripcion Corta para seleccion rapida
-                        df_mes_plan['Desc_Corta'] = df_mes_plan['Descripcion'].astype(str).str[:30] + "..."
-                        df_mes_plan['Etiqueta_Select'] = df_mes_plan['Nivel_Prioridad'].str.split().str[0] + " | " + df_mes_plan['Cliente'].astype(str) + " | " + df_mes_plan['Desc_Corta'] + " | ID: " + df_mes_plan['ID_Proyecto'].astype(str)
-                        
-                        df_vivos_ordenados = df_mes_plan.sort_values(by=['Nivel_Prioridad', 'Peso_Interno_Orden'], ascending=[True, False])
-                        lista_clientes = df_vivos_ordenados['Etiqueta_Select'].unique().tolist()
-                    else:
-                        lista_clientes = ["Sin proyectos validos"]
-                        
                     cliente_sel = st.selectbox("1. Selecciona el Proyecto a Atender:", lista_clientes)
                     
                 with col_f2:
