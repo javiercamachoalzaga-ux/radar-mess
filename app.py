@@ -400,89 +400,83 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (INTERACTIVA)
+# MÓDULO: AGENDA COMERCIAL DIARIA (BLINDADA)
 # ==========================================
 st.divider()
 
-with st.expander("📅 AGENDA COMERCIAL DEL DÍA (Haz clic para abrir/cerrar)", expanded=True):
+with st.expander("📅 AGENDA COMERCIAL DEL DÍA", expanded=True):
     st.write(f"Plan de acción en campo y oficina para hoy: **{pd.Timestamp.now().strftime('%d/%m/%Y')}**")
     
-    df_agenda_main = df.copy()
+    df_agenda = df.copy()
     
-    if 'Tipo_Accion' not in df_agenda_main.columns:
-        df_agenda_main['Tipo_Accion'] = np.where(
-            df_agenda_main['Estatus'].astype(str).str.contains('VISITA', case=False, na=False), 
+    # Creamos la separación entre visitas y llamadas
+    if 'Tipo_Accion' not in df_agenda.columns:
+        df_agenda['Tipo_Accion'] = np.where(
+            df_agenda['Estatus'].astype(str).str.contains('VISITA', case=False, na=False), 
             'Visita Presencial', 
             'Llamada'
         )
 
-    tipo_contacto = st.multiselect(
-        "Filtrar Actividades:", 
-        ["Llamada", "Visita Presencial", "Correo/Cotización"], 
-        default=["Llamada", "Visita Presencial"],
-        key="filtro_agenda_diaria"
-    )
-    
-    df_agenda_filtrada = df_agenda_main[df_agenda_main['Tipo_Accion'].isin(tipo_contacto)].copy()
+    # Filtramos solo lo que entra en agenda
+    df_agenda_filtrada = df_agenda[df_agenda['Tipo_Accion'].isin(["Llamada", "Visita Presencial"])].copy()
     
     if not df_agenda_filtrada.empty:
         df_llamadas = df_agenda_filtrada[df_agenda_filtrada['Tipo_Accion'] == "Llamada"].copy()
         df_visitas = df_agenda_filtrada[df_agenda_filtrada['Tipo_Accion'] == "Visita Presencial"].copy()
         
-        # Variables para calcular el progreso
+        # 1. FORZAR TIPO DE DATO BOOLEANO PARA QUE EL SISTEMA LO LEA
+        if not df_llamadas.empty:
+            df_llamadas['Hecho'] = False
+        if not df_visitas.empty:
+            df_visitas['Hecho'] = False
+            
         total_tareas = len(df_llamadas) + len(df_visitas)
         tareas_completadas = 0
         
-        col_agenda1, col_agenda2 = st.columns(2)
+        col_a1, col_a2 = st.columns(2)
         
-        with col_agenda1:
+        with col_a1:
             st.markdown("#### 📞 Bloque de Llamadas")
             if not df_llamadas.empty:
-                df_llamadas.insert(0, 'Hecho', False)
-                cols_llamada = ['Hecho', 'Cliente', 'Estatus']
-                cols_disp = [c for c in cols_llamada if c in df_llamadas.columns]
+                cols_show = ['Hecho', 'Cliente', 'Estatus']
+                cols_show = [c for c in cols_show if c in df_llamadas.columns]
                 
-                # Asignamos la tabla editada a una variable para extraer los clics
                 df_llamadas_edit = st.data_editor(
-                    df_llamadas[cols_disp], 
+                    df_llamadas[cols_show], 
                     hide_index=True, use_container_width=True,
-                    column_config={"Hecho": st.column_config.CheckboxColumn("Hecho", default=False)},
-                    key="editor_llamadas"
+                    key="agenda_llamadas"
                 )
-                # Sumamos las casillas marcadas como True
-                tareas_completadas += df_llamadas_edit['Hecho'].sum()
+                # Cálculo matemático estricto: contar cuántos son True
+                tareas_completadas += (df_llamadas_edit['Hecho'] == True).sum()
             else:
-                st.info("No tienes llamadas estratégicas programadas hoy.")
+                st.info("Sin llamadas programadas.")
                 
-        with col_agenda2:
+        with col_a2:
             st.markdown("#### 🚗 Ruta de Visitas")
             if not df_visitas.empty:
-                df_visitas.insert(0, 'Hecho', False)
-                cols_visita = ['Hecho', 'Cliente', 'Estatus']
-                cols_disp_v = [c for c in cols_visita if c in df_visitas.columns]
+                cols_show_v = ['Hecho', 'Cliente', 'Estatus']
+                cols_show_v = [c for c in cols_show_v if c in df_visitas.columns]
                 
-                # Asignamos la tabla editada a una variable para extraer los clics
                 df_visitas_edit = st.data_editor(
-                    df_visitas[cols_disp_v], 
+                    df_visitas[cols_show_v], 
                     hide_index=True, use_container_width=True,
-                    column_config={"Hecho": st.column_config.CheckboxColumn("Hecho", default=False)},
-                    key="editor_visitas"
+                    key="agenda_visitas"
                 )
-                # Sumamos las casillas marcadas como True
-                tareas_completadas += df_visitas_edit['Hecho'].sum()
+                # Cálculo matemático estricto: contar cuántos son True
+                tareas_completadas += (df_visitas_edit['Hecho'] == True).sum()
             else:
-                st.info("No tienes visitas a planta programadas hoy.")
+                st.info("Sin visitas programadas.")
                 
-        # --- BARRA DE PROGRESO INTERACTIVA ---
+        # --- BARRA DE PROGRESO ---
         st.divider()
         if total_tareas > 0:
             progreso = int((tareas_completadas / total_tareas) * 100)
             
-            st.markdown(f"**Nivel de Ejecución: {progreso}%** ({tareas_completadas} de {total_tareas} cuentas contactadas)")
+            st.markdown(f"**Nivel de Ejecución: {progreso}%** ({tareas_completadas} de {total_tareas} tareas realizadas)")
             st.progress(progreso)
             
             if progreso == 100:
                 st.success("¡Excelente trabajo! Has barrido con éxito tu agenda comercial de hoy.")
                 st.balloons()
     else:
-        st.success("Sin actividades programadas en el radar. Excelente momento para prospección en frío.")
+        st.success("Sin actividades en agenda. Excelente momento para prospección en frío.")
