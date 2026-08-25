@@ -124,12 +124,17 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # LECTURA ROBUSTA DESDE MEMORIA PARA EVITAR CARACTERES ROTOS EN ESPAÑOL
-        contenido_archivo = archivo_cargado.read()
+        # LECTURA ROBUSTA INVISIBLE (Repara automáticamente los acentos y símbolos raros)
+        bytes_data = archivo_cargado.getvalue()
         try:
-            df_raw = pd.read_csv(io.BytesIO(contenido_archivo), encoding='latin-1')
-        except Exception:
-            df_raw = pd.read_csv(io.BytesIO(contenido_archivo), encoding='utf-8')
+            csv_text = bytes_data.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            try:
+                csv_text = bytes_data.decode('latin-1')
+            except:
+                csv_text = bytes_data.decode('cp1252', errors='replace')
+                
+        df_raw = pd.read_csv(io.StringIO(csv_text))
 
         df_clean = pd.DataFrame()
 
@@ -164,8 +169,8 @@ if archivo_cargado is not None:
             if nombre_limpio == "VALOR" or nombre_limpio.startswith("VALOR."):
                 temp_mxn = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
                 temp_usd = df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
-                monto_mxn_total += temp_mxn
-                monto_usd_total += temp_usd
+                monto_mxn_total += temp_mxn.fillna(0.0)
+                monto_usd_total += temp_usd.fillna(0.0)
 
         df_clean['Monto_MXN'] = monto_mxn_total
         df_clean['Monto_USD'] = monto_usd_total
@@ -339,7 +344,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN 
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (LÓGICA GLOBAL CORREGIDA)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -380,34 +385,34 @@ if archivo_cargado is not None:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
+                # REGLA 1: CUENTA CLAVE GLOBAL (Evaluamos a partir de TODO el DataFrame histórico, no solo del mes actual)
+                resumen_global = df.groupby('Cliente').agg({
+                    'Cotizacion': 'nunique',
+                    'Peso_Interno_Orden': 'sum'
+                }).reset_index()
+                resumen_global = resumen_global.sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
+                
+                cliente_clave_top = resumen_global.iloc[0]['Cliente'] if not resumen_global.empty else ""
+
                 if not df_mes_plan.empty:
-                    # 1. CUENTA CLAVE: Mayor volumen de cotizaciones y mayor monto cotizado en la plantilla
-                    resumen_cc = df_mes_plan.groupby('Cliente').agg({
-                        'Cotizacion': 'nunique',
-                        'Peso_Interno_Orden': 'sum'
-                    }).reset_index()
-                    resumen_cc = resumen_cc.sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
-                    
-                    cliente_clave_top = resumen_cc.iloc[0]['Cliente'] if not resumen_cc.empty else ""
-                    
+                    # Extraemos los proyectos de este mes que le pertenecen a la Cuenta Clave Global
                     df_cuenta_clave = df_mes_plan[df_mes_plan['Cliente'] == cliente_clave_top].copy()
                     df_remanente_1 = df_mes_plan[df_mes_plan['Cliente'] != cliente_clave_top].copy()
                     
-                    st.markdown(f"#### CUENTA CLAVE (Máximo Volumen y Monto Cotizado: {cliente_clave_top})")
+                    st.markdown(f"#### CUENTA CLAVE (Máximo Volumen y Monto Cotizado Histórico: {cliente_clave_top})")
                     if not df_cuenta_clave.empty:
                         render_table_interactiva(df_cuenta_clave, "cc")
                     else:
-                        st.info("No hay cuentas bajo el criterio de Cuenta Clave este mes.")
+                        st.info(f"La Cuenta Clave de tu portafolio ({cliente_clave_top}) no tiene proyectos activos para cerrar en este mes específico.")
                         
                     st.divider()
 
-                    # 2. TOP 10 CORPORATIVO
+                    # REGLA 2: TOP 10 CORPORATIVO (Búsqueda por Substring para evitar vacíos)
                     top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
                     
                     # Removemos dinámicamente de la lista maestra la raíz del cliente clave, para no duplicarlo
                     top_10_filtrado = [marca for marca in top_10_fijo if marca not in cliente_clave_top]
                     
-                    # Motor de Búsqueda Flexible para atrapar clientes como "CNH INDUSTRIAL" usando la raíz "CNH"
                     def es_top_10(nombre_cliente):
                         for marca in top_10_filtrado:
                             if marca in nombre_cliente:
@@ -422,7 +427,7 @@ if archivo_cargado is not None:
                         df_top = pd.DataFrame()
                         df_remanente_2 = pd.DataFrame()
 
-                    # 3 y 4. 80/20 Y DESARROLLO
+                    # REGLA 3 y 4: 80/20 Y DESARROLLO
                     if not df_remanente_2.empty:
                         def es_8020(fila):
                             return fila['Monto_USD'] > 2500 or fila['Monto_MXN'] > 50000
@@ -445,7 +450,7 @@ if archivo_cargado is not None:
 
                     st.markdown("#### TOP 10 (Cuentas Estratégicas Corporativas)")
                     if not df_top.empty: renderizar_subpestanas(df_top, "top")
-                    else: st.info("Sin proyectos en segmento TOP 10.")
+                    else: st.info("Sin proyectos en segmento TOP 10 para este mes.")
                     
                     st.markdown("#### 80/20 (Soporte Táctico)")
                     if not df_8020.empty: renderizar_subpestanas(df_8020, "8020")
@@ -499,7 +504,7 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO (FICHA EJECUTIVA DE NEGOCIACIÓN)
+        # PESTAÑA 3: AGENDA DE TRABAJO Y MINUTAS DIRECTIVAS
         # ==========================================
         with tab_agenda:
             st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
@@ -552,51 +557,65 @@ if archivo_cargado is not None:
                      
                 st.divider()
                 
-                # --- MÓDULO DE INTELIGENCIA COMERCIAL ---
-                st.markdown("### Ficha Ejecutiva y Memorándum de Negociación")
-                st.caption("Selecciona una cuenta de tu agenda para generar la minuta de revisión directiva o el correo formal de seguimiento.")
+                # --- MÓDULO REDISEÑADO DE INTELIGENCIA COMERCIAL ---
+                st.markdown("### Generador de Inteligencia Documental")
+                st.caption("Selecciona una cuenta de tu agenda para extraer la minuta de revisión estructurada o el borrador del correo.")
                 
                 clientes_dia_lista = df_dia['Cliente'].unique().tolist()
-                cliente_ficha = st.selectbox("Seleccionar cuenta:", clientes_dia_lista)
+                cliente_ficha = st.selectbox("Seleccionar cuenta a gestionar:", clientes_dia_lista)
                 
                 if cliente_ficha:
+                    # Extraemos los proyectos del MES (tab_ejecucion) para la Minuta, no el histórico total
                     df_cliente_seleccion = df_mes_plan[df_mes_plan['Cliente'] == cliente_ficha]
-                    total_cotiz_cliente = len(df_cliente_seleccion)
-                    suma_usd_cli = df_cliente_seleccion['Monto_USD'].sum()
-                    suma_mxn_cli = df_cliente_seleccion['Monto_MXN'].sum()
                     
-                    tipo_accion_cli = df_dia[df_dia['Cliente'] == cliente_ficha]['Tipo_Accion'].iloc[0]
-                    
-                    if "Correo" in tipo_accion_cli:
-                        st.markdown("#### Borrador de Correo Ejecutivo de Seguimiento")
-                        cuerpo_correo = f"""Estimados señores de {cliente_ficha},
+                    if df_cliente_seleccion.empty:
+                         st.warning("No se encontraron cotizaciones activas con cierre para este mes en específico.")
+                    else:
+                        suma_usd_cli = df_cliente_seleccion['Monto_USD'].sum()
+                        suma_mxn_cli = df_cliente_seleccion['Monto_MXN'].sum()
+                        tipo_accion_cli = df_dia[df_dia['Cliente'] == cliente_ficha]['Tipo_Accion'].iloc[0]
+                        
+                        if "Correo" in tipo_accion_cli:
+                            st.markdown("#### Borrador de Seguimiento Corporativo")
+                            cuerpo_correo = f"""Estimados señores de {cliente_ficha},
+    
+Espero que se encuentren excelente.
 
-Espero que se encuentren muy bien.
+Nos ponemos en contacto desde MESS Servicios Metrológicos para dar seguimiento ejecutivo a los {len(df_cliente_seleccion)} requerimientos que actualmente tenemos en etapa de proceso. En su conjunto, estos proyectos representan un valor estratégico de ${suma_usd_cli:,.2f} USD y ${suma_mxn_cli:,.2f} MXN para la planeación de sus operaciones.
 
-Nos ponemos en contacto desde MESS Servicios Metrológicos para dar un seguimiento puntual a las cotizaciones que actualmente tenemos en proceso con ustedes, las cuales representan un valor estratégico conjunto de ${suma_usd_cli:,.2f} USD y ${suma_mxn_cli:,.2f} MXN, abarcando un total de {total_cotiz_cliente} requerimientos vigentes.
+Para nosotros es una prioridad absoluta garantizar que el alcance técnico de nuestros equipos y calibraciones empate perfectamente con sus calendarios de arranque. Quedamos a su entera disposición para sostener una revisión técnica y agilizar el trámite de sus órdenes de compra.
 
-Para nosotros es fundamental asegurar que las propuestas de nuestros equipos y servicios se alineen perfectamente con sus expectativas técnicas y de arranque. Quedamos a su entera disposición para coordinar una revisión detallada que permita agilizar la liberación de sus órdenes de compra.
-
-Agradecemos de antemano su confianza y excelente disposición.
+Agradeciendo de antemano su confianza y disposición.
 
 Atentamente,
 Asesor Comercial / Ejecutivo de Desarrollo de Negocios
 MESS Servicios Metrológicos"""
-                        st.text_area("Copiable al portapapeles:", cuerpo_correo, height=220)
-                    else:
-                        st.markdown("#### Ficha Gerencial de Negociación (Memorándum)")
-                        st.markdown(f"**Cuenta:** {cliente_ficha}")
-                        st.markdown(f"**Volumen Activo en el Mes:** {total_cotiz_cliente} cotizaciones en proceso")
-                        st.markdown(f"**Impacto Económico Consolidado:** ${suma_usd_cli:,.2f} USD | ${suma_mxn_cli:,.2f} MXN")
-                        
-                        st.markdown("---")
-                        st.markdown("**Desglose Técnico y Estatus de Partidas:**")
-                        for idx_sub, row_sub in df_cliente_seleccion.iterrows():
-                            div_str = f"${row_sub['Monto_USD']:,.2f} USD" if row_sub['Monto_USD'] > 0 else f"${row_sub['Monto_MXN']:,.2f} MXN"
-                            cot_folio = row_sub['Cotizacion'] if pd.notna(row_sub['Cotizacion']) else "S/F"
-                            st.markdown(f"- **Cotización Folio: {cot_folio}** | Proyecto ID: {row_sub['ID_Proyecto']} | Área: *{row_sub['Unidad_Presupuesto']}* | Monto: {div_str}")
-                            st.markdown(f"  *Alcance:* {row_sub['Descripcion']}")
-                            st.markdown("")
+                            st.text_area("Copiable al portapapeles:", cuerpo_correo, height=250)
+                        else:
+                            # REDISEÑO TOTAL DE LA MINUTA (Más funcional, menos robótica)
+                            st.markdown("#### Minuta de Negociación Directiva")
+                            
+                            st.info(f"**Cuenta Estratégica:** {cliente_ficha} | **Exposición Financiera del Mes:** ${suma_usd_cli:,.2f} USD / ${suma_mxn_cli:,.2f} MXN")
+                            
+                            st.markdown("A continuación, se presenta la radiografía de los requerimientos activos para facilitar la gestión comercial en planta:")
+                            
+                            # Agrupamos por Área para darle estructura lógica a la plática
+                            areas_cliente = df_cliente_seleccion['Unidad_Presupuesto'].unique()
+                            
+                            for area in areas_cliente:
+                                st.markdown(f"##### 📌 División: {area}")
+                                df_area = df_cliente_seleccion[df_cliente_seleccion['Unidad_Presupuesto'] == area]
+                                
+                                for _, row in df_area.iterrows():
+                                    val_str = f"${row['Monto_USD']:,.2f} USD" if row['Monto_USD'] > 0 else f"${row['Monto_MXN']:,.2f} MXN"
+                                    folio_str = row['Cotizacion'] if row['Cotizacion'] != 'S/F' else "[En proceso de Folio]"
+                                    descripcion_limpia = str(row['Descripcion']).capitalize()
+                                    
+                                    st.markdown(f"> **Folio {folio_str}** (Ref. Proyecto {row['ID_Proyecto']}): {descripcion_limpia} — **Impacto:** {val_str}")
+                                st.markdown("<br>", unsafe_allow_html=True)
+                            
+                            st.markdown("---")
+                            st.markdown("**🎯 Objetivo de Intervención:** Validar especificaciones técnicas con usuario final, solventar objeciones y trazar ruta crítica para emisión de orden de compra.")
 
                 st.divider()
                 progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
