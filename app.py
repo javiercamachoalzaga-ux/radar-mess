@@ -9,7 +9,7 @@ st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 # INICIALIZACIÓN DE MEMORIA PARA AGENDA
 # ==========================================
 if 'agenda_radar' not in st.session_state:
-    st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Monto_USD', 'Monto_MXN', 'Tipo_Accion', 'Completado'])
+    st.session_state.agenda_radar = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'ID_Proyecto', 'Unidad_Presupuesto', 'Monto_USD', 'Monto_MXN', 'Tipo_Accion', 'Descripcion', 'Completado'])
 
 if 'clear_key' not in st.session_state:
     st.session_state.clear_key = 0
@@ -248,7 +248,6 @@ if archivo_cargado is not None:
         st.sidebar.metric("Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f}")
         st.sidebar.metric("Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f}")
 
-        # Contenedor dinámico para la agenda en la barra lateral
         st.sidebar.divider()
         contenedor_agenda_lateral = st.sidebar.container()
 
@@ -335,7 +334,6 @@ if archivo_cargado is not None:
         # ==========================================
         lista_global_seleccionados = []
         
-        # Función auxiliar para renderizar tablas interactivas con casillas de selección
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
                 st.info("Sin proyectos en este segmento.")
@@ -367,7 +365,7 @@ if archivo_cargado is not None:
 
         with tab_ejecucion:
             st.markdown("### Estructura de Cierre del Mes Corriente")
-            st.caption(f"Proyectos clasificados por nivel de prioridad para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos que deseas agregar a tu agenda.")
+            st.caption(f"Proyectos clasificados por nivel de prioridad para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
             
             if not df.empty:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
@@ -378,23 +376,23 @@ if archivo_cargado is not None:
                     conteo_cotizaciones.rename(columns={'Cotizacion': 'Num_Cotizaciones'}, inplace=True)
                     df_mes_plan = pd.merge(df_mes_plan, conteo_cotizaciones, on='Cliente', how='left')
                     
-                    # 1. Separar CUENTAS CLAVE (4 o más cotizaciones)
-                    cuentas_clave_nombres = df_mes_plan[df_mes_plan['Num_Cotizaciones'] >= 4]['Cliente'].unique()
+                    # NUEVA REGLA: Cuentas Clave = 7 o más cotizaciones
+                    cuentas_clave_nombres = df_mes_plan[df_mes_plan['Num_Cotizaciones'] >= 7]['Cliente'].unique()
                     df_cuentas_clave = df_mes_plan[df_mes_plan['Cliente'].isin(cuentas_clave_nombres)].copy()
                     df_resto_plan = df_mes_plan[~df_mes_plan['Cliente'].isin(cuentas_clave_nombres)].copy()
                     
-                    st.markdown("#### CUENTAS CLAVE (Atención Integral)")
+                    st.markdown("#### CUENTAS CLAVE (7 o más Cotizaciones - Atención Integral)")
                     if not df_cuentas_clave.empty:
                         df_cc_mostrar = df_cuentas_clave.sort_values(by=['Cliente', 'Peso_Interno_Orden'], ascending=[True, False])
                         render_table_interactiva(df_cc_mostrar, "cc")
                     else:
-                        st.info("No hay cuentas con volumen crítico (4 o más cotizaciones) este mes.")
+                        st.info("No hay cuentas con 7 o más cotizaciones este mes.")
                         
                     st.divider()
 
-                    # 2. Lógica para el resto de proyectos
+                    # NUEVA REGLA: TOP = hasta 6 cotizaciones o alto valor/VIP
                     def clasificar_prioridad(fila):
-                        if fila['Clasificacion_VIP'] == "VIP" or fila['Monto_USD'] >= 10000 or fila['Monto_MXN'] >= 190000:
+                        if fila['Clasificacion_VIP'] == "VIP" or fila['Num_Cotizaciones'] <= 6 and (fila['Monto_USD'] >= 10000 or fila['Monto_MXN'] >= 190000):
                             return "TOP"
                         elif fila['Monto_USD'] <= 2500 and fila['Monto_MXN'] <= 45000:
                             return "DESARROLLO"
@@ -417,7 +415,7 @@ if archivo_cargado is not None:
                             with tab_p:
                                 render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
 
-                        st.markdown("#### Prioridad TOP (Enfoque de Cierre e Ingreso Máximo)")
+                        st.markdown("#### Prioridad TOP (Hasta 6 Cotizaciones / Cierre Estratégico)")
                         if not df_top.empty: renderizar_subpestanas(df_top, "top")
                         else: st.info("Sin proyectos de prioridad TOP.")
                         
@@ -460,6 +458,7 @@ if archivo_cargado is not None:
                             'Monto_USD': row['Monto_USD'],
                             'Monto_MXN': row['Monto_MXN'],
                             'Tipo_Accion': accion_lote,
+                            'Descripcion': row['Descripcion'],
                             'Completado': False
                         }])
                         st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
@@ -471,13 +470,13 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO
+        # PESTAÑA 3: AGENDA DE TRABAJO (CON INTELIGENCIA DOCUMENTAL)
         # ==========================================
         with tab_agenda:
-            st.markdown("### Tablero de Ejecución Diaria")
+            st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
             fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
             
-            for col_req in ['ID_Proyecto', 'Unidad_Presupuesto', 'Monto_USD', 'Monto_MXN']:
+            for col_req in ['ID_Proyecto', 'Unidad_Presupuesto', 'Monto_USD', 'Monto_MXN', 'Descripcion']:
                 if col_req not in st.session_state.agenda_radar.columns:
                     st.session_state.agenda_radar[col_req] = None
                     
@@ -522,6 +521,51 @@ if archivo_cargado is not None:
                      st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
                      
                 st.divider()
+                
+                # --- MÓDULO DE INTELIGENCIA COMERCIAL (MEMORÁNDUM Y CORREOS) ---
+                st.markdown("### Inteligencia Documental para la Cita")
+                st.caption("Selecciona una cuenta de tu agenda del día para generar su memorándum de revisión o redactar su correo de seguimiento.")
+                
+                clientes_dia_lista = df_dia['Cliente'].unique().tolist()
+                cliente_ficha = st.selectbox("Seleccionar cuenta para generar minuta:", clientes_dia_listas if 'clientes_dia_listas' in locals() else clientes_dia_lista)
+                
+                if cliente_ficha:
+                    df_cliente_seleccion = df[df['Cliente'] == cliente_ficha]
+                    total_cotiz_cliente = len(df_cliente_seleccion)
+                    suma_usd_cli = df_cliente_seleccion['Monto_USD'].sum()
+                    suma_mxn_cli = df_cliente_seleccion['Monto_MXN'].sum()
+                    
+                    tipo_accion_cli = df_dia[df_dia['Cliente'] == cliente_ficha]['Tipo_Accion'].iloc[0]
+                    
+                    if "Correo" in tipo_accion_cli:
+                        st.markdown("#### Borrador de Correo de Seguimiento Ejecutivo")
+                        cuerpo_correo = f"""Estimado equipo de {cliente_ficha},
+
+Espero que se encuentre excelente.
+
+Nos ponemos en contacto con ustedes desde MESS Servicios Metrológicos para dar seguimiento al estatus de nuestras cotizaciones vigentes en proceso, las cuales suman un valor estratégico de ${suma_usd_cli:,.2f} USD y ${suma_mxn_cli:,.2f} MXN distribuidas en {total_cotiz_cliente} proyectos activos en su planta.
+
+Para nosotros es una prioridad asegurar que las especificaciones técnicas y comerciales de nuestros equipos y servicios cumplan plenamente con sus expectativas de arranque y calidad. Quedamos a su entera disposición para agendar una sesión de revisión o visita técnica y acelerar la toma de decisiones.
+
+Agradecemos de antemano su confianza y atención.
+
+Atentamente,
+Asesor Comercial / Ejecutivo de Desarrollo de Negocios
+MESS Servicios Metrológicos"""
+                        st.text_area("Copiable al portapapeles:", cuerpo_correo, height=220)
+                    else:
+                        st.markdown("#### Memorándum Ejecutivo para Visita o Llamada")
+                        st.markdown(f"**Cliente:** {cliente_ficha}")
+                        st.markdown(f"**Volumen en Tubería:** {total_cotiz_cliente} cotizaciones vivas")
+                        st.markdown(f"**Impacto Económico Acumulado:** ${suma_usd_cli:,.2f} USD | ${suma_mxn_cli:,.2f} MXN")
+                        
+                        st.markdown("**Puntos Críticos de Revisión Técnica y Comercial:**")
+                        for idx_sub, row_sub in df_cliente_seleccion.iterrows():
+                            div_str = f"${row_sub['Monto_USD']:,.2f} USD" if row_sub['Monto_USD'] > 0 else f"${row_sub['Monto_MXN']:,.2f} MXN"
+                            st.markdown(f"- **Proyecto ID {row_sub['ID_Proyecto']}** | Área: *{row_sub['Unidad_Presupuesto']}* | Valor: {div_str}")
+                            st.markdown(f"  *Detalle:* {row_sub['Descripcion']}")
+
+                st.divider()
                 progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
                 st.markdown(f"**Nivel de Avance del Día: {progreso}%**")
                 st.progress(progreso)
@@ -530,7 +574,7 @@ if archivo_cargado is not None:
                     st.session_state.agenda_radar = st.session_state.agenda_radar[~((st.session_state.agenda_radar['Fecha'] == fecha_vista) & (st.session_state.agenda_radar['Completado'] == True))]
                     st.rerun()
             else:
-                st.info("Agenda libre. Utiliza el Centro de Ejecución para programar cuentas.")
+                st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar cuentas.")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo. Detalles de sistema: {e}")
