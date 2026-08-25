@@ -339,7 +339,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (REGLAS ESTRICTAS)
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (EXCLUSIÓN SIN DUPLICADOS)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -374,14 +374,14 @@ if archivo_cargado is not None:
 
         with tab_ejecucion:
             st.markdown("### Estructura de Cierre del Mes Corriente")
-            st.caption(f"Proyectos clasificados para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
+            st.caption(f"Proyectos clasificados para cierre en {nombre_mes} {anio_actual}. Sin duplicados entre segmentos.")
             
             if not df.empty:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
                 if not df_mes_plan.empty:
-                    # REGLA 1: CUENTA CLAVE AUTOMÁTICA (Mayor volumen de cotizaciones y mayor monto cotizado en la plantilla)
+                    # 1. CUENTA CLAVE: Mayor volumen de cotizaciones y mayor monto cotizado en la plantilla
                     resumen_cc = df_mes_plan.groupby('Cliente').agg({
                         'Cotizacion': 'nunique',
                         'Peso_Interno_Orden': 'sum'
@@ -401,13 +401,16 @@ if archivo_cargado is not None:
                         
                     st.divider()
 
-                    # REGLA 2: TOP 10 FIJO CORPORATIVO
+                    # 2. TOP 10 CORPORATIVO (Excluyendo estrictamente al cliente de Cuenta Clave para evitar duplicados)
                     top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS ENERGY", "STEERINGMEX", "TREMEC", "WATLOW"]
                     
-                    df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_fijo)].copy()
-                    df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_fijo)].copy()
+                    # Filtramos la lista corporativa para remover la Cuenta Clave si estuviera incluida
+                    top_10_filtrado = [c for c in top_10_fijo if c != cliente_clave_top]
+                    
+                    df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_filtrado)].copy()
+                    df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_filtrado)].copy()
 
-                    # REGLA 3 y 4: 80/20 Y DESARROLLO
+                    # 3 y 4. 80/20 Y DESARROLLO (Resto de la tubería)
                     if not df_remanente_2.empty:
                         def es_8020(fila):
                             return fila['Monto_USD'] > 2500 or fila['Monto_MXN'] > 50000
