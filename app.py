@@ -123,7 +123,6 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # Lectura robusta con codificación adaptable
         try:
             df_raw = pd.read_csv(archivo_cargado, encoding='utf-8')
         except:
@@ -173,11 +172,14 @@ if archivo_cargado is not None:
 
         df = df_clean
 
-        # FILTRO ESTRICTO
+        # FILTRO ESTRICTO Y LIMPIEZA DE CLIENTES
         df = df.dropna(subset=['Cliente'])
-        df['Cliente'] = df['Cliente'].astype(str).str.strip()
-        df = df[df['Cliente'].str.upper() != 'NAN']
+        df['Cliente'] = df['Cliente'].astype(str).str.strip().str.upper()
+        df = df[df['Cliente'] != 'NAN']
         
+        # REGLA: Unificación de ITP e Industrias de Tuberías Aeronáuticas
+        df['Cliente'] = df['Cliente'].apply(lambda c: "ITP" if "TUBERIAS AERONAUTICAS" in c or "ITP" in c else c)
+
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
         
@@ -198,7 +200,7 @@ if archivo_cargado is not None:
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
-        # CLASIFICACIÓN GLOBAL POR UNIDAD DE NEGOCIO Y VIP
+        # CLASIFICACIÓN GLOBAL POR UNIDAD DE NEGOCIO
         # ==========================================
         def categorizar_unidad(area):
             area_upper = str(area).upper()
@@ -210,9 +212,6 @@ if archivo_cargado is not None:
                 return "PRODUCTOS" 
 
         df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
-        
-        top_10_vip = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
-        df['Clasificacion_VIP'] = df['Cliente'].apply(lambda c: "VIP" if any(m in c.upper() for m in top_10_vip) else "Normal")
 
         # ==========================================
         # FILTROS TÁCTICOS (MENÚ LATERAL)
@@ -325,12 +324,11 @@ if archivo_cargado is not None:
             col_f1, col_f2 = st.columns(2)
             
             with col_f1:
-                st.markdown("### Concentración de Capital VIP")
-                df_vip_finanzas = df[df['Clasificacion_VIP'] == "VIP"]
-                if not df_vip_finanzas.empty:
-                    st.bar_chart(df_vip_finanzas.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
+                st.markdown("### Concentración General de Clientes")
+                if not df.empty:
+                    st.bar_chart(df.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Cliente'), use_container_width=True)
                 else:
-                    st.info("No hay cotizaciones vivas para cuentas VIP.")
+                    st.info("Sin registros.")
 
             with col_f2:
                 st.markdown("### Distribución General por Unidades")
@@ -341,7 +339,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (CASCADA DE 4 SEGMENTOS)
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (REGLAS ESTRICTAS)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -376,25 +374,26 @@ if archivo_cargado is not None:
 
         with tab_ejecucion:
             st.markdown("### Estructura de Cierre del Mes Corriente")
-            st.caption(f"Proyectos clasificados en cascada para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
+            st.caption(f"Proyectos clasificados para cierre en {nombre_mes} {anio_actual}. Selecciona los proyectos para tu agenda.")
             
             if not df.empty:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
                 if not df_mes_plan.empty:
-                    # PASO 1: CUENTA CLAVE (Máximo 1 o 2 clientes por volumen de cotizaciones y mayor monto)
+                    # REGLA 1: CUENTA CLAVE AUTOMÁTICA (Mayor volumen de cotizaciones y mayor monto cotizado en la plantilla)
                     resumen_cc = df_mes_plan.groupby('Cliente').agg({
                         'Cotizacion': 'nunique',
                         'Peso_Interno_Orden': 'sum'
                     }).reset_index()
                     resumen_cc = resumen_cc.sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
                     
-                    clientes_clave_lista = resumen_cc.head(2)['Cliente'].tolist() if len(resumen_cc) >= 2 else resumen_cc.head(1)['Cliente'].tolist()
-                    df_cuenta_clave = df_mes_plan[df_mes_plan['Cliente'].isin(clientes_clave_lista)].copy()
-                    df_remanente_1 = df_mes_plan[~df_mes_plan['Cliente'].isin(clientes_clave_lista)].copy()
+                    cliente_clave_top = resumen_cc.iloc[0]['Cliente'] if not resumen_cc.empty else ""
                     
-                    st.markdown("#### CUENTA CLAVE (Máximo 2 Clientes - Volumen Masivo y Monto Superior)")
+                    df_cuenta_clave = df_mes_plan[df_mes_plan['Cliente'] == cliente_clave_top].copy()
+                    df_remanente_1 = df_mes_plan[df_mes_plan['Cliente'] != cliente_clave_top].copy()
+                    
+                    st.markdown(f"#### CUENTA CLAVE (Máximo Volumen y Monto Cotizado: {cliente_clave_top})")
                     if not df_cuenta_clave.empty:
                         render_table_interactiva(df_cuenta_clave, "cc")
                     else:
@@ -402,24 +401,17 @@ if archivo_cargado is not None:
                         
                     st.divider()
 
-                    # PASO 2: TOP (Estrictamente los 10 principales clientes restantes por peso financiero)
-                    if not df_remanente_1.empty:
-                        resumen_top = df_remanente_1.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
-                        resumen_top = resumen_top.sort_values(by='Peso_Interno_Orden', ascending=False)
-                        top_10_clientes = resumen_top.head(10)['Cliente'].tolist()
-                        
-                        df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
-                        df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
-                    else:
-                        df_top = pd.DataFrame()
-                        df_remanente_2 = pd.DataFrame()
+                    # REGLA 2: TOP 10 FIJO CORPORATIVO
+                    top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS ENERGY", "STEERINGMEX", "TREMEC", "WATLOW"]
+                    
+                    df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_fijo)].copy()
+                    df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_fijo)].copy()
 
-                    # PASO 3 y 4: 80/20 (Soporte Táctico) y DESARROLLO (Siembra a Futuro)
+                    # REGLA 3 y 4: 80/20 Y DESARROLLO
                     if not df_remanente_2.empty:
-                        # Criterio 80/20: Proyectos individuales significativos o cuentas con 2-3 cotizaciones
                         def es_8020(fila):
-                            return fila['Monto_USD'] > 3000 or fila['Monto_MXN'] > 60000 or fila['Clasificacion_VIP'] == "VIP"
-
+                            return fila['Monto_USD'] > 2500 or fila['Monto_MXN'] > 50000
+                        
                         df_remanente_2['Es_8020'] = df_remanente_2.apply(es_8020, axis=1)
                         df_8020 = df_remanente_2[df_remanente_2['Es_8020']].copy()
                         df_desarrollo = df_remanente_2[~df_remanente_2['Es_8020']].copy()
@@ -436,15 +428,15 @@ if archivo_cargado is not None:
                         with tab_p:
                             render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
 
-                    st.markdown("#### TOP (Estrictamente los 10 Principales Clientes)")
+                    st.markdown("#### TOP 10 (Cuentas Estratégicas Corporativas)")
                     if not df_top.empty: renderizar_subpestanas(df_top, "top")
-                    else: st.info("Sin proyectos en segmento TOP.")
+                    else: st.info("Sin proyectos en segmento TOP 10.")
                     
-                    st.markdown("#### 80/20 (Soporte Táctico y Volumen Sano)")
+                    st.markdown("#### 80/20 (Soporte Táctico)")
                     if not df_8020.empty: renderizar_subpestanas(df_8020, "8020")
                     else: st.info("Sin proyectos en segmento 80/20.")
                     
-                    st.markdown("#### DESARROLLO (Siembra y Seguimiento Ágil)")
+                    st.markdown("#### DESARROLLO (Siembra a Futuro)")
                     if not df_desarrollo.empty: renderizar_subpestanas(df_desarrollo, "des")
                     else: st.info("Sin proyectos en segmento Desarrollo.")
 
@@ -492,7 +484,7 @@ if archivo_cargado is not None:
                 st.info("Selecciona uno o múltiples proyectos en el Centro de Ejecución para programarlos en tu agenda.")
 
         # ==========================================
-        # PESTAÑA 3: AGENDA DE TRABAJO (CON INTELIGENCIA DOCUMENTAL)
+        # PESTAÑA 3: AGENDA DE TRABAJO (FICHA EJECUTIVA DE NEGOCIACIÓN)
         # ==========================================
         with tab_agenda:
             st.markdown("### Tablero de Ejecución Diaria e Inteligencia Comercial")
@@ -545,9 +537,9 @@ if archivo_cargado is not None:
                      
                 st.divider()
                 
-                # --- MÓDULO DE INTELIGENCIA COMERCIAL (MEMORÁNDUM Y CORREOS FORMALES) ---
-                st.markdown("### Inteligencia Documental para la Negociación")
-                st.caption("Selecciona una cuenta de tu agenda del día para generar su memorándum ejecutivo o redactar su correo formal de seguimiento.")
+                # --- MÓDULO DE INTELIGENCIA COMERCIAL (FICHA GERENCIAL Y CORREOS FORMALES) ---
+                st.markdown("### Ficha Ejecutiva y Memorándum de Negociación")
+                st.caption("Selecciona una cuenta de tu agenda para generar la minuta de revisión directiva o el correo formal de seguimiento.")
                 
                 clientes_dia_lista = df_dia['Cliente'].unique().tolist()
                 cliente_ficha = st.selectbox("Seleccionar cuenta:", clientes_dia_lista)
@@ -577,17 +569,19 @@ Asesor Comercial / Ejecutivo de Desarrollo de Negocios
 MESS Servicios Metrológicos"""
                         st.text_area("Copiable al portapapeles:", cuerpo_correo, height=220)
                     else:
-                        st.markdown("#### Memorándum Ejecutivo de Revisión Comercial")
-                        st.markdown(f"**Cliente:** {cliente_ficha}")
-                        st.markdown(f"**Volumen en Tubería:** {total_cotiz_cliente} cotizaciones activas")
-                        st.markdown(f"**Impacto Económico Acumulado:** ${suma_usd_cli:,.2f} USD | ${suma_mxn_cli:,.2f} MXN")
+                        st.markdown("#### Ficha Gerencial de Negociación (Memorándum)")
+                        st.markdown(f"**Cuenta:** {cliente_ficha}")
+                        st.markdown(f"**Volumen Activo:** {total_cotiz_cliente} cotizaciones en proceso")
+                        st.markdown(f"**Impacto Económico Consolidado:** ${suma_usd_cli:,.2f} USD | ${suma_mxn_cli:,.2f} MXN")
                         
-                        st.markdown("**Desglose de Partidas y Estatus de Negociación:**")
+                        st.markdown("---")
+                        st.markdown("**Desglose Técnico y Estatus de Partidas:**")
                         for idx_sub, row_sub in df_cliente_seleccion.iterrows():
                             div_str = f"${row_sub['Monto_USD']:,.2f} USD" if row_sub['Monto_USD'] > 0 else f"${row_sub['Monto_MXN']:,.2f} MXN"
                             cot_folio = row_sub['Cotizacion'] if pd.notna(row_sub['Cotizacion']) else "S/F"
-                            st.markdown(f"- **Cotización Folio: {cot_folio}** | ID Proyecto: {row_sub['ID_Proyecto']} | Área: *{row_sub['Unidad_Presupuesto']}* | Valor: {div_str}")
-                            st.markdown(f"  *Especificación Técnica:* {row_sub['Descripcion']}")
+                            st.markdown(f"- **Cotización Folio: {cot_folio}** | Proyecto ID: {row_sub['ID_Proyecto']} | Área: *{row_sub['Unidad_Presupuesto']}* | Monto: {div_str}")
+                            st.markdown(f"  *Alcance:* {row_sub['Descripcion']}")
+                            st.markdown("")
 
                 st.divider()
                 progreso = int((tareas_completadas / total_tareas) * 100) if total_tareas > 0 else 0
