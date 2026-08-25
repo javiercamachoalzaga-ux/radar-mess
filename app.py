@@ -400,70 +400,101 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (TO-DO LIST)
+# MÓDULO: AGENDA COMERCIAL DIARIA (POR DÍAS)
 # ==========================================
 st.divider()
 
-with st.expander("📅 AGENDA COMERCIAL DEL DÍA", expanded=True):
-    st.write(f"Plan de acción en campo y oficina para hoy: **{pd.Timestamp.now().strftime('%d/%m/%Y')}**")
+with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True):
+    col_fecha, col_filtros = st.columns([1, 2])
     
-    df_agenda = df.copy()
+    with col_fecha:
+        # 1. SELECTOR DE DÍAS
+        fecha_agenda = st.date_input("Selecciona el día a planificar:", pd.Timestamp.now().date())
     
-    # Clasificador de acciones (Llamadas vs Visitas)
+    # Trabajamos solo con las OVs que están "En Proceso" (las completadas ya no importan aquí)
+    df_agenda = df_en_proceso.copy()
+    
+    # 2. CLASIFICACIÓN INTELIGENTE (Llamadas, Visitas, Correos)
+    def clasificar_tarea(fila):
+        # Busca pistas en el estatus para saber qué tipo de acción es
+        texto = str(fila.get('Estatus', '')).upper()
+        if any(palabra in texto for palabra in ['VISITA', 'PLANTA', 'REUNION', 'PRESENCIAL']):
+            return 'Visita Presencial'
+        elif any(palabra in texto for palabra in ['CORREO', 'EMAIL', 'MAIL', 'COTIZA', 'MENSAJE']):
+            return 'Correo/Cotización'
+        else:
+            return 'Llamada' # Acción por defecto
+            
     if 'Tipo_Accion' not in df_agenda.columns:
-        df_agenda['Tipo_Accion'] = np.where(
-            df_agenda['Estatus'].astype(str).str.contains('VISITA', case=False, na=False), 
-            'Visita Presencial', 
-            'Llamada'
-        )
+        df_agenda['Tipo_Accion'] = df_agenda.apply(clasificar_tarea, axis=1)
 
-    # Filtramos las listas
-    df_llamadas = df_agenda[df_agenda['Tipo_Accion'] == "Llamada"].copy()
-    df_visitas = df_agenda[df_agenda['Tipo_Accion'] == "Visita Presencial"].copy()
-    
-    total_tareas = len(df_llamadas) + len(df_visitas)
-    tareas_completadas = 0
-    
-    col_a1, col_a2 = st.columns(2)
-    
-    with col_a1:
-        st.markdown("#### 📞 Bloque de Llamadas")
-        if not df_llamadas.empty:
-            # Creamos un Checkbox real por cada cliente
-            for idx, row in df_llamadas.iterrows():
-                cliente = str(row.get('Cliente', 'Desconocido'))
-                estatus = str(row.get('Estatus', ''))
-                
-                # Si el checkbox se marca, suma 1 a las tareas completadas
-                if st.checkbox(f"**{cliente}** ({estatus})", key=f"llamada_{idx}"):
-                    tareas_completadas += 1
-        else:
-            st.info("Sin llamadas programadas.")
-            
-    with col_a2:
-        st.markdown("#### 🚗 Ruta de Visitas")
-        if not df_visitas.empty:
-            # Creamos un Checkbox real por cada cliente
-            for idx, row in df_visitas.iterrows():
-                cliente = str(row.get('Cliente', 'Desconocido'))
-                estatus = str(row.get('Estatus', ''))
-                
-                # Si el checkbox se marca, suma 1 a las tareas completadas
-                if st.checkbox(f"**{cliente}** ({estatus})", key=f"visita_{idx}"):
-                    tareas_completadas += 1
-        else:
-            st.info("Sin visitas programadas.")
-            
-    # --- BARRA DE PROGRESO INMEDIATA ---
-    st.divider()
-    if total_tareas > 0:
-        progreso = int((tareas_completadas / total_tareas) * 100)
+    with col_filtros:
+        tipo_contacto = st.multiselect(
+            "Filtrar Actividades:", 
+            ["Llamada", "Visita Presencial", "Correo/Cotización"], 
+            default=["Llamada", "Visita Presencial", "Correo/Cotización"],
+            key="filtro_agenda"
+        )
         
-        st.markdown(f"**Nivel de Ejecución: {progreso}%** ({tareas_completadas} de {total_tareas} tareas realizadas)")
+    df_agenda = df_agenda[df_agenda['Tipo_Accion'].isin(tipo_contacto)]
+    
+    # 3. FILTRAMOS LAS OVS POR EL DÍA SELECCIONADO
+    hoy_date = pd.Timestamp.now().date()
+    
+    # Si la fecha elegida es "Hoy", mostramos las que vencen hoy + TODAS las retrasadas.
+    if fecha_agenda == hoy_date:
+        df_dia = df_agenda[(df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda) | (df_agenda['Dias_Retraso_Num'] > 0)].copy()
+        titulo_dia = "🔥 Tareas para Hoy (Incluye OVs Retrasadas)"
+    # Si elige otro día (ej. mañana), mostramos SOLO las que vencen exactamente ese día.
+    else:
+        df_dia = df_agenda[df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda].copy()
+        titulo_dia = f"🗓️ Tareas programadas para el {fecha_agenda.strftime('%d/%m/%Y')}"
+        
+    st.markdown(f"### {titulo_dia}")
+    
+    if not df_dia.empty:
+        df_llamadas = df_dia[df_dia['Tipo_Accion'] == "Llamada"]
+        df_visitas = df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]
+        df_correos = df_dia[df_dia['Tipo_Accion'] == "Correo/Cotización"]
+        
+        total_tareas = len(df_dia)
+        tareas_completadas = 0
+        
+        col_a1, col_a2, col_a3 = st.columns(3)
+        
+        with col_a1:
+            st.markdown("#### 📞 Llamadas")
+            if not df_llamadas.empty:
+                for idx, row in df_llamadas.iterrows():
+                    # Agregamos el Monto y OV para tener contexto rápido
+                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"ll_{idx}"):
+                        tareas_completadas += 1
+            else: st.caption("Libre.")
+            
+        with col_a2:
+            st.markdown("#### 🚗 Visitas")
+            if not df_visitas.empty:
+                for idx, row in df_visitas.iterrows():
+                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"vi_{idx}"):
+                        tareas_completadas += 1
+            else: st.caption("Libre.")
+            
+        with col_a3:
+            st.markdown("#### ✉️ Correos")
+            if not df_correos.empty:
+                for idx, row in df_correos.iterrows():
+                    if st.checkbox(f"**{row['Cliente']}** (OV: {row['OV']} | ${row['Peso_Ordenamiento']:,.0f})", key=f"co_{idx}"):
+                        tareas_completadas += 1
+            else: st.caption("Libre.")
+            
+        # --- BARRA DE PROGRESO DEL DÍA ---
+        st.divider()
+        progreso = int((tareas_completadas / total_tareas) * 100)
+        st.markdown(f"**Nivel de Ejecución del Día: {progreso}%** ({tareas_completadas} de {total_tareas} tareas)")
         st.progress(progreso)
         
         if progreso == 100:
-            st.success("¡Excelente trabajo! Has barrido con éxito tu agenda comercial de hoy.")
+            st.success("¡Excelente trabajo! Has completado tu cuota comercial del día.")
             st.balloons()
     else:
-        st.success("Sin actividades en agenda. Excelente momento para prospección en frío.")
+        st.success(f"No hay OVs con fecha límite para el {fecha_agenda.strftime('%d/%m/%Y')}. ¡Día libre para prospección en frío!")
