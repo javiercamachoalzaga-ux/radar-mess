@@ -400,70 +400,60 @@ if archivo_cargado is not None:
 else:
     st.info("Sube tu archivo bruto de Scott para desplegar el panel táctico.")
 # ==========================================
-# MÓDULO: AGENDA COMERCIAL DIARIA (PLANIFICADOR)
+# MÓDULO: AGENDA COMERCIAL DIARIA (PLANIFICADOR MANUAL)
 # ==========================================
 st.divider()
 
-with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True):
-    col_fecha, col_filtros = st.columns([1, 2])
-    
-    with col_fecha:
-        # 1. SELECTOR DE DÍAS
-        fecha_agenda = st.date_input("Selecciona el día a planificar:", pd.Timestamp.now().date())
-    
-    # CORRECCIÓN: Usamos el dataframe base 'df' de tu Radar en lugar de df_en_proceso
-    df_agenda = df.copy()
-    
-    # Si tienes columna de Estatus en tu Radar, filtramos para no mostrar cuentas ganadas/perdidas
-    if 'Estatus' in df_agenda.columns:
-        df_agenda = df_agenda[~df_agenda['Estatus'].astype(str).str.upper().isin(['GANADA', 'PERDIDA', 'COMPLETADA', 'FACTURADA'])]
-    
-    # 2. CLASIFICACIÓN INTELIGENTE (Llamadas, Visitas, Correos)
-    def clasificar_tarea(fila):
-        # Busca pistas en toda la fila del cliente para saber qué acción es
-        texto = str(fila.values).upper()
-        if any(palabra in texto for palabra in ['VISITA', 'PLANTA', 'REUNION', 'PRESENCIAL', 'CITA']):
-            return 'Visita Presencial'
-        elif any(palabra in texto for palabra in ['CORREO', 'EMAIL', 'MAIL', 'COTIZA', 'MENSAJE', 'WHATSAPP']):
-            return 'Correo/Cotización'
-        else:
-            return 'Llamada' # Acción por defecto si no detecta las otras palabras
-            
-    if 'Tipo_Accion' not in df_agenda.columns:
-        df_agenda['Tipo_Accion'] = df_agenda.apply(clasificar_tarea, axis=1)
+# 1. INICIALIZAR LA MEMORIA DE LA AGENDA EN STREAMLIT
+if 'memoria_agenda' not in st.session_state:
+    st.session_state.memoria_agenda = pd.DataFrame(columns=['ID_Tarea', 'Fecha', 'Cliente', 'Tipo_Accion', 'Completado'])
 
-    with col_filtros:
-        tipo_contacto = st.multiselect(
-            "Filtrar Actividades:", 
-            ["Llamada", "Visita Presencial", "Correo/Cotización"], 
-            default=["Llamada", "Visita Presencial", "Correo/Cotización"],
-            key="filtro_agenda"
-        )
-        
-    df_agenda = df_agenda[df_agenda['Tipo_Accion'].isin(tipo_contacto)]
+with st.expander("📅 AGENDA COMERCIAL (Planificador de Proyectos)", expanded=True):
     
-    # BLINDAJE DE COLUMNAS (Para evitar errores si el Excel del Radar no tiene estas columnas exactas)
-    if 'Fecha_Limite_Cálculo' not in df_agenda.columns:
-        df_agenda['Fecha_Limite_Cálculo'] = pd.to_datetime(pd.Timestamp.now().date())
-    if 'Dias_Retraso_Num' not in df_agenda.columns:
-        df_agenda['Dias_Retraso_Num'] = 0
-    if 'Peso_Ordenamiento' not in df_agenda.columns:
-        if 'Monto_MXN' in df_agenda.columns:
-            df_agenda['Peso_Ordenamiento'] = df_agenda['Monto_MXN']
-        else:
-            df_agenda['Peso_Ordenamiento'] = 0
+    # 2. SECCIÓN DE ASIGNACIÓN (AGREGAR PROYECTOS AL DÍA)
+    st.markdown("#### ➕ Programar Nuevo Seguimiento")
+    
+    with st.form("formulario_agendar"):
+        col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
+        
+        with col_f1:
+            # Creamos un menú desplegable con todos tus proyectos activos del Radar
+            if 'ID_Proyecto' in df.columns:
+                lista_proyectos = (df['Cliente'].astype(str) + " (ID: " + df['ID_Proyecto'].astype(str) + ")").unique()
+            else:
+                lista_proyectos = df['Cliente'].astype(str).unique()
+                
+            proyecto_sel = st.selectbox("1. Selecciona el Proyecto a trabajar:", lista_proyectos)
             
-    # 3. FILTRAMOS LAS TAREAS POR EL DÍA SELECCIONADO
-    hoy_date = pd.Timestamp.now().date()
-    
-    if fecha_agenda == hoy_date:
-        df_dia = df_agenda[(df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda) | (df_agenda['Dias_Retraso_Num'] > 0)].copy()
-        titulo_dia = "🔥 Tareas para Hoy (Incluye Retrasadas)"
-    else:
-        df_dia = df_agenda[df_agenda['Fecha_Limite_Cálculo'].dt.date == fecha_agenda].copy()
-        titulo_dia = f"🗓️ Tareas programadas para el {fecha_agenda.strftime('%d/%m/%Y')}"
+        with col_f2:
+            accion_sel = st.selectbox("2. ¿Qué acción harás?", ["Llamada", "Visita Presencial", "Correo/Cotización"])
+            
+        with col_f3:
+            fecha_sel = st.date_input("3. ¿Para qué día?", pd.Timestamp.now().date())
+            
+        # Botón para inyectar la tarea a la memoria
+        btn_agendar = st.form_submit_button("Agendar Acción")
         
-    st.markdown(f"### {titulo_dia}")
+        if btn_agendar and proyecto_sel:
+            nueva_tarea = pd.DataFrame([{
+                'ID_Tarea': len(st.session_state.memoria_agenda) + 1,
+                'Fecha': fecha_sel,
+                'Cliente': proyecto_sel,
+                'Tipo_Accion': accion_sel,
+                'Completado': False
+            }])
+            # Guardamos en la sesión
+            st.session_state.memoria_agenda = pd.concat([st.session_state.memoria_agenda, nueva_tarea], ignore_index=True)
+            st.success(f"✅ ¡Proyecto asignado exitosamente a la agenda del {fecha_sel.strftime('%d/%m/%Y')}!")
+            
+    st.divider()
+    
+    # 3. VISUALIZACIÓN DE LA AGENDA Y CASILLAS DE COMPLETADO
+    st.markdown("### 🗓️ Tu Agenda de Trabajo")
+    fecha_vista = st.date_input("Selecciona el día que quieres revisar/ejecutar:", pd.Timestamp.now().date(), key="vista_agenda")
+    
+    # Extraemos solo las tareas del día que elegiste
+    df_dia = st.session_state.memoria_agenda[st.session_state.memoria_agenda['Fecha'] == fecha_vista].copy()
     
     if not df_dia.empty:
         df_llamadas = df_dia[df_dia['Tipo_Accion'] == "Llamada"]
@@ -479,27 +469,28 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
             st.markdown("#### 📞 Llamadas")
             if not df_llamadas.empty:
                 for idx, row in df_llamadas.iterrows():
-                    cliente = str(row.get('Cliente', 'Desconocido'))
-                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"ll_{idx}"):
-                        tareas_completadas += 1
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    if marcado: tareas_completadas += 1
+                    # Guarda el check al instante en memoria
+                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
         with col_a2:
             st.markdown("#### 🚗 Visitas")
             if not df_visitas.empty:
                 for idx, row in df_visitas.iterrows():
-                    cliente = str(row.get('Cliente', 'Desconocido'))
-                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"vi_{idx}"):
-                        tareas_completadas += 1
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    if marcado: tareas_completadas += 1
+                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
         with col_a3:
             st.markdown("#### ✉️ Correos")
             if not df_correos.empty:
                 for idx, row in df_correos.iterrows():
-                    cliente = str(row.get('Cliente', 'Desconocido'))
-                    if st.checkbox(f"**{cliente}** | ${row['Peso_Ordenamiento']:,.0f}", key=f"co_{idx}"):
-                        tareas_completadas += 1
+                    marcado = st.checkbox(row['Cliente'], value=row['Completado'], key=f"t_{row['ID_Tarea']}")
+                    if marcado: tareas_completadas += 1
+                    st.session_state.memoria_agenda.loc[st.session_state.memoria_agenda['ID_Tarea'] == row['ID_Tarea'], 'Completado'] = marcado
             else: st.caption("Libre.")
             
         # --- BARRA DE PROGRESO DEL DÍA ---
@@ -511,5 +502,11 @@ with st.expander("📅 AGENDA COMERCIAL (Planificador por Día)", expanded=True)
         if progreso == 100:
             st.success("¡Excelente trabajo! Has completado tu cuota comercial del día.")
             st.balloons()
+            
+        # Botón para limpiar visualmente las que ya hiciste
+        if st.button("🧹 Limpiar tareas completadas"):
+            st.session_state.memoria_agenda = st.session_state.memoria_agenda[~((st.session_state.memoria_agenda['Fecha'] == fecha_vista) & (st.session_state.memoria_agenda['Completado'] == True))]
+            st.rerun()
+            
     else:
-        st.success(f"No hay tareas programadas para el {fecha_agenda.strftime('%d/%m/%Y')}. ¡Día libre para prospección en frío!")
+        st.info(f"No tienes proyectos agendados para el {fecha_vista.strftime('%d/%m/%Y')}. Usa el formulario de arriba para jalar cuentas del Radar a tu agenda.")
