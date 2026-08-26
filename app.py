@@ -212,12 +212,44 @@ if archivo_cargado is not None:
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
+        # FILTROS TÁCTICOS (BARRA LATERAL)
+        # ==========================================
+        st.sidebar.divider()
+        st.sidebar.header("Filtros Tácticos")
+        
+        busqueda_proyecto = st.sidebar.text_input("Buscar ID o Cliente:", placeholder="Ej. 111822 o SAFRAN")
+        if busqueda_proyecto:
+            df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
+                    (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
+
+        max_monto = float(df['Peso_Interno_Orden'].max()) if not df.empty else 1000000.0
+        if pd.isna(max_monto) or max_monto == 0: max_monto = 100000.0
+        
+        rango_monto = st.sidebar.slider("Rango de Valor (Peso Interno)", 
+                                    min_value=0.0, max_value=max_monto, 
+                                    value=(0.0, max_monto), step=5000.0)
+        df = df[(df['Peso_Interno_Orden'] >= rango_monto[0]) & (df['Peso_Interno_Orden'] <= rango_monto[1])]
+
+        st.sidebar.divider()
+        st.sidebar.header("Tubería Filtrada")
+        st.sidebar.metric("Total USD en Filtro", f"${df['Monto_USD'].sum():,.2f}")
+        st.sidebar.metric("Total MXN en Filtro", f"${df['Monto_MXN'].sum():,.2f}")
+
+        # Contenedor para la programación de ruta (se llena más adelante desde el centro de ejecución)
+        st.sidebar.divider()
+        contenedor_agenda_lateral = st.sidebar.container()
+
+        # ==========================================
         # INTERFAZ Y PESTAÑAS MAESTRAS
         # ==========================================
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
         
-        tab_analisis, tab_implementacion, tab_ejecucion = st.tabs(["1. Inteligencia Financiera (Análisis)", "2. Centro de Ejecución (Implementación)", "3. Agenda de Trabajo (Ejecución)"])
+        tab_analisis, tab_implementacion, tab_ejecucion = st.tabs([
+            "1. Inteligencia Financiera (Análisis)", 
+            "2. Centro de Ejecución (Implementación)", 
+            "3. Agenda de Trabajo (Ejecución)"
+        ])
 
         # ==========================================
         # SECCIÓN 1: ANÁLISIS (INTELIGENCIA FINANCIERA)
@@ -326,50 +358,74 @@ if archivo_cargado is not None:
                 st.info("No hay proyectos con fecha de cierre para este mes.")
 
         # ==========================================
-        # PANEL LATERAL: PROGRAMACIÓN DE RUTA
+        # MOTOR DE AGENDA EN COLUMNA IZQUIERDA (SIDEBAR)
         # ==========================================
-        st.sidebar.divider()
-        st.sidebar.header("Programación de Ruta")
-        if lista_global_seleccionados:
-            df_final = pd.concat(lista_global_seleccionados, ignore_index=True)
-            accion = st.sidebar.selectbox("Acción:", ["Visita Presencial", "Llamada Consultiva", "Correo", "Cierre"])
-            fecha_lote = st.sidebar.date_input("Fecha:", pd.Timestamp.now().date())
-            
-            if st.sidebar.button("Agendar Seleccionados"):
-                for _, row in df_final.iterrows():
-                    nueva_tarea = pd.DataFrame([{
-                        'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
-                        'Fecha': fecha_lote, 'Cliente': row['Cliente'], 'ID_Proyecto': row['ID_Proyecto'],
-                        'Cotizacion': row['Cotizacion'], 'Unidad_Presupuesto': row['Unidad_Presupuesto'],
-                        'Monto_USD': row['Monto_USD'], 'Monto_MXN': row['Monto_MXN'],
-                        'Tipo_Accion': accion, 'Descripcion': row['Descripcion'], 'Completado': False
-                    }])
-                    st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
-                st.session_state.clear_key += 1
-                st.sidebar.success("¡Agendados con éxito!")
-                st.rerun()
+        with contenedor_agenda_lateral:
+            st.header("Programación de Ruta")
+            if lista_global_seleccionados:
+                df_final = pd.concat(lista_global_seleccionados, ignore_index=True)
+                total_sel = len(df_final)
+                st.info(f"Proyectos seleccionados: {total_sel}")
+                
+                accion_lote = st.selectbox("Acción a ejecutar:", ["Visita Presencial", "Llamada Consultiva", "Correo", "Cierre y Negociación"])
+                fecha_lote = st.date_input("Fecha programada:", pd.Timestamp.now().date())
+                
+                if st.button("Agendar Seleccionados"):
+                    for _, row in df_final.iterrows():
+                        nueva_tarea = pd.DataFrame([{
+                            'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
+                            'Fecha': fecha_lote, 'Cliente': row['Cliente'], 'ID_Proyecto': row['ID_Proyecto'],
+                            'Cotizacion': row['Cotizacion'], 'Unidad_Presupuesto': row['Unidad_Presupuesto'],
+                            'Monto_USD': row['Monto_USD'], 'Monto_MXN': row['Monto_MXN'],
+                            'Tipo_Accion': accion_lote, 'Descripcion': row['Descripcion'], 'Completado': False
+                        }])
+                        st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
+                    st.session_state.clear_key += 1
+                    st.success("¡Actividades agendadas con éxito!")
+                    st.rerun()
+            else:
+                st.info("Selecciona uno o más proyectos en el Centro de Ejecución para programarlos.")
 
         # ==========================================
         # SECCIÓN 3: EJECUCIÓN (AGENDA Y MEMORÁNDUMS)
         # ==========================================
         with tab_ejecucion:
             st.markdown("### Tablero de Ejecución Diaria Multi-Cliente")
-            fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date())
+            fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
             df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
             
             if not df_dia.empty:
-                col_m1, col_m2 = st.columns(2)
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
                 col_m1.metric("Valor USD del Día", f"${df_dia['Monto_USD'].sum():,.2f} USD")
                 col_m2.metric("Valor MXN del Día", f"${df_dia['Monto_MXN'].sum():,.2f} MXN")
+                col_m3.metric("Total Actividades", f"{len(df_dia)}")
+                col_m4.metric("Visitas Críticas", len(df_dia[df_dia['Tipo_Accion'] == "Visita Presencial"]))
+                
+                st.markdown("<br>", unsafe_allow_html=True)
                 
                 df_dia_show = df_dia[['Completado', 'Cliente', 'ID_Proyecto', 'Cotizacion', 'Tipo_Accion', 'Monto_USD', 'Monto_MXN']].copy()
-                st.data_editor(df_dia_show, hide_index=True, use_container_width=True, disabled=['Cliente', 'ID_Proyecto', 'Cotizacion', 'Tipo_Accion', 'Monto_USD', 'Monto_MXN'])
+                proyectos_actualizados = st.data_editor(
+                    df_dia_show, hide_index=True, use_container_width=True, key="editor_agenda_final",
+                    column_config={
+                        "Completado": st.column_config.CheckboxColumn("Realizado", default=False),
+                        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                        "ID_Proyecto": st.column_config.TextColumn("Proyecto", disabled=True),
+                        "Cotizacion": st.column_config.TextColumn("Cotización", disabled=True),
+                        "Tipo_Accion": st.column_config.TextColumn("Acción", disabled=True),
+                        "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", disabled=True),
+                        "Monto_MXN": st.column_config.NumberColumn("MXN", format="$%.2f", disabled=True)
+                    }
+                )
+                
+                # Sincronizar cambios de completado
+                for i, idx in enumerate(df_dia.index):
+                    st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
                 
                 st.divider()
-                st.markdown("### Memorándum Profesional")
-                st.caption("Selecciona una cuenta de tu agenda para generar su memorándum ejecutivo detallado.")
+                st.markdown("### Memorándum Profesional de Visita o Llamada")
+                st.caption("Selecciona una cuenta de tu agenda del día para generar su memorándum detallado con número de cotización.")
                 
-                clientes_agenda = df_dia['Cliente'].unique()
+                clientes_agenda = df_dia['Cliente'].unique().tolist()
                 cliente_memo = st.selectbox("Generar memorándum para:", clientes_agenda)
                 
                 if cliente_memo:
@@ -378,18 +434,18 @@ if archivo_cargado is not None:
                     suma_mxn = df_memo['Monto_MXN'].sum()
                     
                     st.markdown(f"**Cliente / Planta:** {cliente_memo}")
-                    st.markdown(f"**Valor Total en Discusión:** ${suma_usd:,.2f} USD | ${suma_mxn:,.2f} MXN")
-                    st.markdown("**Proyectos y Cotizaciones Asociadas:**")
+                    st.markdown(f"**Valor en Discusión:** ${suma_usd:,.2f} USD | ${suma_mxn:,.2f} MXN")
+                    st.markdown("**Proyectos y Cotizaciones Asociadas a la Cita:**")
                     
                     for _, row in df_memo.iterrows():
                         valor_str = f"${row['Monto_USD']:,.2f} USD" if row['Monto_USD'] > 0 else f"${row['Monto_MXN']:,.2f} MXN"
                         st.markdown(f"- **Proyecto ID {row['ID_Proyecto']} | Cotización: {row['Cotizacion']}**")
-                        st.markdown(f"  *Alcance técnico:* {row['Descripcion']} (Valor: {valor_str})")
+                        st.markdown(f"  *Alcance:* {row['Descripcion']} (Valor: {valor_str})")
                         
                     st.markdown("---")
-                    st.markdown("*(Documento generado por MESS Servicios Metrológicos - Inteligencia Comercial)*")
+                    st.markdown("*(Documento ejecutivo generado por MESS Servicios Metrológicos)*")
             else:
-                st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar actividades.")
+                st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar cuentas.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
