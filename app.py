@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 from datetime import datetime
 
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
@@ -19,10 +20,7 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
     
-    html, body, [class*="css"] { 
-        font-family: 'Montserrat', sans-serif !important; 
-    }
-    
+    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
     .titulo-radar { font-size: 42px; font-weight: 900; color: #003a70; margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
     .subtitulo { font-size: 16px; color: #555555; margin-bottom: 30px; font-weight: 600; text-transform: uppercase; }
 
@@ -62,18 +60,36 @@ st.markdown('<div class="titulo-radar">Radar Comercial</div>', unsafe_allow_html
 st.markdown('<div class="subtitulo">Inteligencia de Cierres Diarios y Proyectos Vivos</div>', unsafe_allow_html=True)
 
 # ==========================================
-# SELECTOR PARA CORREGIR SÍMBOLOS (Solución Definitiva)
+# AUTO-CORRECTOR ORTOGRÁFICO (REPARA LA EXPORTACIÓN DE TU CRM)
 # ==========================================
-st.sidebar.markdown("---")
-formato_lectura = st.sidebar.selectbox("Formato del CSV (Cambia si ves símbolos raros):", ["latin1", "utf-8", "utf-8-sig", "cp1252"])
+def reparar_texto_roto(texto):
+    if pd.isna(texto): return ""
+    t = str(texto)
+    reemplazos = {
+        "calibraci?n": "calibración", "Calibraci?n": "Calibración", "CALIBRACI?N": "CALIBRACIÓN",
+        "medici?n": "medición", "Medici?n": "Medición", "MEDICI?N": "MEDICIÓN",
+        "capacitaci?n": "capacitación", "Capacitaci?n": "Capacitación", "CAPACITACI?N": "CAPACITACIÓN",
+        "M?xico": "México", "M?XICO": "MÉXICO", 
+        "mec?nicos": "mecánicos", "MEC?NICOS": "MECÁNICOS",
+        "ingenier?a": "ingeniería", "INGENIER?A": "INGENIERÍA",
+        "tuber?as": "tuberías", "TUBER?AS": "TUBERÍAS",
+        "aeron?uticas": "aeronáuticas", "AERON?UTICAS": "AERONÁUTICAS",
+        "?REA": "ÁREA", "área": "área", "?rea": "área"
+    }
+    for mal, bien in reemplazos.items():
+        t = t.replace(mal, bien)
+    return t
 
 archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # Lectura garantizada sin errores ocultos
+        df_raw = pd.read_csv(archivo_cargado, encoding='latin1', on_bad_lines='skip')
+    except:
         archivo_cargado.seek(0)
-        df_raw = pd.read_csv(archivo_cargado, encoding=formato_lectura)
+        df_raw = pd.read_csv(archivo_cargado, encoding='utf-8', on_bad_lines='skip')
+
+    try:
         df_clean = pd.DataFrame()
 
         def buscar_col(palabras_clave):
@@ -85,13 +101,13 @@ if archivo_cargado is not None:
             return pd.Series([None] * len(df_raw))
 
         df_clean['Cotizacion'] = buscar_col(["COTIZACION"])
-        df_clean['Cliente'] = buscar_col(["CLIENTE"])
-        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
+        df_clean['Cliente'] = buscar_col(["CLIENTE"]).apply(reparar_texto_roto)
+        df_clean['Area'] = buscar_col(["AREA", "ÁREA", "?REA"]).apply(reparar_texto_roto)
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
-        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"]).apply(reparar_texto_roto)
 
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
@@ -114,14 +130,32 @@ if archivo_cargado is not None:
         df_clean['Monto_USD'] = monto_usd_total
         df = df_clean
 
-        # FILTRO Y LIMPIEZA DE CLIENTES
+        # FILTRO Y LIMPIEZA INICIAL
         df = df.dropna(subset=['Cliente'])
         df['Cliente'] = df['Cliente'].astype(str).str.strip().str.upper()
         df = df[df['Cliente'] != 'NAN']
+        df = df[df['Cliente'] != '']
         
-        # REGLA: Unificación de ITP e Industrias de Tuberías Aeronáuticas
-        df['Cliente'] = df['Cliente'].apply(lambda c: "ITP" if "TUBERIAS AERONAUTICAS" in c or "TUBERÍAS AERONÁUTICAS" in c or "ITP" in c else c)
+        # ==========================================
+        # REGLA MAESTRA: NORMALIZACIÓN DE RAZONES SOCIALES (FILIALES -> MATRIZ)
+        # ==========================================
+        def normalizar_cliente(nombre):
+            n = str(nombre).upper()
+            if "ITP" in n or "TUBERIAS AERONAUTICAS" in n or "TUBERÍAS AERONÁUTICAS" in n: return "ITP"
+            if "TREMEC" in n or "TRANSMISIONES Y EQUIPOS" in n: return "TREMEC"
+            if "CNH" in n: return "CNH"
+            if "SAFRAN" in n: return "SAFRAN"
+            if "BROSE" in n: return "BROSE"
+            if "SIEMENS" in n: return "SIEMENS ENERGY"
+            if "WATLOW" in n: return "WATLOW"
+            if "STEERINGMEX" in n: return "STEERINGMEX"
+            if "DANA" in n: return "DANA"
+            if "BOMBARDIER" in n: return "BOMBARDIER"
+            return n.strip()
 
+        df['Cliente'] = df['Cliente'].apply(normalizar_cliente)
+
+        # COMPLETAR DATOS VACÍOS
         if 'Estatus' not in df.columns: df['Estatus'] = 'EN PROCESO'
         df['Estatus'] = df['Estatus'].astype(str).str.strip().str.upper()
         
@@ -185,7 +219,9 @@ if archivo_cargado is not None:
 
         tab_finanzas, tab_ejecucion, tab_agenda = st.tabs(["Inteligencia Financiera", "Centro de Ejecución", "Agenda de Trabajo"])
 
+        # ==========================================
         # PESTAÑA 1: FINANZAS
+        # ==========================================
         with tab_finanzas:
             st.markdown("### Dashboard de Cumplimiento Mensual")
             df_mes_tracker = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)]
@@ -204,9 +240,9 @@ if archivo_cargado is not None:
                 
             with col_b2:
                  st.markdown("#### Radar Capturado USD")
-                 st.metric("Alta Gama", f"${df_chart_usd.loc['ALTA GAMA', 'Radar USD']:,.0f} USD")
-                 st.metric("Laboratorios", f"${df_chart_usd.loc['LABORATORIOS', 'Radar USD']:,.0f} USD")
-                 st.metric("Productos", f"${df_chart_usd.loc['PRODUCTOS', 'Radar USD']:,.0f} USD")
+                 st.metric("Alta Gama (Meta: $28K)", f"${df_chart_usd.loc['ALTA GAMA', 'Radar USD']:,.0f} USD")
+                 st.metric("Laboratorios (Meta: $15K)", f"${df_chart_usd.loc['LABORATORIOS', 'Radar USD']:,.0f} USD")
+                 st.metric("Productos (Meta: $45K)", f"${df_chart_usd.loc['PRODUCTOS', 'Radar USD']:,.0f} USD")
                  
             with col_b3:
                  st.markdown("#### Radar Adicional MXN")
@@ -223,7 +259,9 @@ if archivo_cargado is not None:
                 st.markdown("### Distribución General por Unidades")
                 if not df.empty: st.bar_chart(df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum().reset_index().set_index('Area'), use_container_width=True)
 
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (LÓGICA DINÁMICA ABSOLUTA)
+        # ==========================================
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (TOP 10 BLINDADO)
+        # ==========================================
         lista_global_seleccionados = []
         
         def render_table_interactiva(df_subset, sufijo_clave):
@@ -242,7 +280,7 @@ if archivo_cargado is not None:
             df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             if not df_mes_plan.empty:
-                # 1. CUENTA CLAVE GLOBAL
+                # 1. CUENTA CLAVE GLOBAL (Sobre la data ya unificada)
                 resumen_global = df.groupby('Cliente').agg({'Cotizacion': 'nunique', 'Peso_Interno_Orden': 'sum'}).reset_index().sort_values(by=['Cotizacion', 'Peso_Interno_Orden'], ascending=[False, False])
                 cliente_clave = resumen_global.iloc[0]['Cliente'] if not resumen_global.empty else ""
 
@@ -254,15 +292,12 @@ if archivo_cargado is not None:
                 else: st.info(f"{cliente_clave} no tiene cierres programados para este mes.")
                 st.divider()
 
-                # 2. TOP 10 DINÁMICO (Cálculo matemático de los 10 mejores del resto)
-                if not df_resto.empty:
-                    resumen_top = df_resto.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index().sort_values(by='Peso_Interno_Orden', ascending=False)
-                    top_10_lista = resumen_top.head(10)['Cliente'].tolist()
-                    
-                    df_top10 = df_resto[df_resto['Cliente'].isin(top_10_lista)]
-                    df_resto_2 = df_resto[~df_resto['Cliente'].isin(top_10_lista)]
-                else:
-                    df_top10, df_resto_2 = pd.DataFrame(), pd.DataFrame()
+                # 2. TOP 10 FIJO Y BLINDADO
+                top_10_maestra = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS ENERGY", "STEERINGMEX", "TREMEC", "WATLOW"]
+                top_10_filtrado = [c for c in top_10_maestra if c != cliente_clave]
+                
+                df_top10 = df_resto[df_resto['Cliente'].isin(top_10_filtrado)]
+                df_resto_2 = df_resto[~df_resto['Cliente'].isin(top_10_filtrado)]
 
                 # 3 y 4. 80/20 Y DESARROLLO
                 if not df_resto_2.empty:
@@ -278,9 +313,9 @@ if archivo_cargado is not None:
                     with t2: render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'LABORATORIOS'], f"{pre}_lb")
                     with t3: render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{pre}_pr")
 
-                st.markdown("#### TOP 10 DEL MES (Dinámico por Peso Financiero)")
+                st.markdown("#### TOP 10 (Cuentas Estratégicas Corporativas)")
                 if not df_top10.empty: renderizar_sub(df_top10, "top")
-                else: st.info("Sin proyectos.")
+                else: st.info("Sin proyectos activos en el TOP 10 corporativo este mes.")
                 
                 st.markdown("#### 80/20 (Soporte Táctico)")
                 if not df_8020.empty: renderizar_sub(df_8020, "8020")
@@ -293,7 +328,7 @@ if archivo_cargado is not None:
                 st.info("No tienes cotizaciones con fecha de cierre registrada para el mes en curso.")
 
         # ==========================================
-        # GESTIÓN RÁPIDA DE AGENDA (BARRA LATERAL)
+        # GESTIÓN RÁPIDA DE AGENDA
         # ==========================================
         with st.sidebar.container():
             st.divider()
@@ -362,4 +397,4 @@ if archivo_cargado is not None:
                 st.info("Agenda libre.")
 
     except Exception as e:
-        st.error(f"Error de lectura. Por favor, cambia el formato en el menú lateral. Detalles: {e}")
+        st.error(f"Error de sistema. Detalles: {e}")
