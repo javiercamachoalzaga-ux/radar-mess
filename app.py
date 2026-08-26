@@ -77,9 +77,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Lógica de seguridad (Simplificada para no bloquearte si no hay st.secrets configurado aún)
 def check_password():
-    if "mi_contrasena" not in st.secrets: return True # Si no hay contraseña configurada, deja pasar
+    if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("Acceso Restringido")
     pwd = st.sidebar.text_input("Contraseña", type="password")
     if pwd == st.secrets["mi_contrasena"]: return True
@@ -117,8 +116,8 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # 2. CONSOLIDACIÓN DE PROYECTOS (FFILL)
-        df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].fillna(method='ffill')
+        # 2. CONSOLIDACIÓN DE PROYECTOS (Sintaxis moderna compatible con Pandas actual)
+        df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
 
         # 3. PLANCHADO ORTOGRÁFICO
@@ -162,7 +161,6 @@ if archivo_cargado is not None:
             return nombre.strip()
 
         df_clean['Cliente_Maestro'] = df_clean['Cliente'].apply(unificar_cliente)
-        # Propagar el nombre maestro a todo el bloque del proyecto
         df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(
             lambda x: x.replace("", np.nan).ffill().bfill()
         )
@@ -183,7 +181,7 @@ if archivo_cargado is not None:
         df_clean['Monto_MXN'] = monto_mxn
         df_clean['Monto_USD'] = monto_usd
 
-        # 6. AGRUPACIÓN DEFINITIVA POR PROYECTO (1 Proyecto = 1 Fila)
+        # 6. AGRUPACIÓN DEFINITIVA POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
             'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
@@ -199,10 +197,8 @@ if archivo_cargado is not None:
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0) | (df['Cotizacion'] != "")]
 
-        # Filtro estatus en proceso
         df = df[df['Estatus'].str.contains('Proceso', case=False, na=False)].copy()
         
-        # Clasificación Unidad de Negocio
         def categorizar_unidad(area):
             a = str(area).upper()
             if any(k in a for k in ["ALTA GAMA", "EQUIPO", "CMM", "ZEISS", "SCANNER", "KREON", "BATY", "MITUTOYO"]): return "ALTA GAMA"
@@ -210,7 +206,6 @@ if archivo_cargado is not None:
             return "PRODUCTOS" 
         df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
 
-        # VIP y Pesos para ordenar
         top_10_vip = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP AERO", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Clasificacion_VIP'] = df['Cliente'].apply(lambda c: "VIP" if c.upper() in top_10_vip else "Normal")
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
@@ -230,7 +225,6 @@ if archivo_cargado is not None:
             col1.metric("Valor Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f} USD")
             col2.metric("Valor Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f} MXN")
 
-        # Función para renderizar tablas limpias
         lista_global_seleccionados = []
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
