@@ -209,6 +209,8 @@ if archivo_cargado is not None:
         top_10_vip = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP AERO", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Clasificacion_VIP'] = df['Cliente'].apply(lambda c: "VIP" if c.upper() in top_10_vip else "Normal")
         df['Peso_Interno_Orden'] = df['Monto_MXN'] + (df['Monto_USD'] * 19.50)
+        
+        df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
@@ -235,8 +237,6 @@ if archivo_cargado is not None:
         st.sidebar.metric("Total USD en Filtro", f"${df['Monto_USD'].sum():,.2f}")
         st.sidebar.metric("Total MXN en Filtro", f"${df['Monto_MXN'].sum():,.2f}")
 
-        # Contenedor para la programación de ruta (se llena más adelante desde el centro de ejecución)
-        st.sidebar.divider()
         contenedor_agenda_lateral = st.sidebar.container()
 
         # ==========================================
@@ -320,9 +320,23 @@ if archivo_cargado is not None:
             if not seleccion.empty: lista_global_seleccionados.append(seleccion)
 
         with tab_implementacion:
-            st.markdown("### Estructura de Cierre del Mes Corriente")
-            st.caption("Selecciona los proyectos que deseas programar en tu ruta táctica y agenda diaria.")
+            st.markdown("### Centro de Control de Proyectos Vivos")
+            st.caption("Visualiza tus proyectos rezagados (arrastre) y los cierres programados para el mes corriente.")
             
+            # 1. SEGMENTO NUEVO: PROYECTOS DE ARRASTRE / REZAGADOS (Fecha de creación < inicio del mes actual)
+            inicio_mes_actual = pd.Timestamp(year=anio_actual, month=mes_actual, day=1)
+            df_rezagados = df[df['Fecha_Creacion_DT'] < inicio_mes_actual].copy()
+            
+            st.markdown("#### 🔄 Proyectos de Arrastre / Rezagados (Creados antes de este mes y aún en proceso)")
+            if not df_rezagados.empty:
+                render_table_interactiva(df_rezagados.sort_values('Peso_Interno_Orden', ascending=False), "rezagados")
+            else:
+                st.success("¡Excelente! No tienes proyectos rezagados de meses anteriores en proceso.")
+            
+            st.divider()
+
+            # 2. SEGMENTO MES CORRIENTE
+            st.markdown("#### 🎯 Estructura de Cierre del Mes Corriente")
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             if not df_mes.empty:
@@ -334,7 +348,7 @@ if archivo_cargado is not None:
                 df_cc = df_mes[df_mes['Cliente'].isin(cuentas_clave)]
                 df_resto = df_mes[~df_mes['Cliente'].isin(cuentas_clave)].copy()
                 
-                st.markdown("#### CUENTAS CLAVE (7 o más Proyectos - Atención Integral)")
+                st.markdown("##### Cuentas Clave (7 o más Proyectos - Atención Integral)")
                 render_table_interactiva(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
                 st.divider()
 
@@ -346,16 +360,16 @@ if archivo_cargado is not None:
                 if not df_resto.empty:
                     df_resto['Nivel'] = df_resto.apply(clasificar, axis=1)
                     
-                    st.markdown("#### Prioridad TOP (Alto Valor o VIP)")
+                    st.markdown("##### Prioridad TOP (Alto Valor o VIP)")
                     render_table_interactiva(df_resto[df_resto['Nivel'] == "TOP"].sort_values('Peso_Interno_Orden', ascending=False), "top")
                     
-                    st.markdown("#### Prioridad 80/20 (Maduración)")
+                    st.markdown("##### Prioridad 80/20 (Maduración)")
                     render_table_interactiva(df_resto[df_resto['Nivel'] == "80/20"].sort_values('Peso_Interno_Orden', ascending=False), "8020")
                     
-                    st.markdown("#### Prioridad DESARROLLO")
+                    st.markdown("##### Prioridad DESARROLLO")
                     render_table_interactiva(df_resto[df_resto['Nivel'] == "DESARROLLO"].sort_values('Peso_Interno_Orden', ascending=False), "des")
             else:
-                st.info("No hay proyectos con fecha de cierre para este mes.")
+                st.info("No hay proyectos con fecha de cierre programada para este mes.")
 
         # ==========================================
         # MOTOR DE AGENDA EN COLUMNA IZQUIERDA (SIDEBAR)
@@ -417,7 +431,6 @@ if archivo_cargado is not None:
                     }
                 )
                 
-                # Sincronizar cambios de completado
                 for i, idx in enumerate(df_dia.index):
                     st.session_state.agenda_radar.loc[idx, 'Completado'] = proyectos_actualizados.iloc[i]['Completado']
                 
