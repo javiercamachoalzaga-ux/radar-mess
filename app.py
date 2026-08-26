@@ -116,7 +116,7 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # 2. CONSOLIDACIÓN DE PROYECTOS (Sintaxis moderna compatible con Pandas actual)
+        # 2. CONSOLIDACIÓN DE PROYECTOS (Sintaxis moderna con .ffill())
         df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
 
@@ -212,19 +212,57 @@ if archivo_cargado is not None:
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
         # ==========================================
-        # INTERFAZ Y PESTAÑAS
+        # INTERFAZ Y PESTAÑAS MAESTRAS
         # ==========================================
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
         
-        tab_finanzas, tab_ejecucion, tab_agenda = st.tabs(["Inteligencia Financiera", "Centro de Ejecución", "Agenda de Trabajo"])
+        tab_analisis, tab_implementacion, tab_ejecucion = st.tabs(["1. Inteligencia Financiera (Análisis)", "2. Centro de Ejecución (Implementación)", "3. Agenda de Trabajo (Ejecución)"])
 
-        with tab_finanzas:
-            st.markdown("### Totales Generales (Separación Monetaria Estricta)")
-            col1, col2 = st.columns(2)
-            col1.metric("Valor Total USD en Proceso", f"${df['Monto_USD'].sum():,.2f} USD")
-            col2.metric("Valor Total MXN en Proceso", f"${df['Monto_MXN'].sum():,.2f} MXN")
+        # ==========================================
+        # SECCIÓN 1: ANÁLISIS (INTELIGENCIA FINANCIERA)
+        # ==========================================
+        with tab_analisis:
+            st.markdown("### Dashboard de Cumplimiento y Presupuesto Mensual")
+            st.caption("Seguimiento del pipeline comercial y cumplimiento de metas por unidad de negocio.")
+            
+            BUDGET_ALTA_GAMA = 28000.00
+            BUDGET_LABORATORIOS = 15000.00
+            BUDGET_PRODUCTOS = 45000.00
+            
+            df_mes_tracker = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
+            
+            pipe_alta_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'ALTA GAMA']['Monto_USD'].sum()
+            pipe_alta_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'ALTA GAMA']['Monto_MXN'].sum()
+            
+            pipe_labs_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'LABORATORIOS']['Monto_USD'].sum()
+            pipe_labs_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'LABORATORIOS']['Monto_MXN'].sum()
+            
+            pipe_prod_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'PRODUCTOS']['Monto_USD'].sum()
+            pipe_prod_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'PRODUCTOS']['Monto_MXN'].sum()
+            
+            col_b1, col_b2, col_b3 = st.columns(3)
+            col_b1.metric("Alta Gama (Meta: $28K USD)", f"${pipe_alta_usd:,.2f} USD", f"${pipe_alta_mxn:,.2f} MXN")
+            col_b2.metric("Laboratorios (Meta: $15K USD)", f"${pipe_labs_usd:,.2f} USD", f"${pipe_labs_mxn:,.2f} MXN")
+            col_b3.metric("Productos (Meta: $45K USD)", f"${pipe_prod_usd:,.2f} USD", f"${pipe_prod_mxn:,.2f} MXN")
+            
+            st.divider()
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                st.markdown("#### Concentración de Capital en Cuentas VIP")
+                df_vip = df[df['Clasificacion_VIP'] == "VIP"]
+                if not df_vip.empty:
+                    st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum())
+                else:
+                    st.info("Sin proyectos activos en cuentas VIP.")
+            with col_f2:
+                st.markdown("#### Distribución General por Área")
+                if not df.empty:
+                    st.bar_chart(df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum())
 
+        # ==========================================
+        # SECCIÓN 2: IMPLEMENTACIÓN DE ACCIÓN (CENTRO DE EJECUCIÓN)
+        # ==========================================
         lista_global_seleccionados = []
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
@@ -249,8 +287,10 @@ if archivo_cargado is not None:
             seleccion = df_editado[df_editado['Seleccionar'] == True]
             if not seleccion.empty: lista_global_seleccionados.append(seleccion)
 
-        with tab_ejecucion:
-            st.markdown("### Estructura de Cierre Estratégico")
+        with tab_implementacion:
+            st.markdown("### Estructura de Cierre del Mes Corriente")
+            st.caption("Selecciona los proyectos que deseas programar en tu ruta táctica y agenda diaria.")
+            
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             if not df_mes.empty:
@@ -262,7 +302,7 @@ if archivo_cargado is not None:
                 df_cc = df_mes[df_mes['Cliente'].isin(cuentas_clave)]
                 df_resto = df_mes[~df_mes['Cliente'].isin(cuentas_clave)].copy()
                 
-                st.markdown("#### CUENTAS CLAVE (7 o más Proyectos)")
+                st.markdown("#### CUENTAS CLAVE (7 o más Proyectos - Atención Integral)")
                 render_table_interactiva(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
                 st.divider()
 
@@ -286,7 +326,7 @@ if archivo_cargado is not None:
                 st.info("No hay proyectos con fecha de cierre para este mes.")
 
         # ==========================================
-        # GESTIÓN DE AGENDA Y MEMORÁNDUM
+        # PANEL LATERAL: PROGRAMACIÓN DE RUTA
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("Programación de Ruta")
@@ -309,21 +349,26 @@ if archivo_cargado is not None:
                 st.sidebar.success("¡Agendados con éxito!")
                 st.rerun()
 
-        with tab_agenda:
+        # ==========================================
+        # SECCIÓN 3: EJECUCIÓN (AGENDA Y MEMORÁNDUMS)
+        # ==========================================
+        with tab_ejecucion:
             st.markdown("### Tablero de Ejecución Diaria Multi-Cliente")
-            fecha_vista = st.date_input("Ver día:", pd.Timestamp.now().date())
+            fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date())
             df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
             
             if not df_dia.empty:
                 col_m1, col_m2 = st.columns(2)
-                col_m1.metric("Proyección USD del Día", f"${df_dia['Monto_USD'].sum():,.2f} USD")
-                col_m2.metric("Proyección MXN del Día", f"${df_dia['Monto_MXN'].sum():,.2f} MXN")
+                col_m1.metric("Valor USD del Día", f"${df_dia['Monto_USD'].sum():,.2f} USD")
+                col_m2.metric("Valor MXN del Día", f"${df_dia['Monto_MXN'].sum():,.2f} MXN")
                 
                 df_dia_show = df_dia[['Completado', 'Cliente', 'ID_Proyecto', 'Cotizacion', 'Tipo_Accion', 'Monto_USD', 'Monto_MXN']].copy()
                 st.data_editor(df_dia_show, hide_index=True, use_container_width=True, disabled=['Cliente', 'ID_Proyecto', 'Cotizacion', 'Tipo_Accion', 'Monto_USD', 'Monto_MXN'])
                 
                 st.divider()
                 st.markdown("### Memorándum Profesional")
+                st.caption("Selecciona una cuenta de tu agenda para generar su memorándum ejecutivo detallado.")
+                
                 clientes_agenda = df_dia['Cliente'].unique()
                 cliente_memo = st.selectbox("Generar memorándum para:", clientes_agenda)
                 
@@ -332,21 +377,21 @@ if archivo_cargado is not None:
                     suma_usd = df_memo['Monto_USD'].sum()
                     suma_mxn = df_memo['Monto_MXN'].sum()
                     
-                    st.markdown(f"**Cliente:** {cliente_memo}")
-                    st.markdown(f"**Valor en Discusión:** ${suma_usd:,.2f} USD | ${suma_mxn:,.2f} MXN")
-                    st.markdown("**Proyectos y Cotizaciones a Revisar:**")
+                    st.markdown(f"**Cliente / Planta:** {cliente_memo}")
+                    st.markdown(f"**Valor Total en Discusión:** ${suma_usd:,.2f} USD | ${suma_mxn:,.2f} MXN")
+                    st.markdown("**Proyectos y Cotizaciones Asociadas:**")
                     
                     for _, row in df_memo.iterrows():
                         valor_str = f"${row['Monto_USD']:,.2f} USD" if row['Monto_USD'] > 0 else f"${row['Monto_MXN']:,.2f} MXN"
-                        st.markdown(f"- **Proyecto {row['ID_Proyecto']} | Cotización: {row['Cotizacion']}**")
-                        st.markdown(f"  *Alcance:* {row['Descripcion']} (Valor: {valor_str})")
+                        st.markdown(f"- **Proyecto ID {row['ID_Proyecto']} | Cotización: {row['Cotizacion']}**")
+                        st.markdown(f"  *Alcance técnico:* {row['Descripcion']} (Valor: {valor_str})")
                         
                     st.markdown("---")
-                    st.markdown("*(Fin del Memorándum)*")
+                    st.markdown("*(Documento generado por MESS Servicios Metrológicos - Inteligencia Comercial)*")
             else:
-                st.info("Agenda libre. Utiliza el Centro de Ejecución para programar.")
+                st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar actividades.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
 else:
-    st.info("Sube el reporte comercial formato CSV (Plantilla Radar).")
+    st.info("Sube el reporte comercial formato CSV (Plantilla Radar) para iniciar.")
