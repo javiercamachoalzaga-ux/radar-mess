@@ -124,17 +124,12 @@ archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # LECTURA ROBUSTA INVISIBLE (Repara automáticamente los acentos y símbolos raros)
-        bytes_data = archivo_cargado.getvalue()
+        # LECTURA FORZADA LATIN1 (Solución directa a los acentos)
         try:
-            csv_text = bytes_data.decode('utf-8-sig')
-        except UnicodeDecodeError:
-            try:
-                csv_text = bytes_data.decode('latin-1')
-            except:
-                csv_text = bytes_data.decode('cp1252', errors='replace')
-                
-        df_raw = pd.read_csv(io.StringIO(csv_text))
+            df_raw = pd.read_csv(archivo_cargado, encoding='latin1')
+        except:
+            archivo_cargado.seek(0)
+            df_raw = pd.read_csv(archivo_cargado, encoding='utf-8')
 
         df_clean = pd.DataFrame()
 
@@ -344,7 +339,7 @@ if archivo_cargado is not None:
                     st.info("No se encontró información de Áreas.")
 
         # ==========================================
-        # PESTAÑA 2: CENTRO DE EJECUCIÓN (LÓGICA GLOBAL CORREGIDA)
+        # PESTAÑA 2: CENTRO DE EJECUCIÓN (TOP 10 DINÁMICO)
         # ==========================================
         lista_global_seleccionados = []
         
@@ -385,7 +380,7 @@ if archivo_cargado is not None:
                 df_mes_plan = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & 
                                  (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
                 
-                # REGLA 1: CUENTA CLAVE GLOBAL (Evaluamos a partir de TODO el DataFrame histórico, no solo del mes actual)
+                # REGLA 1: CUENTA CLAVE GLOBAL (Máximo volumen y peso histórico)
                 resumen_global = df.groupby('Cliente').agg({
                     'Cotizacion': 'nunique',
                     'Peso_Interno_Orden': 'sum'
@@ -395,7 +390,7 @@ if archivo_cargado is not None:
                 cliente_clave_top = resumen_global.iloc[0]['Cliente'] if not resumen_global.empty else ""
 
                 if not df_mes_plan.empty:
-                    # Extraemos los proyectos de este mes que le pertenecen a la Cuenta Clave Global
+                    # Extraemos los proyectos de este mes para la Cuenta Clave Global
                     df_cuenta_clave = df_mes_plan[df_mes_plan['Cliente'] == cliente_clave_top].copy()
                     df_remanente_1 = df_mes_plan[df_mes_plan['Cliente'] != cliente_clave_top].copy()
                     
@@ -403,26 +398,18 @@ if archivo_cargado is not None:
                     if not df_cuenta_clave.empty:
                         render_table_interactiva(df_cuenta_clave, "cc")
                     else:
-                        st.info(f"La Cuenta Clave de tu portafolio ({cliente_clave_top}) no tiene proyectos activos para cerrar en este mes específico.")
+                        st.info(f"La Cuenta Clave de tu portafolio ({cliente_clave_top}) no tiene proyectos activos para cerrar este mes.")
                         
                     st.divider()
 
-                    # REGLA 2: TOP 10 CORPORATIVO (Búsqueda por Substring para evitar vacíos)
-                    top_10_fijo = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
-                    
-                    # Removemos dinámicamente de la lista maestra la raíz del cliente clave, para no duplicarlo
-                    top_10_filtrado = [marca for marca in top_10_fijo if marca not in cliente_clave_top]
-                    
-                    def es_top_10(nombre_cliente):
-                        for marca in top_10_filtrado:
-                            if marca in nombre_cliente:
-                                return True
-                        return False
-                    
+                    # REGLA 2: TOP 10 DINÁMICO (Las siguientes 10 cuentas con mayor peso interno)
                     if not df_remanente_1.empty:
-                        df_remanente_1['Es_Top10'] = df_remanente_1['Cliente'].apply(es_top_10)
-                        df_top = df_remanente_1[df_remanente_1['Es_Top10']].copy()
-                        df_remanente_2 = df_remanente_1[~df_remanente_1['Es_Top10']].copy()
+                        resumen_top = df_remanente_1.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
+                        resumen_top = resumen_top.sort_values(by='Peso_Interno_Orden', ascending=False)
+                        top_10_clientes = resumen_top.head(10)['Cliente'].tolist()
+                        
+                        df_top = df_remanente_1[df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
+                        df_remanente_2 = df_remanente_1[~df_remanente_1['Cliente'].isin(top_10_clientes)].copy()
                     else:
                         df_top = pd.DataFrame()
                         df_remanente_2 = pd.DataFrame()
@@ -448,7 +435,7 @@ if archivo_cargado is not None:
                         with tab_p:
                             render_table_interactiva(df_datos[df_datos['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
 
-                    st.markdown("#### TOP 10 (Cuentas Estratégicas Corporativas)")
+                    st.markdown("#### TOP 10 (Dinámico: Principales Cuentas por Peso Financiero)")
                     if not df_top.empty: renderizar_subpestanas(df_top, "top")
                     else: st.info("Sin proyectos en segmento TOP 10 para este mes.")
                     
@@ -565,7 +552,6 @@ if archivo_cargado is not None:
                 cliente_ficha = st.selectbox("Seleccionar cuenta a gestionar:", clientes_dia_lista)
                 
                 if cliente_ficha:
-                    # Extraemos los proyectos del MES (tab_ejecucion) para la Minuta, no el histórico total
                     df_cliente_seleccion = df_mes_plan[df_mes_plan['Cliente'] == cliente_ficha]
                     
                     if df_cliente_seleccion.empty:
@@ -592,16 +578,11 @@ Asesor Comercial / Ejecutivo de Desarrollo de Negocios
 MESS Servicios Metrológicos"""
                             st.text_area("Copiable al portapapeles:", cuerpo_correo, height=250)
                         else:
-                            # REDISEÑO TOTAL DE LA MINUTA (Más funcional, menos robótica)
                             st.markdown("#### Minuta de Negociación Directiva")
-                            
                             st.info(f"**Cuenta Estratégica:** {cliente_ficha} | **Exposición Financiera del Mes:** ${suma_usd_cli:,.2f} USD / ${suma_mxn_cli:,.2f} MXN")
-                            
                             st.markdown("A continuación, se presenta la radiografía de los requerimientos activos para facilitar la gestión comercial en planta:")
                             
-                            # Agrupamos por Área para darle estructura lógica a la plática
                             areas_cliente = df_cliente_seleccion['Unidad_Presupuesto'].unique()
-                            
                             for area in areas_cliente:
                                 st.markdown(f"##### 📌 División: {area}")
                                 df_area = df_cliente_seleccion[df_cliente_seleccion['Unidad_Presupuesto'] == area]
