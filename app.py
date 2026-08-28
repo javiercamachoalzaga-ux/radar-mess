@@ -74,6 +74,11 @@ st.markdown("""
         color: #003a70 !important;
         font-weight: 600;
     }
+    
+    /* Ampliación de legibilidad para tablas */
+    .stDataFrame {
+        font-size: 14px !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -116,7 +121,7 @@ if archivo_cargado is not None:
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # 2. CONSOLIDACIÓN DE PROYECTOS (Sintaxis moderna con .ffill())
+        # 2. CONSOLIDACIÓN DE PROYECTOS
         df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
 
@@ -197,7 +202,7 @@ if archivo_cargado is not None:
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0) | (df['Cotizacion'] != "")]
 
-        df = df[df['Estatus'].str.contains('Proceso', case=False, na=False)].copy()
+        df = df[df['Estatus'].str.contains('PROCESO|PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)].copy()
         
         def categorizar_unidad(area):
             a = str(area).upper()
@@ -205,6 +210,16 @@ if archivo_cargado is not None:
             elif any(k in a for k in ["LABORATORIO", "CALIBRACIÓN", "SERVICIO", "DIMENSIONAL"]): return "LABORATORIOS"
             return "PRODUCTOS" 
         df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
+
+        # 7. CLASIFICACIÓN DE FASES (PIPELINE)
+        def clasificar_fase(estatus):
+            e = str(estatus).upper()
+            if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
+            elif 'NEGOCIACI' in e: return "3. Negociación"
+            elif 'COTIZACI' in e: return "2. Cotización"
+            elif 'PROPUESTA' in e: return "1. Propuesta"
+            else: return "5. En Proceso (Otros)"
+        df['Fase_Pipeline'] = df['Estatus'].apply(clasificar_fase)
 
         top_10_vip = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP AERO", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Clasificacion_VIP'] = df['Cliente'].apply(lambda c: "VIP" if c.upper() in top_10_vip else "Normal")
@@ -245,10 +260,11 @@ if archivo_cargado is not None:
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
         
-        tab_analisis, tab_implementacion, tab_ejecucion = st.tabs([
-            "1. Inteligencia Financiera (Análisis)", 
-            "2. Centro de Ejecución (Implementación)", 
-            "3. Agenda de Trabajo (Ejecución)"
+        tab_analisis, tab_implementacion, tab_ejecucion, tab_tiempo = st.tabs([
+            "1. Inteligencia Financiera", 
+            "2. Centro de Ejecución", 
+            "3. Agenda de Trabajo",
+            "4. Línea de Tiempo de Proyectos"
         ])
 
         # ==========================================
@@ -279,28 +295,51 @@ if archivo_cargado is not None:
             col_b3.metric("Productos (Meta: $45K USD)", f"${pipe_prod_usd:,.2f} USD", f"${pipe_prod_mxn:,.2f} MXN")
             
             st.divider()
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                st.markdown("#### Concentración de Capital en Cuentas VIP")
-                df_vip = df[df['Clasificacion_VIP'] == "VIP"]
-                if not df_vip.empty:
-                    st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum())
+            st.markdown("### 📊 Embudo de Ventas (Fases del Pipeline Vivo)")
+            df_pipeline = df.groupby('Fase_Pipeline').agg(
+                Num_Proyectos=('ID_Proyecto', 'nunique'),
+                Monto_USD=('Monto_USD', 'sum'),
+                Monto_MXN=('Monto_MXN', 'sum')
+            ).reset_index()
+            
+            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+            fases_core = ["1. Propuesta", "2. Cotización", "3. Negociación", "4. Esperando PO"]
+            columnas = [col_p1, col_p2, col_p3, col_p4]
+            
+            for col, fase in zip(columnas, fases_core):
+                data_fase = df_pipeline[df_pipeline['Fase_Pipeline'] == fase]
+                if not data_fase.empty:
+                    usd, mxn, proy = data_fase['Monto_USD'].iloc[0], data_fase['Monto_MXN'].iloc[0], data_fase['Num_Proyectos'].iloc[0]
                 else:
-                    st.info("Sin proyectos activos en cuentas VIP.")
-            with col_f2:
-                st.markdown("#### Distribución General por Área")
-                if not df.empty:
-                    st.bar_chart(df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum())
+                    usd, mxn, proy = 0.0, 0.0, 0
+                with col:
+                    st.metric(fase, f"{proy} Proyectos")
+                    st.caption(f"**USD:** ${usd:,.2f} | **MXN:** ${mxn:,.2f}")
+                    
+            st.divider()
+            
+            st.markdown("### 🏢 Concentración de Capital en Cuentas VIP")
+            df_vip = df[df['Clasificacion_VIP'] == "VIP"]
+            if not df_vip.empty:
+                # Expansión a full-width container para máxima legibilidad
+                st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum(), use_container_width=True, height=450)
+            else:
+                st.info("Sin proyectos activos en cuentas VIP.")
+                
+            st.markdown("### 📈 Distribución General por Área Comercial")
+            if not df.empty:
+                st.bar_chart(df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum(), use_container_width=True, height=450)
 
         # ==========================================
         # SECCIÓN 2: IMPLEMENTACIÓN DE ACCIÓN (CENTRO DE EJECUCIÓN)
         # ==========================================
         lista_global_seleccionados = []
+        
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
-                st.info("Sin proyectos en este segmento.")
+                st.info("Sin proyectos en esta unidad.")
                 return
-            df_mostrar = df_subset[['Cliente', 'ID_Proyecto', 'Cotizacion', 'Descripcion', 'Monto_USD', 'Monto_MXN', 'Unidad_Presupuesto']].copy()
+            df_mostrar = df_subset[['Cliente', 'ID_Proyecto', 'Fase_Pipeline', 'Cotizacion', 'Descripcion', 'Monto_USD', 'Monto_MXN']].copy()
             df_mostrar.insert(0, 'Seleccionar', False)
             
             df_editado = st.data_editor(
@@ -312,6 +351,7 @@ if archivo_cargado is not None:
                     "Monto_MXN": st.column_config.NumberColumn("Valor MXN", format="$%.2f", disabled=True),
                     "Cliente": st.column_config.TextColumn(disabled=True),
                     "ID_Proyecto": st.column_config.TextColumn("Proyecto", disabled=True),
+                    "Fase_Pipeline": st.column_config.TextColumn("Fase", disabled=True),
                     "Cotizacion": st.column_config.TextColumn("Cotización(es)", disabled=True),
                     "Descripcion": st.column_config.TextColumn("Descripción", disabled=True)
                 }
@@ -319,23 +359,27 @@ if archivo_cargado is not None:
             seleccion = df_editado[df_editado['Seleccionar'] == True]
             if not seleccion.empty: lista_global_seleccionados.append(seleccion)
 
+        def render_con_subpestanas(df_segmento, prefijo):
+            t1, t2, t3 = st.tabs(["⚙️ Alta Gama", "🔬 Laboratorios", "📦 Productos"])
+            with t1: render_table_interactiva(df_segmento[df_segmento['Unidad_Presupuesto'] == 'ALTA GAMA'], f"{prefijo}_ag")
+            with t2: render_table_interactiva(df_segmento[df_segmento['Unidad_Presupuesto'] == 'LABORATORIOS'], f"{prefijo}_lb")
+            with t3: render_table_interactiva(df_segmento[df_segmento['Unidad_Presupuesto'] == 'PRODUCTOS'], f"{prefijo}_pr")
+
         with tab_implementacion:
             st.markdown("### Centro de Control de Proyectos Vivos")
-            st.caption("Visualiza tus proyectos rezagados (arrastre) y los cierres programados para el mes corriente.")
+            st.caption("Visualiza tus proyectos rezagados (arrastre) y los cierres programados para el mes corriente divididos por unidad de negocio.")
             
-            # 1. SEGMENTO NUEVO: PROYECTOS DE ARRASTRE / REZAGADOS (Fecha de creación < inicio del mes actual)
             inicio_mes_actual = pd.Timestamp(year=anio_actual, month=mes_actual, day=1)
             df_rezagados = df[df['Fecha_Creacion_DT'] < inicio_mes_actual].copy()
             
             st.markdown("#### 🔄 Proyectos de Arrastre / Rezagados (Creados antes de este mes y aún en proceso)")
             if not df_rezagados.empty:
-                render_table_interactiva(df_rezagados.sort_values('Peso_Interno_Orden', ascending=False), "rezagados")
+                render_con_subpestanas(df_rezagados.sort_values('Peso_Interno_Orden', ascending=False), "rezagados")
             else:
                 st.success("¡Excelente! No tienes proyectos rezagados de meses anteriores en proceso.")
             
             st.divider()
 
-            # 2. SEGMENTO MES CORRIENTE
             st.markdown("#### 🎯 Estructura de Cierre del Mes Corriente")
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
@@ -349,7 +393,7 @@ if archivo_cargado is not None:
                 df_resto = df_mes[~df_mes['Cliente'].isin(cuentas_clave)].copy()
                 
                 st.markdown("##### Cuentas Clave (7 o más Proyectos - Atención Integral)")
-                render_table_interactiva(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
+                render_con_subpestanas(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
                 st.divider()
 
                 def clasificar(fila):
@@ -361,13 +405,13 @@ if archivo_cargado is not None:
                     df_resto['Nivel'] = df_resto.apply(clasificar, axis=1)
                     
                     st.markdown("##### Prioridad TOP (Alto Valor o VIP)")
-                    render_table_interactiva(df_resto[df_resto['Nivel'] == "TOP"].sort_values('Peso_Interno_Orden', ascending=False), "top")
+                    render_con_subpestanas(df_resto[df_resto['Nivel'] == "TOP"].sort_values('Peso_Interno_Orden', ascending=False), "top")
                     
                     st.markdown("##### Prioridad 80/20 (Maduración)")
-                    render_table_interactiva(df_resto[df_resto['Nivel'] == "80/20"].sort_values('Peso_Interno_Orden', ascending=False), "8020")
+                    render_con_subpestanas(df_resto[df_resto['Nivel'] == "80/20"].sort_values('Peso_Interno_Orden', ascending=False), "8020")
                     
                     st.markdown("##### Prioridad DESARROLLO")
-                    render_table_interactiva(df_resto[df_resto['Nivel'] == "DESARROLLO"].sort_values('Peso_Interno_Orden', ascending=False), "des")
+                    render_con_subpestanas(df_resto[df_resto['Nivel'] == "DESARROLLO"].sort_values('Peso_Interno_Orden', ascending=False), "des")
             else:
                 st.info("No hay proyectos con fecha de cierre programada para este mes.")
 
@@ -386,10 +430,11 @@ if archivo_cargado is not None:
                 
                 if st.button("Agendar Seleccionados"):
                     for _, row in df_final.iterrows():
+                        unidad = row.get('Unidad_Presupuesto', "Sin Área")
                         nueva_tarea = pd.DataFrame([{
                             'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
                             'Fecha': fecha_lote, 'Cliente': row['Cliente'], 'ID_Proyecto': row['ID_Proyecto'],
-                            'Cotizacion': row['Cotizacion'], 'Unidad_Presupuesto': row['Unidad_Presupuesto'],
+                            'Cotizacion': row['Cotizacion'], 'Unidad_Presupuesto': unidad,
                             'Monto_USD': row['Monto_USD'], 'Monto_MXN': row['Monto_MXN'],
                             'Tipo_Accion': accion_lote, 'Descripcion': row['Descripcion'], 'Completado': False
                         }])
@@ -459,6 +504,46 @@ if archivo_cargado is not None:
                     st.markdown("*(Documento ejecutivo generado por MESS Servicios Metrológicos)*")
             else:
                 st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar cuentas.")
+
+        # ==========================================
+        # SECCIÓN 4: LÍNEA DE TIEMPO DE PROYECTOS
+        # ==========================================
+        with tab_tiempo:
+            st.markdown("### ⏱️ Línea de Tiempo y Antigüedad de Proyectos")
+            st.caption("Seguimiento del ciclo de vida. Los proyectos con más de 30 días desde su creación se resaltan en rojo para priorizar su atención.")
+            
+            if not df.empty:
+                df_time = df[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha_Creacion_DT', 'Fecha_Cierre_DT', 'Monto_USD', 'Monto_MXN']].copy()
+                
+                # Cálculo de días activos
+                hoy = pd.Timestamp.now()
+                df_time['Días_Activo'] = (hoy - df_time['Fecha_Creacion_DT']).dt.days
+                
+                # Formateo de fechas para lectura visual
+                df_time['Fecha de Inicio'] = df_time['Fecha_Creacion_DT'].dt.strftime('%Y-%m-%d')
+                df_time['Fecha de Cierre'] = df_time['Fecha_Cierre_DT'].dt.strftime('%Y-%m-%d')
+                
+                # Selección final de columnas para el dataframe
+                df_mostrar_tiempo = df_time[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha de Inicio', 'Fecha de Cierre', 'Días_Activo', 'Monto_USD', 'Monto_MXN']].copy()
+                df_mostrar_tiempo.sort_values(by='Días_Activo', ascending=False, inplace=True)
+                
+                # Función de estilo para resaltar en rojo si supera 30 días
+                def highlight_retraso(row):
+                    if pd.notnull(row['Días_Activo']) and row['Días_Activo'] > 30:
+                        return ['background-color: #ffcccc; color: #900000'] * len(row)
+                    return [''] * len(row)
+                
+                st.dataframe(
+                    df_mostrar_tiempo.style.apply(highlight_retraso, axis=1).format({
+                        'Monto_USD': '${:,.2f}',
+                        'Monto_MXN': '${:,.2f}',
+                        'Días_Activo': '{:.0f}'
+                    }),
+                    use_container_width=True,
+                    height=650
+                )
+            else:
+                st.info("Sin proyectos disponibles para generar la línea de tiempo.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
