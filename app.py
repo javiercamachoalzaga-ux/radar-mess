@@ -18,7 +18,6 @@ if 'agenda_radar' not in st.session_state:
 if 'clear_key' not in st.session_state:
     st.session_state.clear_key = 0
 
-# EL NUEVO CARRITO DE PLANEACIÓN (Evita la amnesia de Streamlit)
 if 'carrito' not in st.session_state:
     st.session_state.carrito = set()
 
@@ -65,7 +64,6 @@ if archivo_cargado is not None:
     try:
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
         
-        # 1. BÚSQUEDA DE COLUMNAS
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_raw.columns:
@@ -82,13 +80,12 @@ if archivo_cargado is not None:
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
+        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # 2. CONSOLIDACIÓN DE PROYECTOS
         df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
 
-        # 3. PLANCHADO ORTOGRÁFICO
         def limpiar_ortografia(texto):
             if pd.isna(texto): return ""
             texto = str(texto)
@@ -113,10 +110,9 @@ if archivo_cargado is not None:
                 else: resultado.append(p)
             return " ".join(resultado)
 
-        for col in ['Cliente', 'Descripcion', 'Area', 'Estatus']:
+        for col in ['Cliente', 'Descripcion', 'Area', 'Estatus', 'Etapa']:
             df_clean[col] = df_clean[col].apply(limpiar_ortografia)
 
-        # 4. HOMOLOGACIÓN DE CLIENTES
         mapeo_clientes = {
             "SAFRAN": "SAFRAN", "ITP": "ITP AERO", "DANA": "DANA", "BROSE": "BROSE", 
             "CNH": "CNH INDUSTRIAL", "BOMBARDIER": "BOMBARDIER", "TREMEC": "TREMEC", 
@@ -133,7 +129,6 @@ if archivo_cargado is not None:
             lambda x: x.replace("", np.nan).ffill().bfill()
         )
 
-        # 5. CÁLCULO DE MONTOS POR RENGLÓN
         def extraer_numero(val_str):
             val_str = str(val_str).upper()
             if val_str == 'NAN' or val_str.strip() == '': return 0.0
@@ -149,7 +144,6 @@ if archivo_cargado is not None:
         df_clean['Monto_MXN'] = monto_mxn
         df_clean['Monto_USD'] = monto_usd
 
-        # 6. AGRUPACIÓN DEFINITIVA POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
             'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
@@ -157,6 +151,7 @@ if archivo_cargado is not None:
             'Fecha_Creacion': 'first',
             'Fecha_Cierre': 'first',
             'Estatus': 'first',
+            'Etapa': 'first',
             'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
             'Monto_MXN': 'sum',
             'Monto_USD': 'sum'
@@ -174,15 +169,15 @@ if archivo_cargado is not None:
             return "PRODUCTOS" 
         df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
 
-        # 7. CLASIFICACIÓN DE FASES (PIPELINE)
-        def clasificar_fase(estatus):
-            e = str(estatus).upper()
+        # REDIRECCIÓN DEL MOTOR DE PIPELINE A LA COLUMNA "ETAPA"
+        def clasificar_fase(etapa):
+            e = str(etapa).upper()
             if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
             elif 'NEGOCIACI' in e: return "3. Negociación"
             elif 'COTIZACI' in e: return "2. Cotización"
             elif 'PROPUESTA' in e: return "1. Propuesta"
             else: return "5. En Proceso (Otros)"
-        df['Fase_Pipeline'] = df['Estatus'].apply(clasificar_fase)
+        df['Fase_Pipeline'] = df['Etapa'].apply(clasificar_fase)
 
         top_10_vip = ["BOMBARDIER", "BROSE", "CNH", "DANA", "ITP AERO", "SAFRAN", "SIEMENS", "STEERINGMEX", "TREMEC", "WATLOW"]
         df['Clasificacion_VIP'] = df['Cliente'].apply(lambda c: "VIP" if c.upper() in top_10_vip else "Normal")
@@ -191,9 +186,6 @@ if archivo_cargado is not None:
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
 
-        # ==========================================
-        # FILTROS TÁCTICOS (BARRA LATERAL)
-        # ==========================================
         st.sidebar.divider()
         st.sidebar.header("Filtros Tácticos")
         
@@ -217,9 +209,6 @@ if archivo_cargado is not None:
 
         contenedor_agenda_lateral = st.sidebar.container()
 
-        # ==========================================
-        # INTERFAZ Y PESTAÑAS MAESTRAS
-        # ==========================================
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
         
@@ -230,25 +219,16 @@ if archivo_cargado is not None:
             "4. Línea de Tiempo de Proyectos"
         ])
 
-        # ==========================================
-        # SECCIÓN 1: ANÁLISIS (INTELIGENCIA FINANCIERA)
-        # ==========================================
         with tab_analisis:
             st.markdown("### Dashboard de Cumplimiento y Presupuesto Mensual")
             st.caption("Seguimiento del pipeline comercial y cumplimiento de metas por unidad de negocio.")
-            
-            BUDGET_ALTA_GAMA = 28000.00
-            BUDGET_LABORATORIOS = 15000.00
-            BUDGET_PRODUCTOS = 45000.00
             
             df_mes_tracker = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             pipe_alta_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'ALTA GAMA']['Monto_USD'].sum()
             pipe_alta_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'ALTA GAMA']['Monto_MXN'].sum()
-            
             pipe_labs_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'LABORATORIOS']['Monto_USD'].sum()
             pipe_labs_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'LABORATORIOS']['Monto_MXN'].sum()
-            
             pipe_prod_usd = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'PRODUCTOS']['Monto_USD'].sum()
             pipe_prod_mxn = df_mes_tracker[df_mes_tracker['Unidad_Presupuesto'] == 'PRODUCTOS']['Monto_MXN'].sum()
             
@@ -292,15 +272,10 @@ if archivo_cargado is not None:
             if not df.empty:
                 st.bar_chart(df.groupby('Area')[['Monto_MXN', 'Monto_USD']].sum(), use_container_width=True, height=450)
 
-        # ==========================================
-        # SECCIÓN 2: IMPLEMENTACIÓN DE ACCIÓN (CENTRO DE EJECUCIÓN)
-        # ==========================================
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
                 st.info("Sin proyectos en esta unidad.")
                 return
-            
-            # Sincronización visual con el Carrito de Sesión
             df_mostrar = df_subset[['ID_Proyecto', 'Cliente', 'Fase_Pipeline', 'Cotizacion', 'Descripcion', 'Monto_USD', 'Monto_MXN']].copy()
             df_mostrar.insert(0, 'Seleccionar', df_mostrar['ID_Proyecto'].apply(lambda x: x in st.session_state.carrito))
             
@@ -319,10 +294,8 @@ if archivo_cargado is not None:
                 }
             )
             
-            # Actualización del Carrito Mágico
             ids_en_vista = set(df_mostrar['ID_Proyecto'])
             ids_seleccionados = set(df_editado[df_editado['Seleccionar']]['ID_Proyecto'])
-            # Retiramos del carrito los de esta vista primero, y reinyectamos los que estén marcados
             st.session_state.carrito = (st.session_state.carrito - ids_en_vista) | ids_seleccionados
 
         def render_con_subpestanas(df_segmento, prefijo):
@@ -333,12 +306,12 @@ if archivo_cargado is not None:
 
         with tab_implementacion:
             st.markdown("### Centro de Control de Proyectos Vivos")
-            st.caption("Visualiza tus proyectos rezagados (arrastre) y los cierres programados para el mes corriente divididos por unidad de negocio.")
+            st.caption("Visualiza tus proyectos rezagados y los cierres programados para el mes corriente.")
             
             inicio_mes_actual = pd.Timestamp(year=anio_actual, month=mes_actual, day=1)
             df_rezagados = df[df['Fecha_Creacion_DT'] < inicio_mes_actual].copy()
             
-            st.markdown("#### 🔄 Proyectos de Arrastre / Rezagados (Creados antes de este mes y aún en proceso)")
+            st.markdown("#### 🔄 Proyectos de Arrastre / Rezagados")
             if not df_rezagados.empty:
                 render_con_subpestanas(df_rezagados.sort_values('Peso_Interno_Orden', ascending=False), "rezagados")
             else:
@@ -350,9 +323,6 @@ if archivo_cargado is not None:
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             if not df_mes.empty:
-                # ========================================================
-                # NUEVA LÓGICA DE CUENTA CLAVE (Prioridad Absoluta por Valor)
-                # ========================================================
                 resumen_valor = df_mes.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
                 resumen_valor = resumen_valor.sort_values(by='Peso_Interno_Orden', ascending=False)
                 
@@ -360,7 +330,7 @@ if archivo_cargado is not None:
                 df_cc = df_mes[df_mes['Cliente'] == cliente_clave].copy()
                 df_resto = df_mes[df_mes['Cliente'] != cliente_clave].copy()
                 
-                st.markdown(f"##### 👑 CUENTA CLAVE DEL MES: {cliente_clave} (Mayor Valor Financiero)")
+                st.markdown(f"##### 👑 CUENTA CLAVE DEL MES: {cliente_clave}")
                 render_con_subpestanas(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
                 st.divider()
 
@@ -383,9 +353,6 @@ if archivo_cargado is not None:
             else:
                 st.info("No hay proyectos con fecha de cierre programada para este mes.")
 
-        # ==========================================
-        # MOTOR DE AGENDA EN COLUMNA IZQUIERDA (CARRITO)
-        # ==========================================
         with contenedor_agenda_lateral:
             st.header("🛒 Planeación de Ruta")
             if st.session_state.carrito:
@@ -408,17 +375,13 @@ if archivo_cargado is not None:
                         }])
                         st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
                     
-                    # Limpieza total del carrito
                     st.session_state.carrito = set()
                     st.session_state.clear_key += 1
                     st.success("¡Actividades agendadas con éxito!")
                     st.rerun()
             else:
-                st.info("Navega por las pestañas y selecciona los proyectos que deseas agendar. No se borrarán al cambiar de pestaña.")
+                st.info("Navega por las pestañas y selecciona los proyectos que deseas agendar.")
 
-        # ==========================================
-        # SECCIÓN 3: EJECUCIÓN (AGENDA Y MEMORÁNDUMS)
-        # ==========================================
         with tab_ejecucion:
             st.markdown("### Tablero de Ejecución Diaria Multi-Cliente")
             fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date(), key="vista_fecha_agenda")
@@ -452,7 +415,6 @@ if archivo_cargado is not None:
                 
                 st.divider()
                 st.markdown("### Memorándum Profesional de Visita o Llamada")
-                st.caption("Selecciona una cuenta de tu agenda del día para generar su memorándum detallado con número de cotización.")
                 
                 clientes_agenda = df_dia['Cliente'].unique().tolist()
                 cliente_memo = st.selectbox("Generar memorándum para:", clientes_agenda)
@@ -476,9 +438,6 @@ if archivo_cargado is not None:
             else:
                 st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar cuentas.")
 
-        # ==========================================
-        # SECCIÓN 4: LÍNEA DE TIEMPO DE PROYECTOS
-        # ==========================================
         with tab_tiempo:
             st.markdown("### ⏱️ Línea de Tiempo y Antigüedad de Proyectos")
             st.caption("Seguimiento del ciclo de vida. Los proyectos con más de 30 días desde su creación se resaltan en rojo para priorizar su atención.")
