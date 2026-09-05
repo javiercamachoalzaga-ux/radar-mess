@@ -169,7 +169,6 @@ if archivo_cargado is not None:
             return "PRODUCTOS" 
         df['Unidad_Presupuesto'] = df['Area'].apply(categorizar_unidad)
 
-        # REDIRECCIÓN DEL MOTOR DE PIPELINE A LA COLUMNA "ETAPA"
         def clasificar_fase(etapa):
             e = str(etapa).upper()
             if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
@@ -212,11 +211,10 @@ if archivo_cargado is not None:
         mes_actual = pd.Timestamp.now().month
         anio_actual = pd.Timestamp.now().year
         
-        tab_analisis, tab_implementacion, tab_ejecucion, tab_tiempo = st.tabs([
+        tab_analisis, tab_implementacion, tab_ejecucion = st.tabs([
             "1. Inteligencia Financiera", 
             "2. Centro de Ejecución", 
-            "3. Agenda de Trabajo",
-            "4. Línea de Tiempo de Proyectos"
+            "3. Agenda de Trabajo"
         ])
 
         with tab_analisis:
@@ -437,39 +435,6 @@ if archivo_cargado is not None:
                     st.markdown("*(Documento ejecutivo generado por MESS Servicios Metrológicos)*")
             else:
                 st.info("Agenda libre para este día. Utiliza el Centro de Ejecución para programar cuentas.")
-
-        with tab_tiempo:
-            st.markdown("### ⏱️ Línea de Tiempo y Antigüedad de Proyectos")
-            st.caption("Seguimiento del ciclo de vida. Los proyectos con más de 30 días desde su creación se resaltan en rojo para priorizar su atención.")
-            
-            if not df.empty:
-                df_time = df[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha_Creacion_DT', 'Fecha_Cierre_DT', 'Monto_USD', 'Monto_MXN']].copy()
-                
-                hoy = pd.Timestamp.now()
-                df_time['Días_Activo'] = (hoy - df_time['Fecha_Creacion_DT']).dt.days
-                
-                df_time['Fecha de Inicio'] = df_time['Fecha_Creacion_DT'].dt.strftime('%Y-%m-%d')
-                df_time['Fecha de Cierre'] = df_time['Fecha_Cierre_DT'].dt.strftime('%Y-%m-%d')
-                
-                df_mostrar_tiempo = df_time[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha de Inicio', 'Fecha de Cierre', 'Días_Activo', 'Monto_USD', 'Monto_MXN']].copy()
-                df_mostrar_tiempo.sort_values(by='Días_Activo', ascending=False, inplace=True)
-                
-                def highlight_retraso(row):
-                    if pd.notnull(row['Días_Activo']) and row['Días_Activo'] > 30:
-                        return ['background-color: #ffcccc; color: #900000'] * len(row)
-                    return [''] * len(row)
-                
-                st.dataframe(
-                    df_mostrar_tiempo.style.apply(highlight_retraso, axis=1).format({
-                        'Monto_USD': '${:,.2f}',
-                        'Monto_MXN': '${:,.2f}',
-                        'Días_Activo': '{:.0f}'
-                    }),
-                    use_container_width=True,
-                    height=650
-                )
-            else:
-                st.info("Sin proyectos disponibles para generar la línea de tiempo.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
