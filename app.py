@@ -7,7 +7,7 @@ import re
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
 
 # ==========================================
-# INICIALIZACIÓN DE MEMORIA PARA AGENDA
+# INICIALIZACIÓN DE MEMORIA (AGENDA Y CARRITO)
 # ==========================================
 if 'agenda_radar' not in st.session_state:
     st.session_state.agenda_radar = pd.DataFrame(columns=[
@@ -18,67 +18,30 @@ if 'agenda_radar' not in st.session_state:
 if 'clear_key' not in st.session_state:
     st.session_state.clear_key = 0
 
+# EL NUEVO CARRITO DE PLANEACIÓN (Evita la amnesia de Streamlit)
+if 'carrito' not in st.session_state:
+    st.session_state.carrito = set()
+
 # --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
     
-    html, body, [class*="css"] { 
-        font-family: 'Montserrat', sans-serif !important; 
-    }
-    
-    .titulo-radar {
-        font-size: 42px; 
-        font-weight: 900;
-        color: #003a70;
-        margin-bottom: -5px;
-        letter-spacing: -1px;
-        text-transform: uppercase;
-    }
-    .subtitulo { 
-        font-size: 16px; 
-        color: #555555; 
-        margin-bottom: 30px; 
-        font-weight: 600; 
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-    }
+    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
+    .titulo-radar { font-size: 42px; font-weight: 900; color: #003a70; margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
+    .subtitulo { font-size: 16px; color: #555555; margin-bottom: 30px; font-weight: 600; text-transform: uppercase; }
     
     div[data-testid="metric-container"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 15px 20px;
-        border-radius: 8px;
-        border-left: 5px solid #003a70;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px 20px; border-radius: 8px;
+        border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
+    div[data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 700 !important; color: #7f8c8d !important; text-transform: uppercase; }
+    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #2c3e50 !important; }
     
-    div[data-testid="stMetricLabel"] {
-        font-size: 13px !important;
-        font-weight: 700 !important;
-        color: #7f8c8d !important;
-        text-transform: uppercase;
-    }
+    [data-testid="stSidebar"] { background-color: #f4f6f7 !important; border-right: 1px solid #e0e0e0; }
+    [data-testid="stSidebar"] * { color: #003a70 !important; font-weight: 600; }
     
-    div[data-testid="stMetricValue"] {
-        font-size: 26px !important;
-        font-weight: 800 !important;
-        color: #2c3e50 !important;
-    }
-    
-    [data-testid="stSidebar"] {
-        background-color: #f4f6f7 !important;
-        border-right: 1px solid #e0e0e0;
-    }
-    [data-testid="stSidebar"] * {
-        color: #003a70 !important;
-        font-weight: 600;
-    }
-    
-    /* Ampliación de legibilidad para tablas */
-    .stDataFrame {
-        font-size: 14px !important;
-    }
+    .stDataFrame { font-size: 14px !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -321,7 +284,6 @@ if archivo_cargado is not None:
             st.markdown("### 🏢 Concentración de Capital en Cuentas VIP")
             df_vip = df[df['Clasificacion_VIP'] == "VIP"]
             if not df_vip.empty:
-                # Expansión a full-width container para máxima legibilidad
                 st.bar_chart(df_vip.groupby('Cliente')[['Monto_MXN', 'Monto_USD']].sum(), use_container_width=True, height=450)
             else:
                 st.info("Sin proyectos activos en cuentas VIP.")
@@ -333,14 +295,14 @@ if archivo_cargado is not None:
         # ==========================================
         # SECCIÓN 2: IMPLEMENTACIÓN DE ACCIÓN (CENTRO DE EJECUCIÓN)
         # ==========================================
-        lista_global_seleccionados = []
-        
         def render_table_interactiva(df_subset, sufijo_clave):
             if df_subset.empty:
                 st.info("Sin proyectos en esta unidad.")
                 return
-            df_mostrar = df_subset[['Cliente', 'ID_Proyecto', 'Fase_Pipeline', 'Cotizacion', 'Descripcion', 'Monto_USD', 'Monto_MXN']].copy()
-            df_mostrar.insert(0, 'Seleccionar', False)
+            
+            # Sincronización visual con el Carrito de Sesión
+            df_mostrar = df_subset[['ID_Proyecto', 'Cliente', 'Fase_Pipeline', 'Cotizacion', 'Descripcion', 'Monto_USD', 'Monto_MXN']].copy()
+            df_mostrar.insert(0, 'Seleccionar', df_mostrar['ID_Proyecto'].apply(lambda x: x in st.session_state.carrito))
             
             df_editado = st.data_editor(
                 df_mostrar, hide_index=True, use_container_width=True,
@@ -356,8 +318,12 @@ if archivo_cargado is not None:
                     "Descripcion": st.column_config.TextColumn("Descripción", disabled=True)
                 }
             )
-            seleccion = df_editado[df_editado['Seleccionar'] == True]
-            if not seleccion.empty: lista_global_seleccionados.append(seleccion)
+            
+            # Actualización del Carrito Mágico
+            ids_en_vista = set(df_mostrar['ID_Proyecto'])
+            ids_seleccionados = set(df_editado[df_editado['Seleccionar']]['ID_Proyecto'])
+            # Retiramos del carrito los de esta vista primero, y reinyectamos los que estén marcados
+            st.session_state.carrito = (st.session_state.carrito - ids_en_vista) | ids_seleccionados
 
         def render_con_subpestanas(df_segmento, prefijo):
             t1, t2, t3 = st.tabs(["⚙️ Alta Gama", "🔬 Laboratorios", "📦 Productos"])
@@ -384,15 +350,17 @@ if archivo_cargado is not None:
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)].copy()
             
             if not df_mes.empty:
-                conteo_proyectos = df_mes.groupby('Cliente')['ID_Proyecto'].nunique().reset_index()
-                conteo_proyectos.rename(columns={'ID_Proyecto': 'Num_Proyectos'}, inplace=True)
-                df_mes = pd.merge(df_mes, conteo_proyectos, on='Cliente', how='left')
+                # ========================================================
+                # NUEVA LÓGICA DE CUENTA CLAVE (Prioridad Absoluta por Valor)
+                # ========================================================
+                resumen_valor = df_mes.groupby('Cliente')['Peso_Interno_Orden'].sum().reset_index()
+                resumen_valor = resumen_valor.sort_values(by='Peso_Interno_Orden', ascending=False)
                 
-                cuentas_clave = df_mes[df_mes['Num_Proyectos'] >= 7]['Cliente'].unique()
-                df_cc = df_mes[df_mes['Cliente'].isin(cuentas_clave)]
-                df_resto = df_mes[~df_mes['Cliente'].isin(cuentas_clave)].copy()
+                cliente_clave = resumen_valor.iloc[0]['Cliente'] if not resumen_valor.empty else ""
+                df_cc = df_mes[df_mes['Cliente'] == cliente_clave].copy()
+                df_resto = df_mes[df_mes['Cliente'] != cliente_clave].copy()
                 
-                st.markdown("##### Cuentas Clave (7 o más Proyectos - Atención Integral)")
+                st.markdown(f"##### 👑 CUENTA CLAVE DEL MES: {cliente_clave} (Mayor Valor Financiero)")
                 render_con_subpestanas(df_cc.sort_values('Peso_Interno_Orden', ascending=False), "cc")
                 st.divider()
 
@@ -416,20 +384,20 @@ if archivo_cargado is not None:
                 st.info("No hay proyectos con fecha de cierre programada para este mes.")
 
         # ==========================================
-        # MOTOR DE AGENDA EN COLUMNA IZQUIERDA (SIDEBAR)
+        # MOTOR DE AGENDA EN COLUMNA IZQUIERDA (CARRITO)
         # ==========================================
         with contenedor_agenda_lateral:
-            st.header("Programación de Ruta")
-            if lista_global_seleccionados:
-                df_final = pd.concat(lista_global_seleccionados, ignore_index=True)
-                total_sel = len(df_final)
-                st.info(f"Proyectos seleccionados: {total_sel}")
+            st.header("🛒 Planeación de Ruta")
+            if st.session_state.carrito:
+                st.info(f"Proyectos en carrito listos para agendar: {len(st.session_state.carrito)}")
+                
+                df_carrito = df[df['ID_Proyecto'].isin(st.session_state.carrito)]
                 
                 accion_lote = st.selectbox("Acción a ejecutar:", ["Visita Presencial", "Llamada Consultiva", "Correo", "Cierre y Negociación"])
                 fecha_lote = st.date_input("Fecha programada:", pd.Timestamp.now().date())
                 
-                if st.button("Agendar Seleccionados"):
-                    for _, row in df_final.iterrows():
+                if st.button("Agendar y Limpiar Carrito"):
+                    for _, row in df_carrito.iterrows():
                         unidad = row.get('Unidad_Presupuesto', "Sin Área")
                         nueva_tarea = pd.DataFrame([{
                             'ID_Tarea': len(st.session_state.agenda_radar) + np.random.randint(1, 10000),
@@ -439,11 +407,14 @@ if archivo_cargado is not None:
                             'Tipo_Accion': accion_lote, 'Descripcion': row['Descripcion'], 'Completado': False
                         }])
                         st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
+                    
+                    # Limpieza total del carrito
+                    st.session_state.carrito = set()
                     st.session_state.clear_key += 1
                     st.success("¡Actividades agendadas con éxito!")
                     st.rerun()
             else:
-                st.info("Selecciona uno o más proyectos en el Centro de Ejecución para programarlos.")
+                st.info("Navega por las pestañas y selecciona los proyectos que deseas agendar. No se borrarán al cambiar de pestaña.")
 
         # ==========================================
         # SECCIÓN 3: EJECUCIÓN (AGENDA Y MEMORÁNDUMS)
@@ -515,19 +486,15 @@ if archivo_cargado is not None:
             if not df.empty:
                 df_time = df[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha_Creacion_DT', 'Fecha_Cierre_DT', 'Monto_USD', 'Monto_MXN']].copy()
                 
-                # Cálculo de días activos
                 hoy = pd.Timestamp.now()
                 df_time['Días_Activo'] = (hoy - df_time['Fecha_Creacion_DT']).dt.days
                 
-                # Formateo de fechas para lectura visual
                 df_time['Fecha de Inicio'] = df_time['Fecha_Creacion_DT'].dt.strftime('%Y-%m-%d')
                 df_time['Fecha de Cierre'] = df_time['Fecha_Cierre_DT'].dt.strftime('%Y-%m-%d')
                 
-                # Selección final de columnas para el dataframe
                 df_mostrar_tiempo = df_time[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Fase_Pipeline', 'Fecha de Inicio', 'Fecha de Cierre', 'Días_Activo', 'Monto_USD', 'Monto_MXN']].copy()
                 df_mostrar_tiempo.sort_values(by='Días_Activo', ascending=False, inplace=True)
                 
-                # Función de estilo para resaltar en rojo si supera 30 días
                 def highlight_retraso(row):
                     if pd.notnull(row['Días_Activo']) and row['Días_Activo'] > 30:
                         return ['background-color: #ffcccc; color: #900000'] * len(row)
