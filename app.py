@@ -197,48 +197,68 @@ if archivo_cargado is not None:
             
             st.divider()
             
-            # GRÁFICOS GRANDES EN BLOQUES INDIVIDUALES
+            # SELECTOR GLOBAL DE MONEDA PARA LOS GRÁFICOS
+            col_sel1, col_sel2 = st.columns([1, 3])
+            with col_sel1:
+                moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
             
-            st.markdown("#### Forecast por Área (Basado en la plantilla de SCOTT)")
-            df_areas = df.groupby('Area')['Monto_USD'].sum().reset_index()
+            col_val = 'Monto_USD' if moneda_sel == "USD ($)" else 'Monto_MXN'
+            simbolo_moneda = '$,.2f'
+            
+            st.divider()
+            
+            # GRÁFICO 1: ÁREAS OFICIALES
+            st.markdown(f"#### Forecast por Área Oficial ({moneda_sel})")
+            df_areas = df.groupby('Area')[col_val].sum().reset_index()
+            df_areas = df_areas[df_areas[col_val] > 0] 
+            
             grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
-                x=alt.X('Monto_USD', title='Valor USD ($)'),
-                y=alt.Y('Area', sort='-x', title='Área Oficial'),
-                tooltip=['Area', alt.Tooltip('Monto_USD', format='$,.2f')]
+                x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                y=alt.Y('Area', sort='-x', title='Área Oficial', axis=alt.Axis(labelLimit=0)),
+                tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
             ).properties(height=450)
             st.altair_chart(grafico_areas, use_container_width=True)
 
             st.divider()
 
-            st.markdown("#### Salud del Embudo por Fase")
-            df_graf_fases = df.groupby('Fase_Pipeline')['Monto_USD'].sum().reset_index()
+            # GRÁFICO 2: FASES DEL EMBUDO
+            st.markdown(f"#### Salud del Embudo por Fase ({moneda_sel})")
+            df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
+            df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
+            
             grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
-                x=alt.X('Fase_Pipeline', title='Etapa CRM'),
-                y=alt.Y('Monto_USD', title='Valor USD ($)'),
-                tooltip=['Fase_Pipeline', alt.Tooltip('Monto_USD', format='$,.2f')]
-            ).properties(height=450)
+                x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                y=alt.Y('Fase_Pipeline', sort='-x', title='Etapa CRM', axis=alt.Axis(labelLimit=0)),
+                tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
+            ).properties(height=400)
             st.altair_chart(grafico_barras, use_container_width=True)
             
             st.divider()
 
-            st.markdown("#### Composición por Pilar Estratégico")
-            df_graf_pilares = df.groupby('Pilar_Estrategico')['Monto_USD'].sum().reset_index()
+            # GRÁFICO 3: PILARES ESTRATÉGICOS
+            st.markdown(f"#### Composición por Pilar Estratégico ({moneda_sel})")
+            df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
+            df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
+            
             grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=80).encode(
-                theta=alt.Theta(field="Monto_USD", type="quantitative"),
-                color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom")),
-                tooltip=['Pilar_Estrategico', alt.Tooltip('Monto_USD', format='$,.2f')]
+                theta=alt.Theta(field=col_val, type="quantitative"),
+                color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom", labelLimit=0)),
+                tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
             ).properties(height=450)
             st.altair_chart(grafico_pastel, use_container_width=True)
 
             st.divider()
             
-            st.markdown("#### Forecast por Marcas / Fabricantes")
-            df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')['Monto_USD'].sum().reset_index()
+            # GRÁFICO 4: MARCAS Y FABRICANTES
+            st.markdown(f"#### Forecast por Marcas / Fabricantes ({moneda_sel})")
+            df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
+            df_marcas = df_marcas[df_marcas[col_val] > 0]
+            
             if not df_marcas.empty:
                 grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
-                    x=alt.X('Monto_USD', title='Valor USD ($)'),
-                    y=alt.Y('Marca_Detectada', sort='-x', title='Marca'),
-                    tooltip=['Marca_Detectada', alt.Tooltip('Monto_USD', format='$,.2f')]
+                    x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                    y=alt.Y('Marca_Detectada', sort='-x', title='Marca', axis=alt.Axis(labelLimit=0)),
+                    tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
                 ).properties(height=450)
                 st.altair_chart(grafico_marcas, use_container_width=True)
             else:
@@ -257,7 +277,7 @@ if archivo_cargado is not None:
                     with st.container(border=True):
                         st.markdown(f"**PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']}**")
                         st.write(f"**Equipo/Servicio:** {row['Descripcion']}")
-                        st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Valor en riesgo: **${row['Monto_USD']:,.2f} USD**")
+                        st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Valor en riesgo: **${row['Monto_USD']:,.2f} USD / ${row['Monto_MXN']:,.2f} MXN**")
                         
                         # BOTÓN DE SINERGIA CON SCOTT
                         if st.button(f"Enviar a Laboratorio SCOTT", key=f"btn_scott_{row['ID_Proyecto']}"):
@@ -269,9 +289,8 @@ if archivo_cargado is not None:
             st.divider()
             st.markdown("#### Base de Datos (Auditoría Rápida)")
             
-            # CONFIGURACIÓN PARA QUE LAS COLUMNAS SE AJUSTEN SIN SCROLL HORIZONTAL EXCESIVO
             st.dataframe(
-                df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD']],
+                df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -280,7 +299,8 @@ if archivo_cargado is not None:
                     "Descripcion": st.column_config.TextColumn("Descripción", width="large"),
                     "Cotizacion": st.column_config.TextColumn("Folio(s)", width="small"),
                     "Fase_Pipeline": st.column_config.TextColumn("Fase", width="small"),
-                    "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", width="small")
+                    "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", width="small"),
+                    "Monto_MXN": st.column_config.NumberColumn("MXN", format="$%.2f", width="small")
                 }
             )
 
@@ -294,7 +314,6 @@ if archivo_cargado is not None:
             opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
             opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
             
-            # LÓGICA DE SINERGIA: Seleccionar automáticamente si viene de Enablement
             index_default = 0
             if st.session_state.proyecto_foco:
                 for i, opcion in enumerate(opciones_proyectos):
@@ -334,7 +353,7 @@ if archivo_cargado is not None:
                 if gemini_activo:
                     prompt_usuario = st.text_area("¿Cuál es el objetivo táctico de esta interacción?", placeholder="Ej. Voy a visitar la planta para validar el presupuesto con el gerente o redactar un correo empujando la orden de compra...")
                     
-                    if st.button("Generar Estrategia y Nota para SCOTT"):
+                    if st.button("Generar Estratégia y Nota para SCOTT"):
                         with st.spinner("Procesando inteligencia comercial para CRM..."):
                             try:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
@@ -355,7 +374,7 @@ if archivo_cargado is not None:
                                 
                                 INSTRUCCIÓN:
                                 1. Primero, dale 2 o 3 consejos tácticos de cómo manejar esta objeción/visita usando preguntas SPIN enfocadas en el equipo/servicio específico que se está cotizando.
-                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT ==". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el equipo, el objetivo y el siguiente paso estratégico.
+                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT =". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el equipo, el objetivo y el siguiente paso estratégico.
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
