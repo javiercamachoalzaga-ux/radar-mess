@@ -269,26 +269,12 @@ if archivo_cargado is not None:
                 if st.button("Generar con IA"):
                     with st.spinner("Procesando inteligencia comercial..."):
                         try:
-                            # ==========================================
-                            # AUTO-DETECCIÓN INTELIGENTE DE MODELOS
-                            # ==========================================
-                            modelos_validos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                            
-                            if not modelos_validos:
-                                st.error("Tu llave es correcta, pero Google aún no activa los modelos para esta cuenta nueva. Intenta generar otra llave en AI Studio o espera unos minutos.")
-                            else:
-                                # Priorizar el modelo Flash si está disponible, si no usar el primero que funcione
-                                modelo_detectado = modelos_validos[0] 
-                                for m in modelos_validos:
-                                    if "flash" in m:
-                                        modelo_detectado = m
-                                        break
-                                        
-                                model = genai.GenerativeModel(modelo_detectado)
-                                instruccion = "Eres un experto en ventas B2B y Revenue Operations. Responde de manera profesional, directa y orientada a cerrar ventas industriales en México. " + prompt
-                                response = model.generate_content(instruccion)
-                                st.success(f"Procesado exitosamente conectando con el motor interno: {modelo_detectado}")
-                                st.write(response.text)
+                            # LA VERSIÓN EXACTA QUE GOOGLE ESTÁ PIDIENDO
+                            model = genai.GenerativeModel("gemini-3.6-flash")
+                            instruccion = "Eres un experto en ventas B2B y Revenue Operations. Responde de manera profesional, directa y orientada a cerrar ventas industriales en México. " + prompt
+                            response = model.generate_content(instruccion)
+                            st.success("¡Conexión exitosa con el motor Gemini 3.6 Flash!")
+                            st.write(response.text)
                         except Exception as e:
                             st.error(f"Error de conexión con la API de Gemini: {e}")
             else:
