@@ -144,7 +144,6 @@ if archivo_cargado is not None:
             df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
                     (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
 
-        # ¡AQUÍ ESTÁ LA LÍNEA QUE FALTABA!
         contenedor_agenda_lateral = st.sidebar.container()
 
         mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
@@ -270,7 +269,8 @@ if archivo_cargado is not None:
                 if st.button("Generar con IA"):
                     with st.spinner("Procesando inteligencia comercial..."):
                         try:
-                            model = genai.GenerativeModel("gemini-1.5-pro-latest")
+                            # AQUÍ ESTÁ EL CAMBIO DE NOMBRE DEL MODELO (Línea ~227)
+                            model = genai.GenerativeModel("gemini-1.5-pro")
                             instruccion = "Eres un experto en ventas B2B y Revenue Operations. Responde de manera profesional, directa y orientada a cerrar ventas industriales en México. " + prompt
                             response = model.generate_content(instruccion)
                             st.write(response.text)
