@@ -269,8 +269,8 @@ if archivo_cargado is not None:
                 if st.button("Generar con IA"):
                     with st.spinner("Procesando inteligencia comercial..."):
                         try:
-                            # AQUÍ ESTÁ EL CAMBIO A GEMINI FLASH (Línea ~227)
-                            model = genai.GenerativeModel("gemini-1.5-flash")
+                            # AQUÍ ESTÁ EL CAMBIO A GEMINI-PRO (Línea ~227)
+                            model = genai.GenerativeModel("gemini-pro")
                             instruccion = "Eres un experto en ventas B2B y Revenue Operations. Responde de manera profesional, directa y orientada a cerrar ventas industriales en México. " + prompt
                             response = model.generate_content(instruccion)
                             st.write(response.text)
