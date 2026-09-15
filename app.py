@@ -117,7 +117,7 @@ if archivo_cargado is not None:
         df = df[df['Estatus'].str.contains('PROCESO|PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)].copy()
         
         # ==========================================
-        # CLASIFICACIÓN (PILARES, MARCAS Y ÁREAS)
+        # CLASIFICACIÓN (PILARES Y MARCAS)
         # ==========================================
         def clasificar_pilar(row):
             texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
@@ -135,18 +135,8 @@ if archivo_cargado is not None:
                 if marca in texto: return marca.title()
             return "Multimarca / No Especificada"
             
-        def clasificar_area_tecnica(desc, area):
-            texto = (str(desc) + " " + str(area)).upper()
-            if any(k in texto for k in ["DIMENSIONAL", "CMM", "BRAZO"]): return "Dimensional"
-            if any(k in texto for k in ["DUREZA", "MICRODURÓMETRO", "DUROMETRO"]): return "Dureza y Materiales"
-            if any(k in texto for k in ["FUERZA", "PRENSA", "TORQUE"]): return "Fuerza y Torque"
-            if any(k in texto for k in ["ELÉCTRICA", "ELECTRICA"]): return "Eléctrica"
-            if any(k in texto for k in ["RUGOSIDAD", "PERFILOMETRO", "ÓPTICO", "OPTICO"]): return "Óptica y Superficie"
-            return "Múltiples Áreas"
-
         df['Pilar_Estrategico'] = df.apply(clasificar_pilar, axis=1)
         df['Marca_Detectada'] = df['Descripcion'].apply(clasificar_marca)
-        df['Area_Servicio'] = df.apply(lambda x: clasificar_area_tecnica(x['Descripcion'], x['Area']), axis=1)
         
         def clasificar_fase(etapa):
             e = str(etapa).upper()
@@ -207,55 +197,52 @@ if archivo_cargado is not None:
             
             st.divider()
             
-            # GRÁFICOS VISUALES ALTAIR
-            col_graf1, col_graf2 = st.columns(2)
+            # GRÁFICOS GRANDES EN BLOQUES INDIVIDUALES
             
-            with col_graf1:
-                st.markdown("#### Composición por Pilar Estratégico")
-                df_graf_pilares = df.groupby('Pilar_Estrategico')['Monto_USD'].sum().reset_index()
-                grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=50).encode(
-                    theta=alt.Theta(field="Monto_USD", type="quantitative"),
-                    color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS")),
-                    tooltip=['Pilar_Estrategico', alt.Tooltip('Monto_USD', format='$,.2f')]
-                ).properties(height=280)
-                st.altair_chart(grafico_pastel, use_container_width=True)
-                
-            with col_graf2:
-                st.markdown("#### Salud del Embudo por Fase")
-                df_graf_fases = df.groupby('Fase_Pipeline')['Monto_USD'].sum().reset_index()
-                grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#003a70').encode(
-                    x=alt.X('Fase_Pipeline', title='Etapa CRM'),
-                    y=alt.Y('Monto_USD', title='Valor USD ($)'),
-                    tooltip=['Fase_Pipeline', alt.Tooltip('Monto_USD', format='$,.2f')]
-                ).properties(height=280)
-                st.altair_chart(grafico_barras, use_container_width=True)
-                
+            st.markdown("#### Forecast por Área (Basado en la plantilla de SCOTT)")
+            df_areas = df.groupby('Area')['Monto_USD'].sum().reset_index()
+            grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
+                x=alt.X('Monto_USD', title='Valor USD ($)'),
+                y=alt.Y('Area', sort='-x', title='Área Oficial'),
+                tooltip=['Area', alt.Tooltip('Monto_USD', format='$,.2f')]
+            ).properties(height=450)
+            st.altair_chart(grafico_areas, use_container_width=True)
+
+            st.divider()
+
+            st.markdown("#### Salud del Embudo por Fase")
+            df_graf_fases = df.groupby('Fase_Pipeline')['Monto_USD'].sum().reset_index()
+            grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
+                x=alt.X('Fase_Pipeline', title='Etapa CRM'),
+                y=alt.Y('Monto_USD', title='Valor USD ($)'),
+                tooltip=['Fase_Pipeline', alt.Tooltip('Monto_USD', format='$,.2f')]
+            ).properties(height=450)
+            st.altair_chart(grafico_barras, use_container_width=True)
+            
+            st.divider()
+
+            st.markdown("#### Composición por Pilar Estratégico")
+            df_graf_pilares = df.groupby('Pilar_Estrategico')['Monto_USD'].sum().reset_index()
+            grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=80).encode(
+                theta=alt.Theta(field="Monto_USD", type="quantitative"),
+                color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom")),
+                tooltip=['Pilar_Estrategico', alt.Tooltip('Monto_USD', format='$,.2f')]
+            ).properties(height=450)
+            st.altair_chart(grafico_pastel, use_container_width=True)
+
             st.divider()
             
-            col_graf3, col_graf4 = st.columns(2)
-            
-            with col_graf3:
-                st.markdown("#### Forecast por Marcas / Fabricantes")
-                df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')['Monto_USD'].sum().reset_index()
-                if not df_marcas.empty:
-                    grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#2ecc71').encode(
-                        x=alt.X('Monto_USD', title='Valor USD ($)'),
-                        y=alt.Y('Marca_Detectada', sort='-x', title='Marca'),
-                        tooltip=['Marca_Detectada', alt.Tooltip('Monto_USD', format='$,.2f')]
-                    ).properties(height=250)
-                    st.altair_chart(grafico_marcas, use_container_width=True)
-                else:
-                    st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
-
-            with col_graf4:
-                st.markdown("#### Forecast por Área de Laboratorio")
-                df_areas = df.groupby('Area_Servicio')['Monto_USD'].sum().reset_index()
-                grafico_areas = alt.Chart(df_areas).mark_bar(color='#e67e22').encode(
+            st.markdown("#### Forecast por Marcas / Fabricantes")
+            df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')['Monto_USD'].sum().reset_index()
+            if not df_marcas.empty:
+                grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
                     x=alt.X('Monto_USD', title='Valor USD ($)'),
-                    y=alt.Y('Area_Servicio', sort='-x', title='Área Técnica'),
-                    tooltip=['Area_Servicio', alt.Tooltip('Monto_USD', format='$,.2f')]
-                ).properties(height=250)
-                st.altair_chart(grafico_areas, use_container_width=True)
+                    y=alt.Y('Marca_Detectada', sort='-x', title='Marca'),
+                    tooltip=['Marca_Detectada', alt.Tooltip('Monto_USD', format='$,.2f')]
+                ).properties(height=450)
+                st.altair_chart(grafico_marcas, use_container_width=True)
+            else:
+                st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
 
         # ==========================================
         # TAB 2: ENABLEMENT
