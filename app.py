@@ -1,31 +1,21 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt
 from datetime import datetime
 import re
 import google.generativeai as genai
 
-st.set_page_config(page_title="MESS | Radar Comercial", layout="wide")
+st.set_page_config(page_title="MESS | Radar Comercial", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# CONFIGURACIÓN GEMINI API
+# CONFIGURACIÓN GEMINI API (3.6 FLASH)
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
     gemini_activo = True
 else:
     gemini_activo = False
-
-# ==========================================
-# INICIALIZACIÓN DE MEMORIA (AGENDA Y CARRITO)
-# ==========================================
-if 'agenda_radar' not in st.session_state:
-    st.session_state.agenda_radar = pd.DataFrame(columns=[
-        'ID_Tarea', 'Fecha', 'Cliente', 'ID_Proyecto', 'Cotizacion', 
-        'Unidad_Presupuesto', 'Monto_USD', 'Monto_MXN', 'Tipo_Accion', 'Descripcion', 'Completado'
-    ])
-if 'clear_key' not in st.session_state: st.session_state.clear_key = 0
-if 'carrito' not in st.session_state: st.session_state.carrito = set()
 
 # --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
@@ -37,9 +27,8 @@ st.markdown("""
     div[data-testid="metric-container"] { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px 20px; border-radius: 8px; border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     div[data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 700 !important; color: #7f8c8d !important; text-transform: uppercase; }
     div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #2c3e50 !important; }
-    [data-testid="stSidebar"] { background-color: #f4f6f7 !important; border-right: 1px solid #e0e0e0; }
-    [data-testid="stSidebar"] * { color: #003a70 !important; font-weight: 600; }
     .stDataFrame { font-size: 14px !important; }
+    .ficha-scott { background-color: #f4f6f7; padding: 20px; border-radius: 8px; border: 1px solid #d5d8dc; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -55,14 +44,15 @@ if not check_password():
     st.stop()
 
 st.markdown('<div class="titulo-radar">Radar Comercial y Enablement B2B</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Gestión Estratégica, Metodología de Cierre y Copiloto AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Módulo Coadyuvante CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
-archivo_cargado = st.sidebar.file_uploader("Subir CSV bruto", type=["csv"])
+archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
 
 if archivo_cargado is not None:
     try:
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
         
+        # --- PROCESAMIENTO Y LIMPIEZA ---
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_raw.columns:
@@ -86,8 +76,7 @@ if archivo_cargado is not None:
 
         def limpiar_ortografia(texto):
             if pd.isna(texto): return ""
-            texto = re.sub(r'\s+', ' ', str(texto).replace("?", " ")).strip()
-            return texto.title()
+            return re.sub(r'\s+', ' ', str(texto).replace("?", " ")).strip().title()
 
         for col in ['Cliente', 'Descripcion', 'Area', 'Estatus', 'Etapa']:
             df_clean[col] = df_clean[col].apply(limpiar_ortografia)
@@ -107,6 +96,7 @@ if archivo_cargado is not None:
         
         df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
+        # AGRUPACIÓN POR PROYECTO (LLAVE MAESTRA SCOTT)
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
             'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
@@ -120,168 +110,201 @@ if archivo_cargado is not None:
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
         df = df[df['Estatus'].str.contains('PROCESO|PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)].copy()
         
-        df['Unidad_Presupuesto'] = df['Area'].apply(lambda a: "ALTA GAMA" if any(k in str(a).upper() for k in ["ALTA GAMA", "EQUIPO", "CMM", "ZEISS", "SCANNER"]) else ("LABORATORIOS" if any(k in str(a).upper() for k in ["LABORATORIO", "CALIBRACIÓN", "DIMENSIONAL"]) else "PRODUCTOS"))
+        # ==========================================
+        # CLASIFICACIÓN DE LOS 3 PILARES MESS
+        # ==========================================
+        def clasificar_pilar(row):
+            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
+            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]):
+                return "1. Alta Gama (Servicios Especiales)"
+            elif any(k in texto for k in ["CALIBRACIÓN", "CALIBRACION", "LABORATORIO", "DIMENSIONAL", "PRENSA"]):
+                return "2. Calibraciones (Comunes)"
+            else:
+                return "3. Productos (Equipos y Consumibles)"
         
+        df['Pilar_Estrategico'] = df.apply(clasificar_pilar, axis=1)
+        
+        # ==========================================
+        # FASES DE PIPELINE
+        # ==========================================
         def clasificar_fase(etapa):
             e = str(etapa).upper()
             if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
             elif 'NEGOCIACI' in e: return "3. Negociación"
             elif 'COTIZACI' in e: return "2. Cotización"
             elif 'PROPUESTA' in e: return "1. Propuesta"
-            else: return "5. En Proceso (Otros)"
+            else: return "5. En Proceso"
         df['Fase_Pipeline'] = df['Etapa'].apply(clasificar_fase)
 
-        df['Peso_Interno_Orden'] = df['Monto_USD'] + (df['Monto_MXN'] / 19.50)
-        
         df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
         df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
         df['Días_Activo'] = (pd.Timestamp.now() - df['Fecha_Creacion_DT']).dt.days
 
+        # --- FILTROS GLOBALES ---
         st.sidebar.divider()
-        st.sidebar.header("Filtros Tácticos")
-        busqueda_proyecto = st.sidebar.text_input("Buscar ID o Cliente:")
+        st.sidebar.header("Filtros Directivos")
+        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar de Negocio:", df['Pilar_Estrategico'].unique(), default=df['Pilar_Estrategico'].unique())
+        busqueda_proyecto = st.sidebar.text_input("Buscar Folio o Cliente:")
+        
         if busqueda_proyecto:
             df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
                     (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
-
-        contenedor_agenda_lateral = st.sidebar.container()
+        if filtro_pilar:
+            df = df[df['Pilar_Estrategico'].isin(filtro_pilar)]
 
         mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
         
-        tab_analisis, tab_implementacion, tab_ejecucion, tab_ai = st.tabs([
-            "1. Inteligencia Financiera (Forecast)", 
-            "2. Enablement y Ejecución", 
-            "3. Metodología y Agenda",
-            "4. Gemini Copilot"
+        # ==========================================
+        # TABS DE NAVEGACIÓN
+        # ==========================================
+        tab_dashboards, tab_enablement, tab_scott = st.tabs([
+            "📊 1. Dashboards Directivos (Inteligencia Financiera)", 
+            "🚀 2. Enablement (Cuellos de Botella)", 
+            "🧠 3. Laboratorio Táctico SCOTT (Estrategia AI)"
         ])
 
         # ==========================================
-        # 1. FORECAST Y GAP ANALYSIS
+        # TAB 1: DASHBOARDS DIRECTIVOS
         # ==========================================
-        with tab_analisis:
-            st.markdown("### Análisis de Brecha (Gap Analysis) vs Cuota")
+        with tab_dashboards:
+            st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
             META_MENSUAL_USD = 80000.00
             
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)]
             usd_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
             mxn_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
-            usd_tibio = df_mes[df_mes['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])]['Monto_USD'].sum()
             
             gap_actual_usd = META_MENSUAL_USD - usd_caliente
             
             col_g1, col_g2, col_g3 = st.columns(3)
-            col_g1.metric("Meta Comercial del Mes", f"${META_MENSUAL_USD:,.2f} USD")
-            col_g2.metric("Pipeline Caliente USD (Cierre Probable)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN Adicionales")
+            col_g1.metric("Meta Comercial Mensual", f"${META_MENSUAL_USD:,.2f} USD")
+            col_g2.metric("Pipeline Probable (USD)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN extra")
             if gap_actual_usd > 0:
-                col_g3.metric("Brecha para llegar a la Meta (GAP)", f"${gap_actual_usd:,.2f} USD", "- Requiere acción inmediata")
-                st.warning(f"Estrategia: Tienes ${usd_tibio:,.2f} USD estancados en Propuesta/Cotización. Necesitas acelerar conversiones para cerrar tu GAP de ${gap_actual_usd:,.0f} USD. Los montos en MXN te sirven de bolsa de protección operativa.")
+                col_g3.metric("GAP (Brecha para Meta)", f"${gap_actual_usd:,.2f} USD", "- Acción requerida")
             else:
-                col_g3.metric("Brecha (GAP)", "$0.00 USD", "+ Meta Asegurada")
-                st.success(f"Pipeline caliente cubre la meta de $80,000 USD. Además traes ${mxn_caliente:,.2f} MXN en el radar para maximizar resultados.")
+                col_g3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
             
             st.divider()
-            st.markdown("### Embudo de Ventas Vivo")
-            df_pipeline = df.groupby('Fase_Pipeline').agg(Num_Proyectos=('ID_Proyecto', 'nunique'), Monto_USD=('Monto_USD', 'sum'), Monto_MXN=('Monto_MXN', 'sum')).reset_index()
-            cols = st.columns(4)
-            for col, fase in zip(cols, ["1. Propuesta", "2. Cotización", "3. Negociación", "4. Esperando PO"]):
-                data_fase = df_pipeline[df_pipeline['Fase_Pipeline'] == fase]
-                if not data_fase.empty:
-                    proy, u, m = data_fase['Num_Proyectos'].iloc[0], data_fase['Monto_USD'].iloc[0], data_fase['Monto_MXN'].iloc[0]
-                else:
-                    proy, u, m = 0, 0.0, 0.0
-                col.metric(fase, f"{proy} Proyectos", f"${u:,.0f} USD | ${m:,.0f} MXN")
-
-        # ==========================================
-        # 2. ENABLEMENT Y DISPARADORES DE MARKETING
-        # ==========================================
-        def render_table_interactiva(df_subset, sufijo_clave):
-            if df_subset.empty: return st.info("Sin proyectos.")
-            df_mostrar = df_subset[['ID_Proyecto', 'Cliente', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']].copy()
-            df_mostrar.insert(0, 'Seleccionar', df_mostrar['ID_Proyecto'].apply(lambda x: x in st.session_state.carrito))
-            df_editado = st.data_editor(df_mostrar, hide_index=True, use_container_width=True, key=f"tbl_{sufijo_clave}_{st.session_state.clear_key}", 
-                column_config={"Monto_USD": st.column_config.NumberColumn("Valor USD", format="$%.2f"), "Monto_MXN": st.column_config.NumberColumn("Valor MXN", format="$%.2f")})
-            st.session_state.carrito = (st.session_state.carrito - set(df_mostrar['ID_Proyecto'])) | set(df_editado[df_editado['Seleccionar']]['ID_Proyecto'])
-
-        with tab_implementacion:
-            st.markdown("### Alertas de Marketing y Nurturing B2B")
-            st.caption("Proyectos estratégicos estancados que requieren apalancamiento con material de marketing.")
             
-            estancados = df[(df['Fase_Pipeline'] == '1. Propuesta') & (df['Días_Activo'] > 15)].copy()
+            # GRÁFICOS VISUALES ALTAIR
+            col_graf1, col_graf2 = st.columns(2)
+            
+            with col_graf1:
+                st.markdown("#### Composición de Cartera por Pilar")
+                st.caption("Distribución de montos USD en Alta Gama, Calibraciones y Productos.")
+                df_graf_pilares = df.groupby('Pilar_Estrategico')['Monto_USD'].sum().reset_index()
+                grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=50).encode(
+                    theta=alt.Theta(field="Monto_USD", type="quantitative"),
+                    color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS")),
+                    tooltip=['Pilar_Estrategico', alt.Tooltip('Monto_USD', format='$,.2f')]
+                ).properties(height=300)
+                st.altair_chart(grafico_pastel, use_container_width=True)
+                
+            with col_graf2:
+                st.markdown("#### Salud del Embudo por Fase")
+                st.caption("Distribución del dinero a lo largo del proceso de cierre.")
+                df_graf_fases = df.groupby('Fase_Pipeline')['Monto_USD'].sum().reset_index()
+                grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#003a70').encode(
+                    x=alt.X('Fase_Pipeline', title='Etapa CRM'),
+                    y=alt.Y('Monto_USD', title='Valor USD ($)'),
+                    tooltip=['Fase_Pipeline', alt.Tooltip('Monto_USD', format='$,.2f')]
+                ).properties(height=300)
+                st.altair_chart(grafico_barras, use_container_width=True)
+
+        # ==========================================
+        # TAB 2: ENABLEMENT
+        # ==========================================
+        with tab_enablement:
+            st.markdown("### Alertas de Riesgo Operativo (Nurturing B2B)")
+            st.caption("Proyectos estancados que requieren apalancamiento o descarte inmediato.")
+            
+            estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
             if not estancados.empty:
-                for _, row in estancados.head(3).iterrows():
-                    st.error(f"ALERTA: Proyecto {row['ID_Proyecto']} ({row['Cliente']}) lleva {row['Días_Activo']:.0f} días en Propuesta. Valor: ${row['Monto_USD']:,.2f} USD / ${row['Monto_MXN']:,.2f} MXN.")
-                    st.markdown("> Acción Sugerida (Marketing): Enviar matriz de ROI técnico o gestionar una invitación VIP al showroom para re-enganchar al tomador de decisión.")
+                for _, row in estancados.head(4).iterrows():
+                    st.warning(f"⚠️ PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']} | Pilar: {row['Pilar_Estrategico']}")
+                    st.write(f"Lleva **{row['Días_Activo']:.0f} días** atorado. Valor en riesgo: **${row['Monto_USD']:,.2f} USD**.")
+                    st.markdown("*Sugrencia Enablement:* Activar Nurturing (Casos de éxito/Matriz ROI) o descartar para limpiar Pipeline.")
             else:
-                st.success("No hay cuellos de botella detectados en la fase de Propuestas.")
+                st.success("No hay proyectos estancados detectados. Embudo limpio.")
                 
             st.divider()
-            st.markdown("### Centro de Ejecución (Selección de Ruta)")
-            render_table_interactiva(df, "global")
+            st.markdown("#### Base de Datos (Auditoría Rápida)")
+            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Pilar_Estrategico', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # 3. METODOLOGÍA Y AGENDA (MEDDPICC)
+        # TAB 3: LABORATORIO TÁCTICO SCOTT (IA + MEDDPICC)
         # ==========================================
-        with contenedor_agenda_lateral:
-            st.header("Encolar Ruta")
-            if st.session_state.carrito:
-                st.info(f"Proyectos en carrito: {len(st.session_state.carrito)}")
-                accion_lote = st.selectbox("Acción a ejecutar:", ["Visita Presencial", "Llamada Consultiva", "Cierre Comercial"])
-                fecha_lote = st.date_input("Fecha:", pd.Timestamp.now().date())
-                if st.button("Agendar"):
-                    for _, row in df[df['ID_Proyecto'].isin(st.session_state.carrito)].iterrows():
-                        nueva_tarea = pd.DataFrame([{ 'ID_Tarea': np.random.randint(1, 10000), 'Fecha': fecha_lote, 'Cliente': row['Cliente'], 'ID_Proyecto': row['ID_Proyecto'], 'Cotizacion': row['Cotizacion'], 'Monto_USD': row['Monto_USD'], 'Monto_MXN': row['Monto_MXN'], 'Tipo_Accion': accion_lote, 'Descripcion': row['Descripcion'], 'Completado': False }])
-                        st.session_state.agenda_radar = pd.concat([st.session_state.agenda_radar, nueva_tarea], ignore_index=True)
-                    st.session_state.carrito = set(); st.session_state.clear_key += 1; st.rerun()
-
-        with tab_ejecucion:
-            st.markdown("### Tablero de Gestión y Metodología Comercial")
-            fecha_vista = st.date_input("Seleccionar día a visualizar:", pd.Timestamp.now().date())
-            df_dia = st.session_state.agenda_radar[st.session_state.agenda_radar['Fecha'] == fecha_vista].copy()
+        with tab_scott:
+            st.markdown("### Enlace Estratégico CRM (Radar ➡ SCOTT)")
+            st.caption("Selecciona una cuenta clave para estructurar la estrategia antes de capturar tu actividad en SCOTT.")
             
-            if not df_dia.empty:
-                df_dia_show = df_dia[['Completado', 'Cliente', 'ID_Proyecto', 'Tipo_Accion']].copy()
-                st.data_editor(df_dia_show, hide_index=True, use_container_width=True, key="ed_agenda")
+            opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {x['Pilar_Estrategico']}", axis=1).tolist()
+            opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
+            
+            seleccion = st.selectbox("Seleccionar Proyecto Objetivo:", opciones_proyectos)
+            
+            if seleccion != "-- Selecciona un proyecto clave --":
+                id_seleccionado = seleccion.split("]")[0].replace("[", "")
+                datos_proy = df[df['ID_Proyecto'].astype(str) == id_seleccionado].iloc[0]
+                
+                # FICHA TÉCNICA VISUAL
+                st.markdown(f"""
+                <div class="ficha-scott">
+                    <h4>FICHA DE PROYECTO PARA SCOTT</h4>
+                    <b>Cliente/Planta:</b> {datos_proy['Cliente']}<br>
+                    <b>Proyecto ID:</b> {datos_proy['ID_Proyecto']}<br>
+                    <b>Cotizaciones Vinculadas:</b> <span style='color:red; font-weight:bold;'>{datos_proy['Cotizacion']}</span><br>
+                    <b>Pilar y Fase:</b> {datos_proy['Pilar_Estrategico']} | {datos_proy['Fase_Pipeline']}<br>
+                    <b>Monto:</b> ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
+                </div>
+                """, unsafe_allow_html=True)
+                
                 st.divider()
+                st.markdown("#### 1. Calificación MEDDPICC (Validación interna)")
+                c1, c2, c3 = st.columns(3)
+                eb = c1.selectbox("Economic Buyer", ["Pendiente", "Mapeado", "Acceso Directo Validado"])
+                dc = c2.selectbox("Decision Criteria", ["Precio", "Aspecto Técnico", "Tiempos", "Post Venta"])
+                ch = c3.selectbox("Champion", ["Ninguno", "Usuario Técnico", "Gerencia Aliada"])
+                pain = st.text_input("Describe el Pain (Dolor/Problema de negocio del cliente):")
                 
-                st.markdown("### Calificación de Oportunidad (Framework MEDDPICC)")
-                st.caption("Obligatorio para perfilar el cierre de cuentas estratégicas.")
-                cliente_memo = st.selectbox("Selecciona la cuenta a calificar:", df_dia['Cliente'].unique())
+                st.divider()
+                st.markdown("#### 2. Copiloto AI (Generador de Notas SCOTT)")
                 
-                if cliente_memo:
-                    col_m1, col_m2 = st.columns(2)
-                    col_m1.selectbox("Economic Buyer (Comprador Económico)", ["No identificado", "Mapeado pero sin acceso", "Acceso directo y validado"])
-                    col_m1.selectbox("Decision Criteria (Criterio de Decisión)", ["Precio", "Tiempo de Entrega", "Especificación Técnica (Precisión)", "Soporte Post-Venta"])
-                    col_m2.text_input("Identificar el Pain (Dolor o problema principal del cliente)")
-                    col_m2.selectbox("Champion (Campeón Interno)", ["Sin campeón", "Ingeniero/Técnico aliado", "Gerente impulsando la compra"])
-                    st.button("Guardar Calificación Estratégica")
-            else:
-                st.info("Agenda libre. Utiliza el Centro de Ejecución para programar cuentas.")
-
-        # ==========================================
-        # 4. COPILOTO GEMINI AI (REVENUE OPS)
-        # ==========================================
-        with tab_ai:
-            st.markdown("### Gemini B2B Sales Copilot")
-            st.caption("Tu asistente de inteligencia artificial para redacción persuasiva y análisis de cuentas.")
-            
-            if gemini_activo:
-                prompt = st.text_area("¿En qué te ayudo hoy, estratega?", placeholder="Ej. Redacta un correo corto bajo la metodología SPIN para un cliente que necesita calibrar su brazo articulado...")
-                if st.button("Generar con IA"):
-                    with st.spinner("Procesando inteligencia comercial..."):
-                        try:
-                            # LA VERSIÓN EXACTA QUE GOOGLE ESTÁ PIDIENDO
-                            model = genai.GenerativeModel("gemini-3.6-flash")
-                            instruccion = "Eres un experto en ventas B2B y Revenue Operations. Responde de manera profesional, directa y orientada a cerrar ventas industriales en México. " + prompt
-                            response = model.generate_content(instruccion)
-                            st.success("¡Conexión exitosa con el motor Gemini 3.6 Flash!")
-                            st.write(response.text)
-                        except Exception as e:
-                            st.error(f"Error de conexión con la API de Gemini: {e}")
-            else:
-                st.warning("La API Key de Gemini no está configurada.")
-                st.markdown("Para activar el Copiloto, agrega tu clave en los Secrets de Streamlit bajo el nombre `gemini_api_key`.")
+                if gemini_activo:
+                    prompt_usuario = st.text_area("¿Cuál es el objetivo táctico de esta interacción?", placeholder="Ej. Voy a visitar la planta para validar el presupuesto con el gerente o redactar un correo empujando la orden de compra...")
+                    
+                    if st.button("Generar Estrategia y Nota para SCOTT"):
+                        with st.spinner("Procesando inteligencia comercial para CRM..."):
+                            try:
+                                model = genai.GenerativeModel("gemini-3.6-flash")
+                                
+                                prompt_maestro = f"""
+                                Eres un experto en Revenue Operations, ventas B2B y metodologías SPIN y MEDDPICC.
+                                El estratega de ventas industriales de MESS Servicios Metrológicos necesita documentar una interacción en el CRM "SCOTT".
+                                
+                                Contexto del Proyecto:
+                                - Cliente: {datos_proy['Cliente']}
+                                - ID Proyecto: {datos_proy['ID_Proyecto']}
+                                - Cotizaciones: {datos_proy['Cotizacion']}
+                                - Pilar: {datos_proy['Pilar_Estrategico']}
+                                - Pain del cliente: {pain}
+                                
+                                Requerimiento del usuario: {prompt_usuario}
+                                
+                                INSTRUCCIÓN:
+                                1. Primero, dale 2 o 3 consejos tácticos de cómo manejar esta objeción/visita usando preguntas SPIN.
+                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT ==". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el objetivo y el siguiente paso estratégico.
+                                """
+                                
+                                response = model.generate_content(prompt_maestro)
+                                st.success("¡Estrategia y Nota SCOTT generadas con éxito!")
+                                st.write(response.text)
+                            except Exception as e:
+                                st.error(f"Error de conexión con la API de Gemini: {e}")
+                else:
+                    st.warning("Agrega tu clave `gemini_api_key` en los Secrets para activar el Laboratorio Táctico.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
 else:
-    st.info("Sube el reporte comercial formato CSV (Plantilla Radar) para iniciar.")
+    st.info("Sube el reporte comercial formato CSV (Plantilla Radar) para iniciar tu cuarto de estrategia.")
