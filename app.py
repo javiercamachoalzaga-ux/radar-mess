@@ -144,6 +144,9 @@ if archivo_cargado is not None:
             df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
                     (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
 
+        # ¡AQUÍ ESTÁ LA LÍNEA QUE FALTABA!
+        contenedor_agenda_lateral = st.sidebar.container()
+
         mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
         
         tab_analisis, tab_implementacion, tab_ejecucion, tab_ai = st.tabs([
