@@ -17,6 +17,12 @@ if "gemini_api_key" in st.secrets:
 else:
     gemini_activo = False
 
+# ==========================================
+# MEMORIA DE SESIÓN (SINERGIA ENABLEMENT -> SCOTT)
+# ==========================================
+if 'proyecto_foco' not in st.session_state:
+    st.session_state.proyecto_foco = None
+
 # --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
     <style>
@@ -96,7 +102,7 @@ if archivo_cargado is not None:
         
         df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
-        # AGRUPACIÓN POR PROYECTO (LLAVE MAESTRA SCOTT)
+        # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
             'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
@@ -111,7 +117,7 @@ if archivo_cargado is not None:
         df = df[df['Estatus'].str.contains('PROCESO|PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)].copy()
         
         # ==========================================
-        # CLASIFICACIÓN DE LOS 3 PILARES MESS
+        # CLASIFICACIÓN (PILARES, MARCAS Y ÁREAS)
         # ==========================================
         def clasificar_pilar(row):
             texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
@@ -122,11 +128,26 @@ if archivo_cargado is not None:
             else:
                 return "3. Productos (Equipos y Consumibles)"
         
+        def clasificar_marca(desc):
+            texto = str(desc).upper()
+            marcas = ["BATY", "MITUTOYO", "ZEISS", "FLUKE", "MAGTROL", "BUEHLER", "WILSON", "SCANTECH", "KREON", "TAYLOR HOBSON", "GALDABINI", "ANTON PAAR"]
+            for marca in marcas:
+                if marca in texto: return marca.title()
+            return "Multimarca / No Especificada"
+            
+        def clasificar_area_tecnica(desc, area):
+            texto = (str(desc) + " " + str(area)).upper()
+            if any(k in texto for k in ["DIMENSIONAL", "CMM", "BRAZO"]): return "Dimensional"
+            if any(k in texto for k in ["DUREZA", "MICRODURÓMETRO", "DUROMETRO"]): return "Dureza y Materiales"
+            if any(k in texto for k in ["FUERZA", "PRENSA", "TORQUE"]): return "Fuerza y Torque"
+            if any(k in texto for k in ["ELÉCTRICA", "ELECTRICA"]): return "Eléctrica"
+            if any(k in texto for k in ["RUGOSIDAD", "PERFILOMETRO", "ÓPTICO", "OPTICO"]): return "Óptica y Superficie"
+            return "Múltiples Áreas"
+
         df['Pilar_Estrategico'] = df.apply(clasificar_pilar, axis=1)
+        df['Marca_Detectada'] = df['Descripcion'].apply(clasificar_marca)
+        df['Area_Servicio'] = df.apply(lambda x: clasificar_area_tecnica(x['Descripcion'], x['Area']), axis=1)
         
-        # ==========================================
-        # FASES DE PIPELINE
-        # ==========================================
         def clasificar_fase(etapa):
             e = str(etapa).upper()
             if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
@@ -158,9 +179,9 @@ if archivo_cargado is not None:
         # TABS DE NAVEGACIÓN
         # ==========================================
         tab_dashboards, tab_enablement, tab_scott = st.tabs([
-            "📊 1. Dashboards Directivos (Inteligencia Financiera)", 
-            "🚀 2. Enablement (Cuellos de Botella)", 
-            "🧠 3. Laboratorio Táctico SCOTT (Estrategia AI)"
+            "1. Dashboards Directivos (Inteligencia Financiera)", 
+            "2. Enablement (Cuellos de Botella)", 
+            "3. Laboratorio Táctico SCOTT (Estrategia AI)"
         ])
 
         # ==========================================
@@ -190,66 +211,116 @@ if archivo_cargado is not None:
             col_graf1, col_graf2 = st.columns(2)
             
             with col_graf1:
-                st.markdown("#### Composición de Cartera por Pilar")
-                st.caption("Distribución de montos USD en Alta Gama, Calibraciones y Productos.")
+                st.markdown("#### Composición por Pilar Estratégico")
                 df_graf_pilares = df.groupby('Pilar_Estrategico')['Monto_USD'].sum().reset_index()
                 grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=50).encode(
                     theta=alt.Theta(field="Monto_USD", type="quantitative"),
                     color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS")),
                     tooltip=['Pilar_Estrategico', alt.Tooltip('Monto_USD', format='$,.2f')]
-                ).properties(height=300)
+                ).properties(height=280)
                 st.altair_chart(grafico_pastel, use_container_width=True)
                 
             with col_graf2:
                 st.markdown("#### Salud del Embudo por Fase")
-                st.caption("Distribución del dinero a lo largo del proceso de cierre.")
                 df_graf_fases = df.groupby('Fase_Pipeline')['Monto_USD'].sum().reset_index()
                 grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#003a70').encode(
                     x=alt.X('Fase_Pipeline', title='Etapa CRM'),
                     y=alt.Y('Monto_USD', title='Valor USD ($)'),
                     tooltip=['Fase_Pipeline', alt.Tooltip('Monto_USD', format='$,.2f')]
-                ).properties(height=300)
+                ).properties(height=280)
                 st.altair_chart(grafico_barras, use_container_width=True)
+                
+            st.divider()
+            
+            col_graf3, col_graf4 = st.columns(2)
+            
+            with col_graf3:
+                st.markdown("#### Forecast por Marcas / Fabricantes")
+                df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')['Monto_USD'].sum().reset_index()
+                if not df_marcas.empty:
+                    grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#2ecc71').encode(
+                        x=alt.X('Monto_USD', title='Valor USD ($)'),
+                        y=alt.Y('Marca_Detectada', sort='-x', title='Marca'),
+                        tooltip=['Marca_Detectada', alt.Tooltip('Monto_USD', format='$,.2f')]
+                    ).properties(height=250)
+                    st.altair_chart(grafico_marcas, use_container_width=True)
+                else:
+                    st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
+
+            with col_graf4:
+                st.markdown("#### Forecast por Área de Laboratorio")
+                df_areas = df.groupby('Area_Servicio')['Monto_USD'].sum().reset_index()
+                grafico_areas = alt.Chart(df_areas).mark_bar(color='#e67e22').encode(
+                    x=alt.X('Monto_USD', title='Valor USD ($)'),
+                    y=alt.Y('Area_Servicio', sort='-x', title='Área Técnica'),
+                    tooltip=['Area_Servicio', alt.Tooltip('Monto_USD', format='$,.2f')]
+                ).properties(height=250)
+                st.altair_chart(grafico_areas, use_container_width=True)
 
         # ==========================================
         # TAB 2: ENABLEMENT
         # ==========================================
         with tab_enablement:
-            st.markdown("### Alertas de Riesgo Operativo (Nurturing B2B)")
-            st.caption("Proyectos estancados que requieren apalancamiento o descarte inmediato.")
+            st.markdown("### Riesgo Operativo y Proyectos Estancados")
+            st.caption("Proyectos que requieren apalancamiento estratégico o descarte inmediato.")
             
             estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
             if not estancados.empty:
                 for _, row in estancados.head(4).iterrows():
-                    st.warning(f"⚠️ PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']} | Pilar: {row['Pilar_Estrategico']}")
-                    st.write(f"**Descripción:** {row['Descripcion']}")
-                    st.write(f"Lleva **{row['Días_Activo']:.0f} días** atorado. Valor en riesgo: **${row['Monto_USD']:,.2f} USD**.")
-                    st.markdown("*Sugrencia Enablement:* Activar Nurturing (Casos de éxito/Matriz ROI) o descartar para limpiar Pipeline.")
+                    with st.container(border=True):
+                        st.markdown(f"**PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']}**")
+                        st.write(f"**Equipo/Servicio:** {row['Descripcion']}")
+                        st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Valor en riesgo: **${row['Monto_USD']:,.2f} USD**")
+                        
+                        # BOTÓN DE SINERGIA CON SCOTT
+                        if st.button(f"Enviar a Laboratorio SCOTT", key=f"btn_scott_{row['ID_Proyecto']}"):
+                            st.session_state.proyecto_foco = str(row['ID_Proyecto'])
+                            st.success("Proyecto enviado con éxito. Abre la Pestaña 3 para formular la estrategia.")
             else:
                 st.success("No hay proyectos estancados detectados. Embudo limpio.")
                 
             st.divider()
             st.markdown("#### Base de Datos (Auditoría Rápida)")
-            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Pilar_Estrategico', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
+            
+            # CONFIGURACIÓN PARA QUE LAS COLUMNAS SE AJUSTEN SIN SCROLL HORIZONTAL EXCESIVO
+            st.dataframe(
+                df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD']],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "ID_Proyecto": st.column_config.TextColumn("ID", width="small"),
+                    "Cliente": st.column_config.TextColumn("Cliente", width="medium"),
+                    "Descripcion": st.column_config.TextColumn("Descripción", width="large"),
+                    "Cotizacion": st.column_config.TextColumn("Folio(s)", width="small"),
+                    "Fase_Pipeline": st.column_config.TextColumn("Fase", width="small"),
+                    "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", width="small")
+                }
+            )
 
         # ==========================================
         # TAB 3: LABORATORIO TÁCTICO SCOTT (IA + MEDDPICC)
         # ==========================================
         with tab_scott:
-            st.markdown("### Enlace Estratégico CRM (Radar ➡ SCOTT)")
+            st.markdown("### Enlace Estratégico CRM (Radar a SCOTT)")
             st.caption("Selecciona una cuenta clave para estructurar la estrategia antes de capturar tu actividad en SCOTT.")
             
-            # EL SELECTBOX AHORA MUESTRA LA DESCRIPCIÓN DEL EQUIPO/SERVICIO
             opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
             opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
             
-            seleccion = st.selectbox("Seleccionar Proyecto Objetivo:", opciones_proyectos)
+            # LÓGICA DE SINERGIA: Seleccionar automáticamente si viene de Enablement
+            index_default = 0
+            if st.session_state.proyecto_foco:
+                for i, opcion in enumerate(opciones_proyectos):
+                    if f"[{st.session_state.proyecto_foco}]" in opcion:
+                        index_default = i
+                        break
+            
+            seleccion = st.selectbox("Seleccionar Proyecto Objetivo:", opciones_proyectos, index=index_default)
             
             if seleccion != "-- Selecciona un proyecto clave --":
                 id_seleccionado = seleccion.split("]")[0].replace("[", "")
                 datos_proy = df[df['ID_Proyecto'].astype(str) == id_seleccionado].iloc[0]
                 
-                # FICHA TÉCNICA VISUAL AHORA INCLUYE LA DESCRIPCIÓN
                 st.markdown(f"""
                 <div class="ficha-scott">
                     <h4>FICHA DE PROYECTO PARA SCOTT</h4>
@@ -281,7 +352,6 @@ if archivo_cargado is not None:
                             try:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
-                                # AHORA GEMINI CONOCE EXACTAMENTE EL EQUIPO O SERVICIO
                                 prompt_maestro = f"""
                                 Eres un experto en Revenue Operations, ventas B2B y metodologías SPIN y MEDDPICC.
                                 El estratega de ventas industriales de MESS Servicios Metrológicos necesita documentar una interacción en el CRM "SCOTT".
@@ -302,12 +372,12 @@ if archivo_cargado is not None:
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
-                                st.success("¡Estrategia y Nota SCOTT generadas con éxito!")
+                                st.success("Estrategia y Nota SCOTT generadas con éxito.")
                                 st.write(response.text)
                             except Exception as e:
                                 st.error(f"Error de conexión con la API de Gemini: {e}")
                 else:
-                    st.warning("Agrega tu clave `gemini_api_key` en los Secrets para activar el Laboratorio Táctico.")
+                    st.warning("Agrega tu clave gemini_api_key en los Secrets para activar el Laboratorio Táctico.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
