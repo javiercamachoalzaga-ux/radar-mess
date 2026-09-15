@@ -222,6 +222,7 @@ if archivo_cargado is not None:
             if not estancados.empty:
                 for _, row in estancados.head(4).iterrows():
                     st.warning(f"⚠️ PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']} | Pilar: {row['Pilar_Estrategico']}")
+                    st.write(f"**Descripción:** {row['Descripcion']}")
                     st.write(f"Lleva **{row['Días_Activo']:.0f} días** atorado. Valor en riesgo: **${row['Monto_USD']:,.2f} USD**.")
                     st.markdown("*Sugrencia Enablement:* Activar Nurturing (Casos de éxito/Matriz ROI) o descartar para limpiar Pipeline.")
             else:
@@ -229,7 +230,7 @@ if archivo_cargado is not None:
                 
             st.divider()
             st.markdown("#### Base de Datos (Auditoría Rápida)")
-            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Cotizacion', 'Pilar_Estrategico', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
+            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Pilar_Estrategico', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
         # TAB 3: LABORATORIO TÁCTICO SCOTT (IA + MEDDPICC)
@@ -238,7 +239,8 @@ if archivo_cargado is not None:
             st.markdown("### Enlace Estratégico CRM (Radar ➡ SCOTT)")
             st.caption("Selecciona una cuenta clave para estructurar la estrategia antes de capturar tu actividad en SCOTT.")
             
-            opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {x['Pilar_Estrategico']}", axis=1).tolist()
+            # EL SELECTBOX AHORA MUESTRA LA DESCRIPCIÓN DEL EQUIPO/SERVICIO
+            opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
             opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
             
             seleccion = st.selectbox("Seleccionar Proyecto Objetivo:", opciones_proyectos)
@@ -247,12 +249,13 @@ if archivo_cargado is not None:
                 id_seleccionado = seleccion.split("]")[0].replace("[", "")
                 datos_proy = df[df['ID_Proyecto'].astype(str) == id_seleccionado].iloc[0]
                 
-                # FICHA TÉCNICA VISUAL
+                # FICHA TÉCNICA VISUAL AHORA INCLUYE LA DESCRIPCIÓN
                 st.markdown(f"""
                 <div class="ficha-scott">
                     <h4>FICHA DE PROYECTO PARA SCOTT</h4>
                     <b>Cliente/Planta:</b> {datos_proy['Cliente']}<br>
                     <b>Proyecto ID:</b> {datos_proy['ID_Proyecto']}<br>
+                    <b>Descripción / Equipo:</b> <span style='color:#003a70; font-weight:bold;'>{datos_proy['Descripcion']}</span><br>
                     <b>Cotizaciones Vinculadas:</b> <span style='color:red; font-weight:bold;'>{datos_proy['Cotizacion']}</span><br>
                     <b>Pilar y Fase:</b> {datos_proy['Pilar_Estrategico']} | {datos_proy['Fase_Pipeline']}<br>
                     <b>Monto:</b> ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
@@ -278,6 +281,7 @@ if archivo_cargado is not None:
                             try:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
+                                # AHORA GEMINI CONOCE EXACTAMENTE EL EQUIPO O SERVICIO
                                 prompt_maestro = f"""
                                 Eres un experto en Revenue Operations, ventas B2B y metodologías SPIN y MEDDPICC.
                                 El estratega de ventas industriales de MESS Servicios Metrológicos necesita documentar una interacción en el CRM "SCOTT".
@@ -285,6 +289,7 @@ if archivo_cargado is not None:
                                 Contexto del Proyecto:
                                 - Cliente: {datos_proy['Cliente']}
                                 - ID Proyecto: {datos_proy['ID_Proyecto']}
+                                - Descripción del Equipo/Servicio: {datos_proy['Descripcion']}
                                 - Cotizaciones: {datos_proy['Cotizacion']}
                                 - Pilar: {datos_proy['Pilar_Estrategico']}
                                 - Pain del cliente: {pain}
@@ -292,8 +297,8 @@ if archivo_cargado is not None:
                                 Requerimiento del usuario: {prompt_usuario}
                                 
                                 INSTRUCCIÓN:
-                                1. Primero, dale 2 o 3 consejos tácticos de cómo manejar esta objeción/visita usando preguntas SPIN.
-                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT ==". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el objetivo y el siguiente paso estratégico.
+                                1. Primero, dale 2 o 3 consejos tácticos de cómo manejar esta objeción/visita usando preguntas SPIN enfocadas en el equipo/servicio específico que se está cotizando.
+                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT ==". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el equipo, el objetivo y el siguiente paso estratégico.
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
