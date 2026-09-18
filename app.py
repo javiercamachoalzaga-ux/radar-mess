@@ -56,37 +56,63 @@ archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=[
 
 if archivo_cargado is not None:
     try:
-        # --- LECTOR ROBUSTO AUTOMÁTICO (Comas o Puntos y Comas) ---
-        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', sep=None, engine='python')
+        # --- LECTOR ROBUSTO Y ALINEACIÓN DE ARCHIVOS SCOTT ---
+        # 1. Leemos en crudo sin encabezados fijos
+        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', header=None, sep=None, engine='python')
         
-        # SANEAMIENTO PROFUNDO DE CABECERAS (Quita BOM \ufeff y espacios extra)
-        df_raw.columns = [str(c).upper().replace('\ufeff', '').strip() for c in df_raw.columns]
+        # 2. Buscamos la fila exacta que tiene los títulos de las columnas
+        header_idx = -1
+        for idx, row in df_raw.iterrows():
+            row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
+            if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
+                header_idx = idx
+                break
+                
+        if header_idx == -1:
+            st.error("No se detectó el formato del CRM. Asegúrate de subir la plantilla original de SCOTT.")
+            st.stop()
+            
+        # 3. Limpiamos los títulos de las columnas (quitamos espacios y caracteres ocultos)
+        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
         
+        # 4. Extraemos solo la data y eliminamos las columnas desfasadas (las que están 100% vacías)
+        df_data = df_raw.iloc[header_idx+1:].copy()
+        df_data = df_data.dropna(axis=1, how='all')
+        
+        # 5. Alineamos los datos con los títulos correctos
+        if len(df_data.columns) >= len(headers):
+            df_data = df_data.iloc[:, :len(headers)]
+            df_data.columns = headers
+        else:
+            df_data.columns = headers[:len(df_data.columns)]
+            
+        # 6. Limpiamos filas basura y reseteamos el conteo
+        if 'PROYECTO' in df_data.columns:
+            df_data = df_data.dropna(subset=['PROYECTO']).reset_index(drop=True)
+        else:
+            st.error("Fallo de lectura en la columna PROYECTO.")
+            st.stop()
+
+        # --- MOTOR DE EXTRACCIÓN SEGURO ---
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
-                if clave in df_raw.columns:
-                    return df_raw[clave].copy()
-            return pd.Series([None] * len(df_raw))
+                for col in df_data.columns:
+                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
+                        return df_data[col].copy()
+            return pd.Series([None] * len(df_data))
 
         df_clean = pd.DataFrame()
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
         df_clean['Cotizacion'] = buscar_col(["COTIZACION"])
-        df_clean['Area'] = buscar_col(["AREA"]) 
-        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO"])
+        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
+        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
-        df_clean['Etapa'] = buscar_col(["ETAPA"]) 
+        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # Validación de seguridad: si no encuentra la columna clave, detiene y avisa.
-        if df_clean['ID_Proyecto'].isna().all():
-            st.error("Error de lectura: Asegúrate de guardar el archivo de SCOTT estrictamente como 'CSV (delimitado por comas)'.")
-            st.stop()
-
-        df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
-        df_clean = df_clean.dropna(subset=['ID_Proyecto'])
-
+        # Saneamiento profundo automático (corrige caracteres rotos como "calibraci?n")
         def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
             t = str(texto)
@@ -103,10 +129,11 @@ if archivo_cargado is not None:
             try: return float(''.join(c for c in str(val_str).upper() if c.isdigit() or c == '.'))
             except: return 0.0
 
-        monto_mxn, monto_usd = pd.Series([0.0]*len(df_raw)), pd.Series([0.0]*len(df_raw))
-        if "VALOR" in df_raw.columns:
-            monto_mxn = df_raw["VALOR"].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
-            monto_usd = df_raw["VALOR"].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
+        monto_mxn, monto_usd = pd.Series([0.0]*len(df_data)), pd.Series([0.0]*len(df_data))
+        for col in df_data.columns:
+            if str(col).upper().strip().startswith("VALOR"):
+                monto_mxn += df_data[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
+                monto_usd += df_data[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
         
         df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
