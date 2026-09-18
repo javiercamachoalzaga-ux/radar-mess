@@ -18,7 +18,7 @@ else:
     gemini_activo = False
 
 # ==========================================
-# MEMORIA DE SESIÓN (SINERGIA ENABLEMENT -> SCOTT)
+# MEMORIA DE SESIÓN
 # ==========================================
 if 'proyecto_foco' not in st.session_state:
     st.session_state.proyecto_foco = None
@@ -57,10 +57,8 @@ archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=[
 if archivo_cargado is not None:
     try:
         # --- LECTOR ROBUSTO Y ALINEACIÓN DE ARCHIVOS SCOTT ---
-        # 1. Leemos en crudo sin encabezados fijos
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', header=None, sep=None, engine='python')
         
-        # 2. Buscamos la fila exacta que tiene los títulos de las columnas
         header_idx = -1
         for idx, row in df_raw.iterrows():
             row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
@@ -72,28 +70,23 @@ if archivo_cargado is not None:
             st.error("No se detectó el formato del CRM. Asegúrate de subir la plantilla original de SCOTT.")
             st.stop()
             
-        # 3. Limpiamos los títulos de las columnas (quitamos espacios y caracteres ocultos)
         headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
         
-        # 4. Extraemos solo la data y eliminamos las columnas desfasadas (las que están 100% vacías)
         df_data = df_raw.iloc[header_idx+1:].copy()
         df_data = df_data.dropna(axis=1, how='all')
         
-        # 5. Alineamos los datos con los títulos correctos
         if len(df_data.columns) >= len(headers):
             df_data = df_data.iloc[:, :len(headers)]
             df_data.columns = headers
         else:
             df_data.columns = headers[:len(df_data.columns)]
             
-        # 6. Limpiamos filas basura y reseteamos el conteo
         if 'PROYECTO' in df_data.columns:
             df_data = df_data.dropna(subset=['PROYECTO']).reset_index(drop=True)
         else:
             st.error("Fallo de lectura en la columna PROYECTO.")
             st.stop()
 
-        # --- MOTOR DE EXTRACCIÓN SEGURO ---
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_data.columns:
@@ -112,11 +105,12 @@ if archivo_cargado is not None:
         df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # Saneamiento profundo automático (corrige caracteres rotos como "calibraci?n")
+        # --- CORRECCIÓN CRÍTICA DE SANEAMIENTO ---
         def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
             t = str(texto)
-            t = t.replace("?", "ó").replace("", "í").replace("  ", " ")
+            # Solo reemplazamos signos de interrogación por ó (error clásico de SCOTT con 'calibraci?n')
+            t = t.replace("?", "ó").replace("  ", " ")
             return re.sub(r'\s+', ' ', t).strip().title()
 
         for col in ['Cliente', 'Descripcion', 'Area', 'Estatus', 'Etapa']:
@@ -148,8 +142,14 @@ if archivo_cargado is not None:
         }).reset_index()
 
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
+        
+        # Filtro de seguridad para eliminar vacíos absolutos
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
-        df = df[df['Estatus'].str.contains('PROCESO|PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)].copy()
+        
+        # Filtro corregido: Busca 'Proceso' en Estatus o cualquier fase activa en Etapa
+        filtro_estatus = df['Estatus'].str.contains('PROCESO', case=False, na=False)
+        filtro_etapa = df['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
+        df = df[filtro_estatus | filtro_etapa].copy()
         
         # ==========================================
         # CLASIFICACIÓN (PILARES Y MARCAS)
@@ -189,7 +189,9 @@ if archivo_cargado is not None:
         # --- FILTROS GLOBALES ---
         st.sidebar.divider()
         st.sidebar.header("Filtros Directivos")
-        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar de Negocio:", df['Pilar_Estrategico'].unique(), default=df['Pilar_Estrategico'].unique())
+        
+        opciones_pilares = df['Pilar_Estrategico'].unique().tolist()
+        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar de Negocio:", opciones_pilares, default=opciones_pilares)
         busqueda_proyecto = st.sidebar.text_input("Buscar Folio o Cliente:")
         
         if busqueda_proyecto:
@@ -241,58 +243,64 @@ if archivo_cargado is not None:
             
             st.divider()
             
-            st.markdown(f"#### Forecast por Área Oficial ({moneda_sel})")
-            df_areas = df.groupby('Area')[col_val].sum().reset_index()
-            df_areas = df_areas[df_areas[col_val] > 0] 
-            
-            grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
-                x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                y=alt.Y('Area', sort='-x', title='Área Oficial', axis=alt.Axis(labelLimit=0)),
-                tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
-            ).properties(height=450)
-            st.altair_chart(grafico_areas, use_container_width=True)
-
-            st.divider()
-
-            st.markdown(f"#### Salud del Embudo por Fase ({moneda_sel})")
-            df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-            df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
-            
-            grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
-                x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                y=alt.Y('Fase_Pipeline', sort='-x', title='Etapa CRM', axis=alt.Axis(labelLimit=0)),
-                tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
-            ).properties(height=400)
-            st.altair_chart(grafico_barras, use_container_width=True)
-            
-            st.divider()
-
-            st.markdown(f"#### Composición por Pilar Estratégico ({moneda_sel})")
-            df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
-            df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
-            
-            grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=80).encode(
-                theta=alt.Theta(field=col_val, type="quantitative"),
-                color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom", labelLimit=0)),
-                tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
-            ).properties(height=450)
-            st.altair_chart(grafico_pastel, use_container_width=True)
-
-            st.divider()
-            
-            st.markdown(f"#### Forecast por Marcas / Fabricantes ({moneda_sel})")
-            df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
-            df_marcas = df_marcas[df_marcas[col_val] > 0]
-            
-            if not df_marcas.empty:
-                grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
-                    x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                    y=alt.Y('Marca_Detectada', sort='-x', title='Marca', axis=alt.Axis(labelLimit=0)),
-                    tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
-                ).properties(height=450)
-                st.altair_chart(grafico_marcas, use_container_width=True)
+            if df.empty:
+                st.warning("No hay datos para graficar con los filtros actuales.")
             else:
-                st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
+                st.markdown(f"#### Forecast por Área Oficial ({moneda_sel})")
+                df_areas = df.groupby('Area')[col_val].sum().reset_index()
+                df_areas = df_areas[df_areas[col_val] > 0] 
+                
+                if not df_areas.empty:
+                    grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
+                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                        y=alt.Y('Area', sort='-x', title='Área Oficial', axis=alt.Axis(labelLimit=0)),
+                        tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
+                    ).properties(height=450)
+                    st.altair_chart(grafico_areas, use_container_width=True)
+
+                st.divider()
+
+                st.markdown(f"#### Salud del Embudo por Fase ({moneda_sel})")
+                df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
+                df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
+                
+                if not df_graf_fases.empty:
+                    grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
+                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                        y=alt.Y('Fase_Pipeline', sort='-x', title='Etapa CRM', axis=alt.Axis(labelLimit=0)),
+                        tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
+                    ).properties(height=400)
+                    st.altair_chart(grafico_barras, use_container_width=True)
+                
+                st.divider()
+
+                st.markdown(f"#### Composición por Pilar Estratégico ({moneda_sel})")
+                df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
+                df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
+                
+                if not df_graf_pilares.empty:
+                    grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=80).encode(
+                        theta=alt.Theta(field=col_val, type="quantitative"),
+                        color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom", labelLimit=0)),
+                        tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
+                    ).properties(height=450)
+                    st.altair_chart(grafico_pastel, use_container_width=True)
+
+                st.divider()
+                
+                st.markdown(f"#### Forecast por Marcas / Fabricantes ({moneda_sel})")
+                df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
+                df_marcas = df_marcas[df_marcas[col_val] > 0]
+                
+                if not df_marcas.empty:
+                    grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
+                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
+                        y=alt.Y('Marca_Detectada', sort='-x', title='Marca', axis=alt.Axis(labelLimit=0)),
+                        tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
+                    ).properties(height=450)
+                    st.altair_chart(grafico_marcas, use_container_width=True)
+                else:
+                    st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
 
         # ==========================================
         # TAB 2: ENABLEMENT
@@ -334,7 +342,7 @@ if archivo_cargado is not None:
             )
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO SCOTT (IA EXPERTA MESS)
+        # TAB 3: LABORATORIO TÁCTICO SCOTT
         # ==========================================
         with tab_scott:
             st.markdown("### Laboratorio Táctico y Copiloto Comercial MESS")
