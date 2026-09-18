@@ -241,61 +241,103 @@ if archivo_cargado is not None:
             if df.empty:
                 st.warning("No hay datos para graficar con los filtros actuales.")
             else:
-                st.markdown(f"#### Forecast por Área Oficial ({moneda_sel})")
-                df_areas = df.groupby('Area')[col_val].sum().reset_index()
-                df_areas = df_areas[df_areas[col_val] > 0] 
+                # --- NUEVO: ANÁLISIS PARETO 80/20 ---
+                st.markdown(f"#### Análisis Pareto 80/20 por Cuentas Clave ({moneda_sel})")
+                st.caption("Visualiza qué clientes concentran el grueso de tu pipeline. (Regla: Enfoca SPIN/MEDDPICC en los primeros, aplica Sandler a la cola larga).")
                 
-                if not df_areas.empty:
-                    grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
-                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                        y=alt.Y('Area', sort='-x', title='Área Oficial', axis=alt.Axis(labelLimit=0)),
-                        tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
+                df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
+                df_pareto = df_pareto[df_pareto[col_val] > 0]
+                df_pareto = df_pareto.sort_values(by=col_val, ascending=False).reset_index(drop=True)
+                
+                if not df_pareto.empty:
+                    df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
+                    df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
+                    
+                    # Gráfico de Barras (Monto)
+                    barras_pareto = alt.Chart(df_pareto).mark_bar(color='#34495e').encode(
+                        x=alt.X('Cliente', sort=None, title='Cliente (Ordenados por Monto)', axis=alt.Axis(labelLimit=0)),
+                        y=alt.Y(col_val, title=f'Valor {moneda_sel}'),
+                        tooltip=['Cliente', alt.Tooltip(col_val, format=simbolo_moneda), alt.Tooltip('Porcentaje', format='.1%')]
+                    )
+                    
+                    # Gráfico de Línea (Acumulado %)
+                    linea_pareto = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
+                        x=alt.X('Cliente', sort=None),
+                        y=alt.Y('Acumulado', title='Porcentaje Acumulado', axis=alt.Axis(format='%')),
+                        tooltip=['Cliente', alt.Tooltip('Acumulado', format='.1%')]
+                    )
+                    
+                    # Capa combinada
+                    grafico_pareto = alt.layer(barras_pareto, linea_pareto).resolve_scale(
+                        y='independent'
                     ).properties(height=450)
-                    st.altair_chart(grafico_areas, use_container_width=True)
-
+                    
+                    st.altair_chart(grafico_pareto, use_container_width=True)
+                    
+                    # Pequeño insight dinámico
+                    top_20_percent_clientes = df_pareto[df_pareto['Acumulado'] <= 0.8]
+                    if not top_20_percent_clientes.empty:
+                        num_clientes = len(top_20_percent_clientes)
+                        st.info(f"💡 **Insight Estratégico:** Solo **{num_clientes} cliente(s)** conforman aproximadamente el 80% del valor total de tu pipeline actual. Estos son tus VIPs.")
+                
                 st.divider()
 
-                st.markdown(f"#### Salud del Embudo por Fase ({moneda_sel})")
-                df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-                df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
+                # Gráficos anteriores
+                col_g1, col_g2 = st.columns(2)
                 
-                if not df_graf_fases.empty:
-                    grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
-                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                        y=alt.Y('Fase_Pipeline', sort='-x', title='Etapa CRM', axis=alt.Axis(labelLimit=0)),
-                        tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
-                    ).properties(height=400)
-                    st.altair_chart(grafico_barras, use_container_width=True)
+                with col_g1:
+                    st.markdown(f"**Forecast por Área Oficial ({moneda_sel})**")
+                    df_areas = df.groupby('Area')[col_val].sum().reset_index()
+                    df_areas = df_areas[df_areas[col_val] > 0] 
+                    if not df_areas.empty:
+                        grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
+                            x=alt.X(col_val, title=''),
+                            y=alt.Y('Area', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
+                            tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
+                        ).properties(height=350)
+                        st.altair_chart(grafico_areas, use_container_width=True)
+
+                with col_g2:
+                    st.markdown(f"**Salud del Embudo ({moneda_sel})**")
+                    df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
+                    df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
+                    if not df_graf_fases.empty:
+                        grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
+                            x=alt.X(col_val, title=''),
+                            y=alt.Y('Fase_Pipeline', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
+                            tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
+                        ).properties(height=350)
+                        st.altair_chart(grafico_barras, use_container_width=True)
                 
                 st.divider()
 
-                st.markdown(f"#### Composición por Pilar Estratégico ({moneda_sel})")
-                df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
-                df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
+                col_g3, col_g4 = st.columns(2)
                 
-                if not df_graf_pilares.empty:
-                    grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=80).encode(
-                        theta=alt.Theta(field=col_val, type="quantitative"),
-                        color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares MESS", orient="bottom", labelLimit=0)),
-                        tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
-                    ).properties(height=450)
-                    st.altair_chart(grafico_pastel, use_container_width=True)
+                with col_g3:
+                    st.markdown(f"**Composición por Pilar Estratégico**")
+                    df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
+                    df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
+                    if not df_graf_pilares.empty:
+                        grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=60).encode(
+                            theta=alt.Theta(field=col_val, type="quantitative"),
+                            color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares", orient="bottom")),
+                            tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
+                        ).properties(height=350)
+                        st.altair_chart(grafico_pastel, use_container_width=True)
 
-                st.divider()
-                
-                st.markdown(f"#### Forecast por Marcas / Fabricantes ({moneda_sel})")
-                df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
-                df_marcas = df_marcas[df_marcas[col_val] > 0]
-                
-                if not df_marcas.empty:
-                    grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
-                        x=alt.X(col_val, title=f'Valor {moneda_sel}'),
-                        y=alt.Y('Marca_Detectada', sort='-x', title='Marca', axis=alt.Axis(labelLimit=0)),
-                        tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
-                    ).properties(height=450)
-                    st.altair_chart(grafico_marcas, use_container_width=True)
-                else:
-                    st.info("No se detectaron proyectos de marcas específicas en el pipeline activo.")
+                with col_g4:
+                    st.markdown(f"**Forecast por Marcas ({moneda_sel})**")
+                    df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
+                    df_marcas = df_marcas[df_marcas[col_val] > 0]
+                    if not df_marcas.empty:
+                        grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
+                            x=alt.X(col_val, title=''),
+                            y=alt.Y('Marca_Detectada', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
+                            tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
+                        ).properties(height=350)
+                        st.altair_chart(grafico_marcas, use_container_width=True)
+                    else:
+                        st.info("Sin proyectos de marcas específicas.")
 
         # ==========================================
         # TAB 2: ENABLEMENT
