@@ -56,26 +56,33 @@ archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=[
 
 if archivo_cargado is not None:
     try:
-        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
+        # --- LECTOR ROBUSTO AUTOMÁTICO (Comas o Puntos y Comas) ---
+        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', sep=None, engine='python')
         
-        # --- PROCESAMIENTO, LIMPIEZA Y SANEAMIENTO DE TEXTO ---
+        # SANEAMIENTO PROFUNDO DE CABECERAS (Quita BOM \ufeff y espacios extra)
+        df_raw.columns = [str(c).upper().replace('\ufeff', '').strip() for c in df_raw.columns]
+        
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
-                for col in df_raw.columns:
-                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
-                        return df_raw[col].copy()
+                if clave in df_raw.columns:
+                    return df_raw[clave].copy()
             return pd.Series([None] * len(df_raw))
 
         df_clean = pd.DataFrame()
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
         df_clean['Cotizacion'] = buscar_col(["COTIZACION"])
-        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
-        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
+        df_clean['Area'] = buscar_col(["AREA"]) 
+        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
-        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
+        df_clean['Etapa'] = buscar_col(["ETAPA"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+
+        # Validación de seguridad: si no encuentra la columna clave, detiene y avisa.
+        if df_clean['ID_Proyecto'].isna().all():
+            st.error("Error de lectura: Asegúrate de guardar el archivo de SCOTT estrictamente como 'CSV (delimitado por comas)'.")
+            st.stop()
 
         df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
@@ -83,7 +90,6 @@ if archivo_cargado is not None:
         def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
             t = str(texto)
-            # Reemplazos para corregir caracteres de codificación rotos comunes en CSVs (ej. calibraci?n)
             t = t.replace("?", "ó").replace("", "í").replace("  ", " ")
             return re.sub(r'\s+', ' ', t).strip().title()
 
@@ -98,10 +104,9 @@ if archivo_cargado is not None:
             except: return 0.0
 
         monto_mxn, monto_usd = pd.Series([0.0]*len(df_raw)), pd.Series([0.0]*len(df_raw))
-        for col in df_raw.columns:
-            if str(col).upper().strip().startswith("VALOR"):
-                monto_mxn += df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
-                monto_usd += df_raw[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
+        if "VALOR" in df_raw.columns:
+            monto_mxn = df_raw["VALOR"].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
+            monto_usd = df_raw["VALOR"].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
         
         df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
@@ -200,7 +205,6 @@ if archivo_cargado is not None:
             
             st.divider()
             
-            # SELECTOR GLOBAL DE MONEDA PARA LOS GRÁFICOS
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1:
                 moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
@@ -210,7 +214,6 @@ if archivo_cargado is not None:
             
             st.divider()
             
-            # GRÁFICO 1: ÁREAS OFICIALES
             st.markdown(f"#### Forecast por Área Oficial ({moneda_sel})")
             df_areas = df.groupby('Area')[col_val].sum().reset_index()
             df_areas = df_areas[df_areas[col_val] > 0] 
@@ -224,7 +227,6 @@ if archivo_cargado is not None:
 
             st.divider()
 
-            # GRÁFICO 2: FASES DEL EMBUDO
             st.markdown(f"#### Salud del Embudo por Fase ({moneda_sel})")
             df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
             df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
@@ -238,7 +240,6 @@ if archivo_cargado is not None:
             
             st.divider()
 
-            # GRÁFICO 3: PILARES ESTRATÉGICOS
             st.markdown(f"#### Composición por Pilar Estratégico ({moneda_sel})")
             df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
             df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
@@ -252,7 +253,6 @@ if archivo_cargado is not None:
 
             st.divider()
             
-            # GRÁFICO 4: MARCAS Y FABRICANTES
             st.markdown(f"#### Forecast por Marcas / Fabricantes ({moneda_sel})")
             df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
             df_marcas = df_marcas[df_marcas[col_val] > 0]
@@ -282,7 +282,6 @@ if archivo_cargado is not None:
                         st.write(f"**Equipo/Servicio:** {row['Descripcion']}")
                         st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Valor en riesgo: **${row['Monto_USD']:,.2f} USD / ${row['Monto_MXN']:,.2f} MXN**")
                         
-                        # BOTÓN DE SINERGIA CON SCOTT
                         if st.button(f"Enviar a Laboratorio SCOTT", key=f"btn_scott_{row['ID_Proyecto']}"):
                             st.session_state.proyecto_foco = str(row['ID_Proyecto'])
                             st.success("Proyecto enviado con éxito. Abre la Pestaña 3 para formular la estrategia.")
