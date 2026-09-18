@@ -58,7 +58,7 @@ if archivo_cargado is not None:
     try:
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1')
         
-        # --- PROCESAMIENTO Y LIMPIEZA ---
+        # --- PROCESAMIENTO, LIMPIEZA Y SANEAMIENTO DE TEXTO ---
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_raw.columns:
@@ -80,12 +80,15 @@ if archivo_cargado is not None:
         df_clean['ID_Proyecto'] = df_clean['ID_Proyecto'].ffill()
         df_clean = df_clean.dropna(subset=['ID_Proyecto'])
 
-        def limpiar_ortografia(texto):
+        def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
-            return re.sub(r'\s+', ' ', str(texto).replace("?", " ")).strip().title()
+            t = str(texto)
+            # Reemplazos para corregir caracteres de codificación rotos comunes en CSVs (ej. calibraci?n)
+            t = t.replace("?", "ó").replace("", "í").replace("  ", " ")
+            return re.sub(r'\s+', ' ', t).strip().title()
 
         for col in ['Cliente', 'Descripcion', 'Area', 'Estatus', 'Etapa']:
-            df_clean[col] = df_clean[col].apply(limpiar_ortografia)
+            df_clean[col] = df_clean[col].apply(sanear_y_limpiar)
 
         df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
         df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
@@ -305,11 +308,11 @@ if archivo_cargado is not None:
             )
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO SCOTT (IA + MEDDPICC)
+        # TAB 3: LABORATORIO TÁCTICO SCOTT (IA EXPERTA MESS)
         # ==========================================
         with tab_scott:
-            st.markdown("### Enlace Estratégico CRM (Radar a SCOTT)")
-            st.caption("Selecciona una cuenta clave para estructurar la estrategia antes de capturar tu actividad en SCOTT.")
+            st.markdown("### Laboratorio Táctico y Copiloto Comercial MESS")
+            st.caption("Selecciona tu proyecto y define la audiencia para generar mensajes de WhatsApp, correos y argumentos técnicos orientados al cierre.")
             
             opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
             opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
@@ -340,45 +343,62 @@ if archivo_cargado is not None:
                 """, unsafe_allow_html=True)
                 
                 st.divider()
-                st.markdown("#### 1. Calificación MEDDPICC (Validación interna)")
-                c1, c2, c3 = st.columns(3)
-                eb = c1.selectbox("Economic Buyer", ["Pendiente", "Mapeado", "Acceso Directo Validado"])
-                dc = c2.selectbox("Decision Criteria", ["Precio", "Aspecto Técnico", "Tiempos", "Post Venta"])
-                ch = c3.selectbox("Champion", ["Ninguno", "Usuario Técnico", "Gerencia Aliada"])
-                pain = st.text_input("Describe el Pain (Dolor/Problema de negocio del cliente):")
+                st.markdown("#### Configuración de Interlocutor y Contexto")
+                
+                col_l1, col_l2 = st.columns(2)
+                with col_l1:
+                    interlocutor = st.selectbox("Audiencia Destino:", [
+                        "Ingeniero de Área / Metrólogo / Mantenimiento / Calidad",
+                        "Comprador / Finanzas / Sourcing / Cuentas por Pagar"
+                    ])
+                with col_l2:
+                    area_planta = st.selectbox("Área del Cliente Interesada:", [
+                        "Metrología / Control de Calidad",
+                        "Mantenimiento / Instalaciones",
+                        "Laboratorio de Pruebas / Metalografía",
+                        "Proyectos de Manufactura / Producción",
+                        "Compras / Abastecimiento"
+                    ])
+                
+                contexto_manual = st.text_area("Detalles tácticos de la interacción (Opcional):", placeholder="Ej. El cliente duda del tiempo de entrega o presiona por descuento en la calibración/equipo...")
                 
                 st.divider()
-                st.markdown("#### 2. Copiloto AI (Generador de Notas SCOTT)")
                 
                 if gemini_activo:
-                    prompt_usuario = st.text_area("¿Cuál es el objetivo táctico de esta interacción?", placeholder="Ej. Voy a visitar la planta para validar el presupuesto con el gerente o redactar un correo empujando la orden de compra...")
-                    
-                    if st.button("Generar Estratégia y Nota para SCOTT"):
-                        with st.spinner("Procesando inteligencia comercial para CRM..."):
+                    if st.button("Generar Material de Cierre (WhatsApp, Correo, Llamada y Nota SCOTT)"):
+                        with st.spinner("Conectando con el ADN técnico de MESS y formulando estrategia..."):
                             try:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
                                 prompt_maestro = f"""
-                                Eres un experto en Revenue Operations, ventas B2B y metodologías SPIN y MEDDPICC.
-                                El estratega de ventas industriales de MESS Servicios Metrológicos necesita documentar una interacción en el CRM "SCOTT".
+                                Eres un experto en Revenue Operations, ventas B2B industriales y especialista senior de MESS Servicios Metrológicos (www.mess.com.mx).
+                                MESS ofrece servicios de calibración bajo norma ISO/IEC 17025 (acreditaciones EMA), metrología dimensional, calibración en sitio, y distribución/representación de marcas de alta gama (Fluke, Buehler, Wilson, Baty, Mitutoyo, etc.).
                                 
-                                Contexto del Proyecto:
+                                Contexto del Proyecto Activo:
                                 - Cliente: {datos_proy['Cliente']}
                                 - ID Proyecto: {datos_proy['ID_Proyecto']}
                                 - Descripción del Equipo/Servicio: {datos_proy['Descripcion']}
                                 - Cotizaciones: {datos_proy['Cotizacion']}
                                 - Pilar: {datos_proy['Pilar_Estrategico']}
-                                - Pain del cliente: {pain}
+                                - Monto: ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
                                 
-                                Requerimiento del usuario: {prompt_usuario}
+                                Parámetros de la Interacción:
+                                - Audiencia destino: {interlocutor}
+                                - Área específica de la planta cliente: {area_planta}
+                                - Notas / Situación actual del deal: {contexto_manual}
                                 
-                                INSTRUCCIÓN:
-                                1. Primero, dale 2 o 3 consejos tácticos de cómo manejar esta objeción/visita usando preguntas SPIN enfocadas en el equipo/servicio específico que se está cotizando.
-                                2. Al final, genera un bloque de texto que diga "== TEXTO LISTO PARA PEGAR EN SCOTT =". Este bloque debe estar formateado profesionalmente para pegarse como una nota de actividad en el CRM, incluyendo los datos del folio de cotización, el equipo, el objetivo y el siguiente paso estratégico.
+                                INSTRUCCIÓN ESTRICTA:
+                                Genera una respuesta estructurada con las siguientes secciones exactas, utilizando un tono comercial impecable y ajustado a la audiencia seleccionada (si es ingeniero, háblale de tablas CMC, trazabilidad, marcas y precisión; si es comprador, háblale de TCO, cumplimiento normativo, tiempos y soporte local en Querétaro):
+                                
+                                1. ESTRATEGIA Y CONSEJOS TÁCTICOS (2 o 3 puntos clave para asegurar el cierre).
+                                2. MENSAJE DE WHATSAPP (Ágil, directo, persuasivo, listo para enviar desde el celular).
+                                3. CORREO EJECUTIVO (Formal, enfocado en valor, acreditaciones MESS y llamada a la acción).
+                                4. GUION DE LLAMADA Y MANEJO DE OBJECIONES (Preguntas SPIN y cómo responder a bloqueos comunes).
+                                5. == TEXTO LISTO PARA PEGAR EN SCOTT == (Nota resumida y profesional de la actividad comercial realizada, incluyendo folios, equipos y siguiente paso estratégico).
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
-                                st.success("Estrategia y Nota SCOTT generadas con éxito.")
+                                st.success("Material táctico generado con éxito.")
                                 st.write(response.text)
                             except Exception as e:
                                 st.error(f"Error de conexión con la API de Gemini: {e}")
