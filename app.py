@@ -341,7 +341,7 @@ if archivo_cargado is not None:
         # ==========================================
         with tab_scott:
             st.markdown("### Laboratorio Táctico y Copiloto Comercial MESS")
-            st.caption("Selecciona tu proyecto y define la audiencia para generar mensajes de WhatsApp, correos y argumentos técnicos orientados al cierre.")
+            st.caption("Selecciona tu proyecto y el tipo de operación para diseñar la táctica.")
             
             opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
             opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
@@ -372,13 +372,18 @@ if archivo_cargado is not None:
                 """, unsafe_allow_html=True)
                 
                 st.divider()
-                st.markdown("#### Configuración de Interlocutor y Contexto")
+                st.markdown("#### Configuración de la Operación Estratégica")
                 
+                tipo_operacion = st.radio("Tipo de Acción a Ejecutar:", [
+                    "Aceleración y Cierre (Generar presión en deals activos)", 
+                    "Apertura y Visitas Estratégicas (Prospección y acompañamiento directivo/PM)"
+                ])
+
                 col_l1, col_l2 = st.columns(2)
                 with col_l1:
                     interlocutor = st.selectbox("Audiencia Destino:", [
                         "Ingeniero de Área / Metrólogo / Mantenimiento / Calidad",
-                        "Comprador / Finanzas / Sourcing / Cuentas por Pagar"
+                        "Comprador / Finanzas / Sourcing / Gerente de Planta"
                     ])
                 with col_l2:
                     area_planta = st.selectbox("Área del Cliente Interesada:", [
@@ -389,51 +394,70 @@ if archivo_cargado is not None:
                         "Compras / Abastecimiento"
                     ])
                 
-                contexto_manual = st.text_area("Detalles tácticos de la interacción (Opcional):", placeholder="Ej. El cliente duda del tiempo de entrega o presiona por descuento en la calibración/equipo...")
+                contexto_manual = st.text_area("Detalles tácticos (Ej. El cliente duda del tiempo de entrega, o iré acompañado de Óscar Morales la próxima semana):", placeholder="Escribe el contexto comercial...")
                 
                 st.divider()
                 
                 if gemini_activo:
-                    if st.button("Generar Material de Cierre (WhatsApp, Correo, Llamada y Nota SCOTT)"):
-                        with st.spinner("Conectando con el ADN técnico de MESS y formulando estrategia..."):
+                    boton_texto = "Generar Plan de Visita y Guion de Apertura" if "Apertura" in tipo_operacion else "Generar Material de Cierre (Marketing, Correo, Guion)"
+                    
+                    if st.button(boton_texto):
+                        with st.spinner("Conectando con el ADN técnico y comercial de MESS..."):
                             try:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
-                                prompt_maestro = f"""
-                                Eres un experto en Revenue Operations, ventas B2B industriales, y especialista senior de MESS Servicios Metrológicos (www.mess.com.mx). Dominas las metodologías SPIN, MEDDPICC y SANDLER.
-                                MESS ofrece servicios de calibración bajo norma ISO/IEC 17025 (acreditaciones EMA), metrología dimensional, calibración en sitio, y distribución de marcas de alta gama (Fluke, Buehler, Wilson, Baty, Mitutoyo, etc.).
-                                
-                                Contexto del Proyecto Activo:
-                                - Cliente: {datos_proy['Cliente']}
-                                - ID Proyecto: {datos_proy['ID_Proyecto']}
-                                - Descripción del Equipo/Servicio: {datos_proy['Descripcion']}
-                                - Cotizaciones: {datos_proy['Cotizacion']}
-                                - Monto: ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
-                                
-                                Parámetros de la Interacción:
-                                - Audiencia destino: {interlocutor}
-                                - Área de la planta: {area_planta}
-                                - Notas del vendedor: {contexto_manual}
-                                
-                                REGLAS ESTRICTAS DE ESTILO Y ARGOT METROLÓGICO:
-                                1. LENGUAJE TÉCNICO: Utiliza términos precisos y profesionales de la industria. Di "micrómetros" (NO "submicras"), "incertidumbre expandida", "trazabilidad", "error máximo permitido", "tolerancias geométricas", "certificación EMA", según aplique al equipo o servicio.
-                                2. TONO Y TRATO: Háblale de "tú" al cliente para generar confianza, pero dirígete a él SIEMPRE como "Ing." para darle estatus y respeto (Ejemplo: "¿Qué tal, Ing.? ¿Cómo va el proyecto?"). NO uses "usted" acartonado.
-                                3. LÓGICA DE METODOLOGÍA (CRÍTICA):
-                                   - Si el monto del proyecto es BAJO o transaccional (ej. una calibración de rutina menor a $1,000 USD / $20,000 MXN), aplica la metodología SANDLER: Busca un "contrato previo" rápido. Queremos un SÍ o un NO hoy mismo para no perder tiempo en seguimientos eternos y depurar el CRM. Ve al grano, califica el dolor y exige una decisión.
-                                   - Si el monto es ALTO (ej. venta de equipos de Alta Gama, CMM, óptica, superior a $2,000 USD), aplica SPIN y MEDDPICC: Enfócate en las preguntas de implicación, construye el caso de negocio, resalta el ROI, el TCO y el riesgo de paros de línea.
-                                
-                                INSTRUCCIÓN:
-                                Genera una respuesta estructurada con las siguientes 5 secciones exactas:
-                                
-                                1. ESTRATEGIA Y CONSEJOS TÁCTICOS (Justifica si usarás Sandler para depurar o SPIN/MEDDPICC para anclar valor, y da 2 puntos de acción).
-                                2. MENSAJE DE WHATSAPP (Directo, persuasivo, usando el trato "Ing.").
-                                3. CORREO EJECUTIVO (Fluido, con peso técnico/metrológico y un Call to Action claro para forzar el avance).
-                                4. GUION DE LLAMADA Y MANEJO DE OBJECIONES (El guion exacto de lo que dirás al teléfono basado en la metodología elegida).
-                                5. == TEXTO LISTO PARA PEGAR EN SCOTT == (Resumen corporativo de la actividad para el CRM, folios, y siguiente paso).
-                                """
+                                if "Apertura" in tipo_operacion:
+                                    prompt_maestro = f"""
+                                    Eres un experto en Revenue Operations, ventas B2B industriales, y especialista senior de MESS Servicios Metrológicos. Dominas las metodologías SPIN y SANDLER.
+                                    
+                                    Contexto del Proyecto/Prospecto:
+                                    - Cliente: {datos_proy['Cliente']} (Área: {area_planta})
+                                    - Audiencia: {interlocutor}
+                                    - Equipo/Servicio de interés: {datos_proy['Descripcion']}
+                                    - Contexto de la Visita: {contexto_manual}
+                                    
+                                    REGLAS DE ESTILO METROLÓGICO:
+                                    1. Di "micrómetros" (NO submicras), "incertidumbre expandida", "trazabilidad", "error máximo permitido", "acreditación EMA".
+                                    2. Háblale de "tú" al cliente pero usando "Ing." (Ej. "¿Qué tal, Ing.?").
+                                    
+                                    INSTRUCCIÓN (VISITAS Y APERTURA):
+                                    Genera un plan de 4 secciones:
+                                    1. GUION PARA ABRIR PUERTAS (COLD/WARM APPROACH): Un mensaje o guion telefónico basado en la metodología Sandler (dolor) para conseguir la cita. Sin rodeos, mencionando un problema típico de {area_planta} relacionado con {datos_proy['Descripcion']}.
+                                    2. PLAN DE VISITA A PLANTA (GEMBA WALK): Qué no hacer (no sacar el PowerPoint de inmediato) y qué pedir ver físicamente (la zona de rechazos, la CMM actual, el cuello de botella).
+                                    3. PREGUNTAS SPIN DE DIAGNÓSTICO: 3 preguntas de Implicación (la "I" de SPIN) a realizar durante el recorrido en planta para dimensionar el costo de no resolver el problema.
+                                    4. COREOGRAFÍA DE ACOMPAÑAMIENTO (ROLES): Si el vendedor va con el Product Manager, el PM es el francotirador técnico; el vendedor dirige la reunión. Si va con Martín Becerra (Gerencia Comercial), Martín aborda negociaciones de TCO y apalancamiento financiero. Si va con Óscar Morales (Dirección General), Óscar alinea estratégicamente con el Gerente de Planta del cliente. Define cómo presentar al acompañante.
+                                    """
+                                else:
+                                    prompt_maestro = f"""
+                                    Eres un experto en Revenue Operations, ventas B2B industriales, y especialista senior de MESS Servicios Metrológicos. Dominas las metodologías SPIN, MEDDPICC y SANDLER, así como Account-Based Marketing (ABM).
+                                    
+                                    Contexto del Proyecto Activo:
+                                    - Cliente: {datos_proy['Cliente']}
+                                    - ID Proyecto: {datos_proy['ID_Proyecto']}
+                                    - Equipo/Servicio: {datos_proy['Descripcion']}
+                                    - Monto: ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
+                                    - Audiencia: {interlocutor} (Área: {area_planta})
+                                    - Notas: {contexto_manual}
+                                    
+                                    REGLAS DE ESTILO METROLÓGICO:
+                                    1. Di "micrómetros" (NO submicras), "incertidumbre expandida", "trazabilidad", "error máximo permitido", "acreditación EMA".
+                                    2. Háblale de "tú" pero usando "Ing.".
+                                    3. LÓGICA DE METODOLOGÍA:
+                                       - Si el monto es BAJO (<$1,000 USD): Aplica SANDLER (forzar el SÍ o NO inmediato, sin desgastes).
+                                       - Si el monto es ALTO (>$2,000 USD): Aplica SPIN/MEDDPICC (ROI, implicaciones, riesgo operativo).
+                                    
+                                    INSTRUCCIÓN (CIERRE Y ACELERACIÓN):
+                                    Genera:
+                                    1. ESTRATEGIA Y CONSEJOS TÁCTICOS (Justifica Sandler o SPIN según el monto).
+                                    2. ESTRATEGIA DE MARKETING B2B (1 o 2 acciones ABM precisas para que Marketing apoye el cierre, ej. enviar caso de éxito o invitar a webinar).
+                                    3. MENSAJE DE WHATSAPP (Directo, persuasivo, "Ing.").
+                                    4. CORREO EJECUTIVO (Call to Action claro).
+                                    5. GUION DE LLAMADA Y MANEJO DE OBJECIONES.
+                                    6. == TEXTO LISTO PARA PEGAR EN SCOTT ==.
+                                    """
                                 
                                 response = model.generate_content(prompt_maestro)
-                                st.success("Material táctico generado con éxito.")
+                                st.success("Estrategia generada con éxito.")
                                 st.write(response.text)
                             except Exception as e:
                                 st.error(f"Error de conexión con la API de Gemini: {e}")
