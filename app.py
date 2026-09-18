@@ -285,11 +285,6 @@ if archivo_cargado is not None:
                     
                     st.altair_chart(grafico_pareto, use_container_width=True)
                     
-                    top_20_percent_clientes = df_pareto[df_pareto['Acumulado'] <= 0.8]
-                    if not top_20_percent_clientes.empty:
-                        num_clientes = len(top_20_percent_clientes)
-                        st.info(f"💡 **Insight Estratégico:** Solo **{num_clientes} cliente(s)** conforman aproximadamente el 80% del valor total de tu pipeline actual. Estos son tus VIPs.")
-                
                 st.divider()
 
                 col_g1, col_g2 = st.columns(2)
@@ -317,36 +312,6 @@ if archivo_cargado is not None:
                             tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
                         ).properties(height=350)
                         st.altair_chart(grafico_barras, use_container_width=True)
-                
-                st.divider()
-
-                col_g3, col_g4 = st.columns(2)
-                
-                with col_g3:
-                    st.markdown(f"**Composición por Pilar Estratégico**")
-                    df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
-                    df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
-                    if not df_graf_pilares.empty:
-                        grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=60).encode(
-                            theta=alt.Theta(field=col_val, type="quantitative"),
-                            color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares", orient="bottom")),
-                            tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_pastel, use_container_width=True)
-
-                with col_g4:
-                    st.markdown(f"**Forecast por Marcas ({moneda_sel})**")
-                    df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
-                    df_marcas = df_marcas[df_marcas[col_val] > 0]
-                    if not df_marcas.empty:
-                        grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
-                            x=alt.X(col_val, title=''),
-                            y=alt.Y('Marca_Detectada', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
-                            tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_marcas, use_container_width=True)
-                    else:
-                        st.info("Sin proyectos de marcas específicas.")
 
         # ==========================================
         # TAB 2: ENABLEMENT
@@ -379,11 +344,7 @@ if archivo_cargado is not None:
                 column_config={
                     "ID_Proyecto": st.column_config.TextColumn("ID", width="small"),
                     "Cliente": st.column_config.TextColumn("Cliente", width="medium"),
-                    "Descripcion": st.column_config.TextColumn("Descripción", width="large"),
-                    "Cotizacion": st.column_config.TextColumn("Folio(s)", width="small"),
-                    "Fase_Pipeline": st.column_config.TextColumn("Fase", width="small"),
-                    "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", width="small"),
-                    "Monto_MXN": st.column_config.NumberColumn("MXN", format="$%.2f", width="small")
+                    "Descripcion": st.column_config.TextColumn("Descripción", width="large")
                 }
             )
 
@@ -416,8 +377,6 @@ if archivo_cargado is not None:
                     <b>Cliente/Planta:</b> {datos_proy['Cliente']}<br>
                     <b>Proyecto ID:</b> {datos_proy['ID_Proyecto']}<br>
                     <b>Descripción / Equipo:</b> <span style='color:#003a70; font-weight:bold;'>{datos_proy['Descripcion']}</span><br>
-                    <b>Cotizaciones Vinculadas:</b> <span style='color:red; font-weight:bold;'>{datos_proy['Cotizacion']}</span><br>
-                    <b>Pilar y Fase:</b> {datos_proy['Pilar_Estrategico']} | {datos_proy['Fase_Pipeline']}<br>
                     <b>Monto:</b> ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
                 </div>
                 """, unsafe_allow_html=True)
@@ -440,12 +399,10 @@ if archivo_cargado is not None:
                     area_planta = st.selectbox("Área del Cliente Interesada:", [
                         "Metrología / Control de Calidad",
                         "Mantenimiento / Instalaciones",
-                        "Laboratorio de Pruebas / Metalografía",
-                        "Proyectos de Manufactura / Producción",
                         "Compras / Abastecimiento"
                     ])
                 
-                contexto_manual = st.text_area("Detalles tácticos (Ej. El cliente duda del tiempo de entrega, o iré acompañado de Óscar Morales la próxima semana):", placeholder="Escribe el contexto comercial...")
+                contexto_manual = st.text_area("Detalles tácticos:", placeholder="Escribe el contexto comercial...")
                 
                 st.divider()
                 
@@ -455,7 +412,6 @@ if archivo_cargado is not None:
                     if st.button(boton_texto):
                         with st.spinner("Conectando con el ADN técnico y comercial de MESS..."):
                             try:
-                                # RESTAURADO A 3.6-FLASH PARA EVITAR CONFLICTOS DE ENTORNO
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
                                 if "Apertura" in tipo_operacion:
@@ -529,21 +485,80 @@ if archivo_cargado is not None:
                     
                     col_export1, col_export2 = st.columns(2)
                     
-                    # BOTÓN WHATSAPP
+                    # BOTÓN WHATSAPP (CON FILTRO INTELIGENTE)
                     with col_export1:
-                        texto_url = urllib.parse.quote(st.session_state.tactica_generada)
-                        url_whatsapp = f"https://wa.me/?text={texto_url}"
-                        st.link_button("📲 Abrir en WhatsApp (Copiar Texto)", url_whatsapp, use_container_width=True)
+                        texto_completo = st.session_state.tactica_generada
+                        texto_wa = texto_completo # Respaldo por si falla la extracción
                         
-                    # BOTÓN WORD
+                        try:
+                            if "MENSAJE DE WHATSAPP" in texto_completo.upper():
+                                match = re.search(r'(?i)MENSAJE DE WHATSAPP.*?\n(.*?)(?=\n\s*\**4\.?\s*\*?CORREO EJECUTIVO|\Z)', texto_completo, re.DOTALL)
+                                if match:
+                                    texto_wa = match.group(1).strip()
+                            elif "GUION PARA ABRIR PUERTAS" in texto_completo.upper():
+                                match = re.search(r'(?i)GUION PARA ABRIR PUERTAS.*?\n(.*?)(?=\n\s*\**2\.?\s*\*?PLAN DE VISITA|\Z)', texto_completo, re.DOTALL)
+                                if match:
+                                    texto_wa = match.group(1).strip()
+                        except:
+                            pass
+                            
+                        texto_url = urllib.parse.quote(texto_wa)
+                        url_whatsapp = f"https://wa.me/?text={texto_url}"
+                        st.link_button("📲 Enviar Mensaje por WhatsApp", url_whatsapp, use_container_width=True)
+                        
+                    # BOTÓN WORD (FORMATO PROFESIONAL)
                     with col_export2:
                         if docx_disponible:
-                            # Generar Word al vuelo
                             doc = Document()
-                            doc.add_heading(f"Bitácora Táctica: {st.session_state.tactica_cliente}", 0)
-                            doc.add_heading(f"Proyecto ID: {st.session_state.tactica_id}", 1)
-                            doc.add_paragraph(f"Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-                            doc.add_paragraph(st.session_state.tactica_generada)
+                            
+                            # Formato de Cabecera Corporativa
+                            titulo = doc.add_heading('BITÁCORA TÁCTICA | REVENUE OPERATIONS', 0)
+                            titulo.alignment = 1 # Centrado
+                            
+                            doc.add_heading(f"Cliente: {st.session_state.tactica_cliente}", 1)
+                            
+                            p_meta = doc.add_paragraph()
+                            p_meta.add_run("ID del Proyecto: ").bold = True
+                            p_meta.add_run(f"{st.session_state.tactica_id}\n")
+                            p_meta.add_run("Generado por ejecutivo: ").bold = True
+                            p_meta.add_run("Javier Alfonso Camacho\n")
+                            p_meta.add_run("Fecha de guardado: ").bold = True
+                            # Fecha actual en formato profesional
+                            fecha_actual = datetime.now().strftime("%d/%m/%Y a las %H:%M hrs")
+                            p_meta.add_run(fecha_actual)
+                            
+                            doc.add_paragraph("_" * 50) # Línea divisoria
+                            
+                            # Parseo básico de Markdown para que el Word se vea limpio
+                            lineas = st.session_state.tactica_generada.split('\n')
+                            for linea in lineas:
+                                linea = linea.strip()
+                                if not linea:
+                                    continue
+                                
+                                # Detectar encabezados (#)
+                                if re.match(r'^#+\s', linea):
+                                    nivel = linea.count('#', 0, 5)
+                                    texto_limpio = re.sub(r'^#+\s', '', linea)
+                                    texto_limpio = texto_limpio.replace('*', '') # Limpiar asteriscos
+                                    doc.add_heading(texto_limpio, level=min(nivel, 3))
+                                else:
+                                    p = doc.add_paragraph()
+                                    
+                                    # Detectar listas
+                                    if linea.startswith('- ') or linea.startswith('* '):
+                                        p.style = 'List Bullet'
+                                        linea = linea[2:]
+                                    elif re.match(r'^\d+\.\s', linea):
+                                        p.style = 'List Number'
+                                        linea = re.sub(r'^\d+\.\s', '', linea)
+                                    
+                                    # Convertir **texto** a negritas
+                                    fragmentos = re.split(r'\*\*(.*?)\*\*', linea)
+                                    for i, fragmento in enumerate(fragmentos):
+                                        run = p.add_run(fragmento)
+                                        if i % 2 != 0: # Lo que estaba entre asteriscos se vuelve negrita
+                                            run.bold = True
                             
                             buffer = io.BytesIO()
                             doc.save(buffer)
@@ -552,7 +567,7 @@ if archivo_cargado is not None:
                             st.download_button(
                                 label="📄 Descargar Bitácora (.docx)",
                                 data=buffer,
-                                file_name=f"Bitacora_{st.session_state.tactica_id}_{datetime.now().strftime('%Y%m%d')}.docx",
+                                file_name=f"Bitacora_MESS_{st.session_state.tactica_id}_{datetime.now().strftime('%Y%m%d')}.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                 use_container_width=True
                             )
