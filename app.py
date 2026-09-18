@@ -105,11 +105,9 @@ if archivo_cargado is not None:
         df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        # --- CORRECCIÓN CRÍTICA DE SANEAMIENTO ---
         def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
             t = str(texto)
-            # Solo reemplazamos signos de interrogación por ó (error clásico de SCOTT con 'calibraci?n')
             t = t.replace("?", "ó").replace("  ", " ")
             return re.sub(r'\s+', ' ', t).strip().title()
 
@@ -143,10 +141,7 @@ if archivo_cargado is not None:
 
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         
-        # Filtro de seguridad para eliminar vacíos absolutos
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
-        
-        # Filtro corregido: Busca 'Proceso' en Estatus o cualquier fase activa en Etapa
         filtro_estatus = df['Estatus'].str.contains('PROCESO', case=False, na=False)
         filtro_etapa = df['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
         df = df[filtro_estatus | filtro_etapa].copy()
@@ -342,7 +337,7 @@ if archivo_cargado is not None:
             )
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO SCOTT
+        # TAB 3: LABORATORIO TÁCTICO SCOTT (IA EXPERTA)
         # ==========================================
         with tab_scott:
             st.markdown("### Laboratorio Táctico y Copiloto Comercial MESS")
@@ -405,30 +400,36 @@ if archivo_cargado is not None:
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
                                 prompt_maestro = f"""
-                                Eres un experto en Revenue Operations, ventas B2B industriales y especialista senior de MESS Servicios Metrológicos (www.mess.com.mx).
-                                MESS ofrece servicios de calibración bajo norma ISO/IEC 17025 (acreditaciones EMA), metrología dimensional, calibración en sitio, y distribución/representación de marcas de alta gama (Fluke, Buehler, Wilson, Baty, Mitutoyo, etc.).
+                                Eres un experto en Revenue Operations, ventas B2B industriales, y especialista senior de MESS Servicios Metrológicos (www.mess.com.mx). Dominas las metodologías SPIN, MEDDPICC y SANDLER.
+                                MESS ofrece servicios de calibración bajo norma ISO/IEC 17025 (acreditaciones EMA), metrología dimensional, calibración en sitio, y distribución de marcas de alta gama (Fluke, Buehler, Wilson, Baty, Mitutoyo, etc.).
                                 
                                 Contexto del Proyecto Activo:
                                 - Cliente: {datos_proy['Cliente']}
                                 - ID Proyecto: {datos_proy['ID_Proyecto']}
                                 - Descripción del Equipo/Servicio: {datos_proy['Descripcion']}
                                 - Cotizaciones: {datos_proy['Cotizacion']}
-                                - Pilar: {datos_proy['Pilar_Estrategico']}
                                 - Monto: ${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN
                                 
                                 Parámetros de la Interacción:
                                 - Audiencia destino: {interlocutor}
-                                - Área específica de la planta cliente: {area_planta}
-                                - Notas / Situación actual del deal: {contexto_manual}
+                                - Área de la planta: {area_planta}
+                                - Notas del vendedor: {contexto_manual}
                                 
-                                INSTRUCCIÓN ESTRICTA:
-                                Genera una respuesta estructurada con las siguientes secciones exactas, utilizando un tono comercial impecable y ajustado a la audiencia seleccionada (si es ingeniero, háblale de tablas CMC, trazabilidad, marcas y precisión; si es comprador, háblale de TCO, cumplimiento normativo, tiempos y soporte local en Querétaro):
+                                REGLAS ESTRICTAS DE ESTILO Y ARGOT METROLÓGICO:
+                                1. LENGUAJE TÉCNICO: Utiliza términos precisos y profesionales de la industria. Di "micrómetros" (NO "submicras"), "incertidumbre expandida", "trazabilidad", "error máximo permitido", "tolerancias geométricas", "certificación EMA", según aplique al equipo o servicio.
+                                2. TONO Y TRATO: Háblale de "tú" al cliente para generar confianza, pero dirígete a él SIEMPRE como "Ing." para darle estatus y respeto (Ejemplo: "¿Qué tal, Ing.? ¿Cómo va el proyecto?"). NO uses "usted" acartonado.
+                                3. LÓGICA DE METODOLOGÍA (CRÍTICA):
+                                   - Si el monto del proyecto es BAJO o transaccional (ej. una calibración de rutina menor a $1,000 USD / $20,000 MXN), aplica la metodología SANDLER: Busca un "contrato previo" rápido. Queremos un SÍ o un NO hoy mismo para no perder tiempo en seguimientos eternos y depurar el CRM. Ve al grano, califica el dolor y exige una decisión.
+                                   - Si el monto es ALTO (ej. venta de equipos de Alta Gama, CMM, óptica, superior a $2,000 USD), aplica SPIN y MEDDPICC: Enfócate en las preguntas de implicación, construye el caso de negocio, resalta el ROI, el TCO y el riesgo de paros de línea.
                                 
-                                1. ESTRATEGIA Y CONSEJOS TÁCTICOS (2 o 3 puntos clave para asegurar el cierre).
-                                2. MENSAJE DE WHATSAPP (Ágil, directo, persuasivo, listo para enviar desde el celular).
-                                3. CORREO EJECUTIVO (Formal, enfocado en valor, acreditaciones MESS y llamada a la acción).
-                                4. GUION DE LLAMADA Y MANEJO DE OBJECIONES (Preguntas SPIN y cómo responder a bloqueos comunes).
-                                5. == TEXTO LISTO PARA PEGAR EN SCOTT == (Nota resumida y profesional de la actividad comercial realizada, incluyendo folios, equipos y siguiente paso estratégico).
+                                INSTRUCCIÓN:
+                                Genera una respuesta estructurada con las siguientes 5 secciones exactas:
+                                
+                                1. ESTRATEGIA Y CONSEJOS TÁCTICOS (Justifica si usarás Sandler para depurar o SPIN/MEDDPICC para anclar valor, y da 2 puntos de acción).
+                                2. MENSAJE DE WHATSAPP (Directo, persuasivo, usando el trato "Ing.").
+                                3. CORREO EJECUTIVO (Fluido, con peso técnico/metrológico y un Call to Action claro para forzar el avance).
+                                4. GUION DE LLAMADA Y MANEJO DE OBJECIONES (El guion exacto de lo que dirás al teléfono basado en la metodología elegida).
+                                5. == TEXTO LISTO PARA PEGAR EN SCOTT == (Resumen corporativo de la actividad para el CRM, folios, y siguiente paso).
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
