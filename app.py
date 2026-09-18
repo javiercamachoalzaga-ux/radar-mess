@@ -5,11 +5,20 @@ import altair as alt
 from datetime import datetime
 import re
 import google.generativeai as genai
+import urllib.parse
+import io
+
+# Intenta importar la librería de Word. Si no está instalada, no rompe la app, solo avisa.
+try:
+    from docx import Document
+    docx_disponible = True
+except ImportError:
+    docx_disponible = False
 
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# CONFIGURACIÓN GEMINI API (3.6 FLASH)
+# CONFIGURACIÓN GEMINI API
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
@@ -18,10 +27,16 @@ else:
     gemini_activo = False
 
 # ==========================================
-# MEMORIA DE SESIÓN
+# MEMORIA DE SESIÓN (STATE)
 # ==========================================
 if 'proyecto_foco' not in st.session_state:
     st.session_state.proyecto_foco = None
+if 'tactica_generada' not in st.session_state:
+    st.session_state.tactica_generada = ""
+if 'tactica_cliente' not in st.session_state:
+    st.session_state.tactica_cliente = ""
+if 'tactica_id' not in st.session_state:
+    st.session_state.tactica_id = ""
 
 # --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
@@ -241,9 +256,8 @@ if archivo_cargado is not None:
             if df.empty:
                 st.warning("No hay datos para graficar con los filtros actuales.")
             else:
-                # --- NUEVO: ANÁLISIS PARETO 80/20 ---
                 st.markdown(f"#### Análisis Pareto 80/20 por Cuentas Clave ({moneda_sel})")
-                st.caption("Visualiza qué clientes concentran el grueso de tu pipeline. (Regla: Enfoca SPIN/MEDDPICC en los primeros, aplica Sandler a la cola larga).")
+                st.caption("Visualiza qué clientes concentran el grueso de tu pipeline.")
                 
                 df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
                 df_pareto = df_pareto[df_pareto[col_val] > 0]
@@ -253,28 +267,24 @@ if archivo_cargado is not None:
                     df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
                     df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
                     
-                    # Gráfico de Barras (Monto)
                     barras_pareto = alt.Chart(df_pareto).mark_bar(color='#34495e').encode(
                         x=alt.X('Cliente', sort=None, title='Cliente (Ordenados por Monto)', axis=alt.Axis(labelLimit=0)),
                         y=alt.Y(col_val, title=f'Valor {moneda_sel}'),
                         tooltip=['Cliente', alt.Tooltip(col_val, format=simbolo_moneda), alt.Tooltip('Porcentaje', format='.1%')]
                     )
                     
-                    # Gráfico de Línea (Acumulado %)
                     linea_pareto = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
                         x=alt.X('Cliente', sort=None),
                         y=alt.Y('Acumulado', title='Porcentaje Acumulado', axis=alt.Axis(format='%')),
                         tooltip=['Cliente', alt.Tooltip('Acumulado', format='.1%')]
                     )
                     
-                    # Capa combinada
                     grafico_pareto = alt.layer(barras_pareto, linea_pareto).resolve_scale(
                         y='independent'
                     ).properties(height=450)
                     
                     st.altair_chart(grafico_pareto, use_container_width=True)
                     
-                    # Pequeño insight dinámico
                     top_20_percent_clientes = df_pareto[df_pareto['Acumulado'] <= 0.8]
                     if not top_20_percent_clientes.empty:
                         num_clientes = len(top_20_percent_clientes)
@@ -282,7 +292,6 @@ if archivo_cargado is not None:
                 
                 st.divider()
 
-                # Gráficos anteriores
                 col_g1, col_g2 = st.columns(2)
                 
                 with col_g1:
@@ -446,6 +455,7 @@ if archivo_cargado is not None:
                     if st.button(boton_texto):
                         with st.spinner("Conectando con el ADN técnico y comercial de MESS..."):
                             try:
+                                # RESTAURADO A 3.6-FLASH PARA EVITAR CONFLICTOS DE ENTORNO
                                 model = genai.GenerativeModel("gemini-3.6-flash")
                                 
                                 if "Apertura" in tipo_operacion:
@@ -467,7 +477,7 @@ if archivo_cargado is not None:
                                     1. GUION PARA ABRIR PUERTAS (COLD/WARM APPROACH): Un mensaje o guion telefónico basado en la metodología Sandler (dolor) para conseguir la cita. Sin rodeos, mencionando un problema típico de {area_planta} relacionado con {datos_proy['Descripcion']}.
                                     2. PLAN DE VISITA A PLANTA (GEMBA WALK): Qué no hacer (no sacar el PowerPoint de inmediato) y qué pedir ver físicamente (la zona de rechazos, la CMM actual, el cuello de botella).
                                     3. PREGUNTAS SPIN DE DIAGNÓSTICO: 3 preguntas de Implicación (la "I" de SPIN) a realizar durante el recorrido en planta para dimensionar el costo de no resolver el problema.
-                                    4. COREOGRAFÍA DE ACOMPAÑAMIENTO (ROLES): Si el vendedor va con el Product Manager, el PM es el francotirador técnico; el vendedor dirige la reunión. Si va con Martín Becerra (Gerencia Comercial), Martín aborda negociaciones de TCO y apalancamiento financiero. Si va con Óscar Morales (Dirección General), Óscar alinea estratégicamente con el Gerente de Planta del cliente. Define cómo presentar al acompañante.
+                                    4. COREOGRAFÍA DE ACOMPAÑAMIENTO (ROLES): Si el vendedor va con el PM, el PM es el francotirador técnico; el vendedor dirige la reunión. Si va con Martín Becerra, Martín aborda negociaciones de TCO. Si va con Óscar Morales, Óscar alinea estratégicamente con el Gerente de Planta. Define cómo presentar al acompañante.
                                     """
                                 else:
                                     prompt_maestro = f"""
@@ -499,12 +509,65 @@ if archivo_cargado is not None:
                                     """
                                 
                                 response = model.generate_content(prompt_maestro)
-                                st.success("Estrategia generada con éxito.")
-                                st.write(response.text)
+                                
+                                # GUARDAR EN SESIÓN PARA NO PERDERLO AL PRESIONAR DESCARGAR
+                                st.session_state.tactica_generada = response.text
+                                st.session_state.tactica_cliente = datos_proy['Cliente']
+                                st.session_state.tactica_id = datos_proy['ID_Proyecto']
+                                
                             except Exception as e:
                                 st.error(f"Error de conexión con la API de Gemini: {e}")
+
+                # === MOSTRAR ESTRATEGIA Y BOTONES DE EXPORTACIÓN ===
+                if st.session_state.tactica_generada:
+                    st.success("Táctica generada y guardada en memoria temporal.")
+                    st.write(st.session_state.tactica_generada)
+                    
+                    st.divider()
+                    st.markdown("#### 📤 Exportar y Guardar Bitácora")
+                    st.caption("Comparte el mensaje directo al cliente o guarda el documento para reportes RevOps.")
+                    
+                    col_export1, col_export2 = st.columns(2)
+                    
+                    # BOTÓN WHATSAPP
+                    with col_export1:
+                        texto_url = urllib.parse.quote(st.session_state.tactica_generada)
+                        url_whatsapp = f"https://wa.me/?text={texto_url}"
+                        st.link_button("📲 Abrir en WhatsApp (Copiar Texto)", url_whatsapp, use_container_width=True)
+                        
+                    # BOTÓN WORD
+                    with col_export2:
+                        if docx_disponible:
+                            # Generar Word al vuelo
+                            doc = Document()
+                            doc.add_heading(f"Bitácora Táctica: {st.session_state.tactica_cliente}", 0)
+                            doc.add_heading(f"Proyecto ID: {st.session_state.tactica_id}", 1)
+                            doc.add_paragraph(f"Fecha de generación: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                            doc.add_paragraph(st.session_state.tactica_generada)
+                            
+                            buffer = io.BytesIO()
+                            doc.save(buffer)
+                            buffer.seek(0)
+                            
+                            st.download_button(
+                                label="📄 Descargar Bitácora (.docx)",
+                                data=buffer,
+                                file_name=f"Bitacora_{st.session_state.tactica_id}_{datetime.now().strftime('%Y%m%d')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+                        else:
+                            st.warning("⚠️ Para descargar en Word, instala: `pip install python-docx`")
+                            st.download_button(
+                                label="📄 Descargar Bitácora (.txt)",
+                                data=st.session_state.tactica_generada.encode('utf-8'),
+                                file_name=f"Bitacora_{st.session_state.tactica_id}.txt",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
                 else:
-                    st.warning("Agrega tu clave gemini_api_key en los Secrets para activar el Laboratorio Táctico.")
+                    if not gemini_activo:
+                        st.warning("Agrega tu clave gemini_api_key en los Secrets para activar el Laboratorio Táctico.")
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
