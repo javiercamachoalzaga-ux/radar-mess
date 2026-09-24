@@ -445,9 +445,9 @@ if archivo_cargado is not None:
                     if st.button("🧠 Generar Táctica Comercial", type="primary", use_container_width=True):
                         with st.spinner("Analizando, humanizando redacción y estructurando bitácora..."):
                             try:
-                                # MOTOR OPTIMIZADO PARA PREVENIR CONGELAMIENTOS
+                                # MOTOR 3.6-FLASH QUE ACEPTA TU SISTEMA, OPTIMIZADO PARA PREVENIR CONGELAMIENTOS
                                 model = genai.GenerativeModel(
-                                    "gemini-1.5-flash",
+                                    "gemini-3.6-flash",
                                     generation_config={
                                         "temperature": 0.3, 
                                         "max_output_tokens": 800, 
