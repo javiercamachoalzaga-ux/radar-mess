@@ -222,138 +222,70 @@ if archivo_cargado is not None:
             "3. Laboratorio Táctico SCOTT (IA)"
         ])
 
-        # ==========================================
-        # TAB 1: DASHBOARDS DIRECTIVOS
-        # ==========================================
         with tab_dashboards:
             st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
             META_MENSUAL_USD = 80000.00
-            
             df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)]
             usd_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
             mxn_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
-            
             gap_actual_usd = META_MENSUAL_USD - usd_caliente
             
             col_g1, col_g2, col_g3 = st.columns(3)
             col_g1.metric("Meta Comercial Mensual", f"${META_MENSUAL_USD:,.2f} USD")
             col_g2.metric("Pipeline Probable (USD)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN extra")
-            if gap_actual_usd > 0:
-                col_g3.metric("GAP (Brecha para Meta)", f"${gap_actual_usd:,.2f} USD", "- Acción requerida")
-            else:
-                col_g3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
-            
+            if gap_actual_usd > 0: col_g3.metric("GAP (Brecha para Meta)", f"${gap_actual_usd:,.2f} USD", "- Acción requerida")
+            else: col_g3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
             st.divider()
             
             col_sel1, col_sel2 = st.columns([1, 3])
-            with col_sel1:
-                moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
-            
+            with col_sel1: moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
             col_val = 'Monto_USD' if moneda_sel == "USD ($)" else 'Monto_MXN'
             simbolo_moneda = '$,.2f'
             
             st.divider()
             
-            if df.empty:
-                st.warning("No hay datos para graficar con los filtros actuales.")
-            else:
+            if not df.empty:
                 st.markdown(f"#### Análisis Pareto 80/20 por Cuentas Clave ({moneda_sel})")
-                st.caption("Visualiza qué clientes concentran el grueso de tu pipeline.")
-                
                 df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
-                df_pareto = df_pareto[df_pareto[col_val] > 0]
-                df_pareto = df_pareto.sort_values(by=col_val, ascending=False).reset_index(drop=True)
-                
+                df_pareto = df_pareto[df_pareto[col_val] > 0].sort_values(by=col_val, ascending=False).reset_index(drop=True)
                 if not df_pareto.empty:
                     df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
                     df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
-                    
                     barras_pareto = alt.Chart(df_pareto).mark_bar(color='#34495e').encode(
                         x=alt.X('Cliente', sort=None, title='Cliente (Ordenados por Monto)', axis=alt.Axis(labelLimit=0)),
                         y=alt.Y(col_val, title=f'Valor {moneda_sel}'),
                         tooltip=['Cliente', alt.Tooltip(col_val, format=simbolo_moneda), alt.Tooltip('Porcentaje', format='.1%')]
                     )
-                    
                     linea_pareto = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
                         x=alt.X('Cliente', sort=None),
                         y=alt.Y('Acumulado', title='Porcentaje Acumulado', axis=alt.Axis(format='%')),
                         tooltip=['Cliente', alt.Tooltip('Acumulado', format='.1%')]
                     )
-                    
-                    grafico_pareto = alt.layer(barras_pareto, linea_pareto).resolve_scale(
-                        y='independent'
-                    ).properties(height=450)
-                    
-                    st.altair_chart(grafico_pareto, use_container_width=True)
-                    
-                    top_20_percent_clientes = df_pareto[df_pareto['Acumulado'] <= 0.8]
-                    if not top_20_percent_clientes.empty:
-                        num_clientes = len(top_20_percent_clientes)
-                        st.info(f"💡 **Insight Estratégico:** Solo **{num_clientes} cliente(s)** conforman aproximadamente el 80% del valor total de tu pipeline actual. Estos son tus VIPs.")
+                    st.altair_chart(alt.layer(barras_pareto, linea_pareto).resolve_scale(y='independent').properties(height=450), use_container_width=True)
                 
                 st.divider()
-
                 col_g1, col_g2 = st.columns(2)
-                
                 with col_g1:
                     st.markdown(f"**Forecast por Área Oficial ({moneda_sel})**")
                     df_areas = df.groupby('Area')[col_val].sum().reset_index()
-                    df_areas = df_areas[df_areas[col_val] > 0] 
-                    if not df_areas.empty:
-                        grafico_areas = alt.Chart(df_areas).mark_bar(color='#003a70').encode(
-                            x=alt.X(col_val, title=''),
-                            y=alt.Y('Area', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
-                            tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_areas, use_container_width=True)
-
+                    if not df_areas.empty: st.altair_chart(alt.Chart(df_areas[df_areas[col_val]>0]).mark_bar(color='#003a70').encode(x=alt.X(col_val, title=''), y=alt.Y('Area', sort='-x', title='', axis=alt.Axis(labelLimit=0)), tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
                 with col_g2:
                     st.markdown(f"**Salud del Embudo ({moneda_sel})**")
                     df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-                    df_graf_fases = df_graf_fases[df_graf_fases[col_val] > 0]
-                    if not df_graf_fases.empty:
-                        grafico_barras = alt.Chart(df_graf_fases).mark_bar(color='#2ecc71').encode(
-                            x=alt.X(col_val, title=''),
-                            y=alt.Y('Fase_Pipeline', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
-                            tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_barras, use_container_width=True)
-                
+                    if not df_graf_fases.empty: st.altair_chart(alt.Chart(df_graf_fases[df_graf_fases[col_val]>0]).mark_bar(color='#2ecc71').encode(x=alt.X(col_val, title=''), y=alt.Y('Fase_Pipeline', sort='-x', title='', axis=alt.Axis(labelLimit=0)), tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
                 st.divider()
-
                 col_g3, col_g4 = st.columns(2)
-                
                 with col_g3:
                     st.markdown(f"**Composición por Pilar Estratégico**")
                     df_graf_pilares = df.groupby('Pilar_Estrategico')[col_val].sum().reset_index()
-                    df_graf_pilares = df_graf_pilares[df_graf_pilares[col_val] > 0]
-                    if not df_graf_pilares.empty:
-                        grafico_pastel = alt.Chart(df_graf_pilares).mark_arc(innerRadius=60).encode(
-                            theta=alt.Theta(field=col_val, type="quantitative"),
-                            color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares", orient="bottom")),
-                            tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_pastel, use_container_width=True)
-
+                    if not df_graf_pilares.empty: st.altair_chart(alt.Chart(df_graf_pilares[df_graf_pilares[col_val]>0]).mark_arc(innerRadius=60).encode(theta=alt.Theta(field=col_val, type="quantitative"), color=alt.Color(field="Pilar_Estrategico", type="nominal", legend=alt.Legend(title="Pilares", orient="bottom")), tooltip=['Pilar_Estrategico', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
                 with col_g4:
                     st.markdown(f"**Forecast por Marcas ({moneda_sel})**")
                     df_marcas = df[df['Marca_Detectada'] != "Multimarca / No Especificada"].groupby('Marca_Detectada')[col_val].sum().reset_index()
-                    df_marcas = df_marcas[df_marcas[col_val] > 0]
-                    if not df_marcas.empty:
-                        grafico_marcas = alt.Chart(df_marcas).mark_bar(color='#e67e22').encode(
-                            x=alt.X(col_val, title=''),
-                            y=alt.Y('Marca_Detectada', sort='-x', title='', axis=alt.Axis(labelLimit=0)),
-                            tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]
-                        ).properties(height=350)
-                        st.altair_chart(grafico_marcas, use_container_width=True)
+                    if not df_marcas.empty: st.altair_chart(alt.Chart(df_marcas[df_marcas[col_val]>0]).mark_bar(color='#e67e22').encode(x=alt.X(col_val, title=''), y=alt.Y('Marca_Detectada', sort='-x', title='', axis=alt.Axis(labelLimit=0)), tooltip=['Marca_Detectada', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
 
-        # ==========================================
-        # TAB 2: ENABLEMENT
-        # ==========================================
         with tab_enablement:
             st.markdown("### Riesgo Operativo y Proyectos Estancados")
-            st.caption("Proyectos que requieren apalancamiento estratégico o descarte inmediato.")
-            
             estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
             if not estancados.empty:
                 for _, row in estancados.head(4).iterrows():
@@ -361,30 +293,12 @@ if archivo_cargado is not None:
                         st.markdown(f"**PROYECTO ESTANCADO: {row['ID_Proyecto']} | {row['Cliente']}**")
                         st.write(f"**Equipo/Servicio:** {row['Descripcion']}")
                         st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Valor en riesgo: **${row['Monto_USD']:,.2f} USD / ${row['Monto_MXN']:,.2f} MXN**")
-                        
                         if st.button(f"Enviar a Laboratorio SCOTT", key=f"btn_scott_{row['ID_Proyecto']}"):
                             st.session_state.proyecto_foco = str(row['ID_Proyecto'])
                             st.success("Proyecto enviado con éxito. Abre la Pestaña 3 para formular la estrategia.")
-            else:
-                st.success("No hay proyectos estancados detectados. Embudo limpio.")
-                
+            else: st.success("No hay proyectos estancados detectados.")
             st.divider()
-            st.markdown("#### Base de Datos (Auditoría Rápida)")
-            
-            st.dataframe(
-                df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "ID_Proyecto": st.column_config.TextColumn("ID", width="small"),
-                    "Cliente": st.column_config.TextColumn("Cliente", width="medium"),
-                    "Descripcion": st.column_config.TextColumn("Descripción", width="large"),
-                    "Cotizacion": st.column_config.TextColumn("Folio(s)", width="small"),
-                    "Fase_Pipeline": st.column_config.TextColumn("Fase", width="small"),
-                    "Monto_USD": st.column_config.NumberColumn("USD", format="$%.2f", width="small"),
-                    "Monto_MXN": st.column_config.NumberColumn("MXN", format="$%.2f", width="small")
-                }
-            )
+            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']], use_container_width=True, hide_index=True)
 
         # ==========================================
         # TAB 3: LABORATORIO TÁCTICO SCOTT (IA EXPERTA)
@@ -416,7 +330,7 @@ if archivo_cargado is not None:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # --- NUEVOS FILTROS DINÁMICOS ---
+                # --- FILTROS DINÁMICOS ---
                 tipo_operacion = st.radio("Objetivo Principal:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
 
                 st.markdown("##### Configuración Específica")
@@ -443,82 +357,107 @@ if archivo_cargado is not None:
                 
                 if gemini_activo:
                     if st.button("🧠 Generar Táctica Comercial", type="primary", use_container_width=True):
-                        with st.spinner("Analizando, humanizando redacción y estructurando bitácora..."):
+                        with st.spinner("Analizando con MEDDPICC/SPIN y estructurando reporte sin censura..."):
                             try:
-                                # MOTOR 3.6-FLASH QUE ACEPTA TU SISTEMA, OPTIMIZADO PARA PREVENIR CONGELAMIENTOS
+                                # CONFIGURACIÓN DE SEGURIDAD PARA EVITAR EL FINISH_REASON 2
+                                safety_settings = [
+                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                                ]
+
                                 model = genai.GenerativeModel(
                                     "gemini-3.6-flash",
                                     generation_config={
                                         "temperature": 0.3, 
-                                        "max_output_tokens": 800, 
+                                        "max_output_tokens": 2048, 
                                         "top_p": 0.8
                                     }
                                 )
                                 
+                                if "Apertura" in tipo_operacion:
+                                    instruccion_tactica = f"""
+                                    Aplica Metodología de Visita Presencial (SPIN Selling / Gemba Walk).
+                                    - Formula preguntas de IMPLICACIÓN (SPIN) para dimensionar el problema operativo.
+                                    - Define el rol estratégico de acompañamiento.
+                                    """
+                                else:
+                                    instruccion_tactica = f"""
+                                    Aplica Metodología de Cierre (MEDDPICC / Sandler).
+                                    - Si el monto total es menor a $1,000 USD, aplica enfoque SANDLER.
+                                    - Si el monto es mayor a $2,000 USD, aplica enfoque MEDDPICC.
+                                    """
+
                                 prompt_maestro = f"""
-                                Eres Javier Camacho, especialista B2B de MESS Servicios Metrológicos.
-                                Estás escribiendo directamente, con tono MUY HUMANO, empático, profesional y natural. Cero formalismos excesivos. Eres un vendedor top hablando con su cliente de tú a tú, pero con respeto (usando "Ing.").
+                                Eres Javier Camacho, especialista senior B2B de MESS Servicios Metrológicos y experto en Revenue Operations.
+                                Escribes de tú a tú, empático pero muy profesional (usando "Ing.").
                                 
-                                DATOS DEL PROYECTO:
-                                Cliente: {datos_proy['Cliente']} (Perfil: {interlocutor})
-                                Equipo: {datos_proy['Descripcion']}
+                                CONTEXTO DEL PROYECTO:
+                                Cliente: {datos_proy['Cliente']} (Perfil Interlocutor: {interlocutor})
+                                Área involucrada: {area_planta}
+                                Equipo/Servicio: {datos_proy['Descripcion']}
                                 Monto: ${datos_proy['Monto_USD']} USD
                                 Acción solicitada: {tipo_operacion} -> {sub_opcion}
-                                Notas: {contexto_manual}
+                                Notas adicionales: {contexto_manual}
                                 
-                                INSTRUCCIONES ESTRICTAS DE FORMATO:
-                                DEBES estructurar tu respuesta separando las 3 secciones con estos exactos marcadores de tres guiones. No uses asteriscos ni etiquetas extra.
+                                INSTRUCCIÓN TÁCTICA:
+                                {instruccion_tactica}
+                                Lenguaje metrológico: Usa términos como "incertidumbre expandida", "trazabilidad", etc.
+                                
+                                INSTRUCCIONES ESTRICTAS DE FORMATO (XML):
+                                Estructura tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML.
 
-                                ---MENSAJE---
-                                (Redacta el {sub_opcion}. Lenguaje metrológico sutil pero directo al dolor).
+                                <MENSAJE>
+                                (Aquí redactas el texto exacto para el {sub_opcion}).
+                                </MENSAJE>
 
-                                ---MARKETING---
-                                (Redacta 1 o 2 instrucciones claras para el departamento de Marketing (ABM) para respaldar el contacto).
+                                <MARKETING>
+                                (Aquí redactas la instrucción de Marketing ABM).
+                                </MARKETING>
 
-                                ---BITACORA---
-                                (Redacta un párrafo altamente TÉCNICO-COMERCIAL para pegar en el CRM. Resumiendo la acción y el "Next Step").
+                                <BITACORA>
+                                (Aquí redactas el reporte hiper-resumido y técnico para el CRM SCOTT).
+                                </BITACORA>
                                 """
                                 
-                                response = model.generate_content(prompt_maestro)
-                                texto_raw = response.text
+                                # GENERACIÓN CON PARÁMETROS DE SEGURIDAD DESACTIVADOS
+                                response = model.generate_content(
+                                    prompt_maestro,
+                                    safety_settings=safety_settings
+                                )
                                 
-                                # === SISTEMA DE EXTRACCIÓN ULTRA-ROBUSTO ===
-                                # Limpiamos asteriscos por si la IA intentó poner negritas en los separadores
-                                texto_limpio = re.sub(r'\*+---(MENSAJE|MARKETING|BITACORA)---\*+', r'---\1---', texto_raw)
+                                # VALIDACIÓN ANTES DE EXTRAER
+                                if response.prompt_feedback and getattr(response.prompt_feedback, "block_reason", None):
+                                    texto_raw = "<MENSAJE>Error: El texto fue bloqueado por un filtro interno de Google.</MENSAJE><MARKETING>Error</MARKETING><BITACORA>Error</BITACORA>"
+                                else:
+                                    try:
+                                        texto_raw = response.text
+                                    except ValueError:
+                                        texto_raw = "<MENSAJE>Error técnico: La IA devolvió una respuesta vacía o cortada. Por favor, reintenta.</MENSAJE><MARKETING>Error</MARKETING><BITACORA>Error</BITACORA>"
+
+                                def extract_xml(tag, text):
+                                    match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
+                                    return match.group(1).strip() if match else "Error de formato de IA."
+
+                                st.session_state.tactica_mensaje = extract_xml('MENSAJE', texto_raw)
+                                st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
+                                st.session_state.tactica_bitacora = extract_xml('BITACORA', texto_raw)
                                 
-                                # Partimos el texto utilizando los separadores como tijeras exactas
-                                partes = re.split(r'---(MENSAJE|MARKETING|BITACORA)---', texto_limpio)
+                                if "Error de formato" in st.session_state.tactica_mensaje and "Error técnico" not in texto_raw:
+                                    st.session_state.tactica_mensaje = texto_raw
                                 
-                                # Valores por defecto en caso de error masivo
-                                mensaje_txt = "Formato no detectado. Reintenta generar."
-                                mkt_txt = "Formato no detectado."
-                                bitacora_txt = texto_raw
-                                
-                                # Asignación dinámica segura
-                                for i in range(len(partes)):
-                                    if partes[i] == 'MENSAJE' and i + 1 < len(partes):
-                                        mensaje_txt = partes[i+1].strip()
-                                    elif partes[i] == 'MARKETING' and i + 1 < len(partes):
-                                        mkt_txt = partes[i+1].strip()
-                                    elif partes[i] == 'BITACORA' and i + 1 < len(partes):
-                                        bitacora_txt = partes[i+1].strip()
-                                
-                                st.session_state.tactica_mensaje = mensaje_txt
-                                st.session_state.tactica_marketing = mkt_txt
-                                st.session_state.tactica_bitacora = bitacora_txt
-                                
-                                # GUARDAR TODO EL CONTEXTO PARA EL WORD
                                 st.session_state.tactica_cliente = datos_proy['Cliente']
                                 st.session_state.tactica_id = datos_proy['ID_Proyecto']
                                 st.session_state.tactica_equipo = datos_proy['Descripcion']
                                 st.session_state.tactica_monto = f"${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN"
                                 
                             except Exception as e:
-                                st.error(f"Error con la IA: {e}")
+                                st.error(f"Error con la API de Gemini: {e}")
 
                 # === PANTALLA DE RESULTADOS SEGMENTADA ===
                 if st.session_state.tactica_mensaje:
-                    st.success("Táctica generada con éxito.")
+                    st.success("Táctica generada con éxito. Metodología aplicada correctamente.")
                     
                     st.markdown("#### 💬 1. Tu Texto para el Cliente")
                     st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_mensaje}</div>", unsafe_allow_html=True)
