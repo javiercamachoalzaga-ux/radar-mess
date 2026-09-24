@@ -32,6 +32,8 @@ else:
 if 'proyecto_foco' not in st.session_state: st.session_state.proyecto_foco = None
 if 'tactica_cliente' not in st.session_state: st.session_state.tactica_cliente = ""
 if 'tactica_id' not in st.session_state: st.session_state.tactica_id = ""
+if 'tactica_equipo' not in st.session_state: st.session_state.tactica_equipo = ""
+if 'tactica_monto' not in st.session_state: st.session_state.tactica_monto = ""
 if 'tactica_mensaje' not in st.session_state: st.session_state.tactica_mensaje = ""
 if 'tactica_marketing' not in st.session_state: st.session_state.tactica_marketing = ""
 if 'tactica_bitacora' not in st.session_state: st.session_state.tactica_bitacora = ""
@@ -443,7 +445,7 @@ if archivo_cargado is not None:
                     if st.button("🧠 Generar Táctica Comercial", type="primary", use_container_width=True):
                         with st.spinner("Analizando, humanizando redacción y estructurando bitácora..."):
                             try:
-                                # MOTOR OPTIMIZADO PARA PREVENIR CONGELAMIENTOS Y ACELERAR RESPUESTA
+                                # MOTOR OPTIMIZADO PARA PREVENIR CONGELAMIENTOS
                                 model = genai.GenerativeModel(
                                     "gemini-3.6-flash",
                                     generation_config={
@@ -453,10 +455,9 @@ if archivo_cargado is not None:
                                     }
                                 )
                                 
-                                # PROMPT MAESTRO 
                                 prompt_maestro = f"""
                                 Eres Javier Camacho, especialista B2B de MESS Servicios Metrológicos.
-                                Estás escribiendo directamente, con tono MUY HUMANO, empático, profesional y natural. NADA de sonar como un robot de IA. Cero formalismos excesivos. Eres un vendedor top hablando con su cliente de tú a tú, pero con respeto (usando "Ing.").
+                                Estás escribiendo directamente, con tono MUY HUMANO, empático, profesional y natural. Cero formalismos excesivos. Eres un vendedor top hablando con su cliente de tú a tú, pero con respeto (usando "Ing.").
                                 
                                 DATOS DEL PROYECTO:
                                 Cliente: {datos_proy['Cliente']} (Perfil: {interlocutor})
@@ -466,18 +467,18 @@ if archivo_cargado is not None:
                                 Notas: {contexto_manual}
                                 
                                 INSTRUCCIONES ESTRICTAS:
-                                Genera la respuesta dividida EXACTAMENTE en estas 3 etiquetas para que el sistema las pueda separar. No agregues saludos fuera de las etiquetas.
+                                Genera la respuesta dividida EXACTAMENTE en estas 3 etiquetas.
 
                                 [MENSAJE]
-                                Redacta el {sub_opcion}. Tiene que sonar como que Javier Camacho lo acaba de teclear en su celular o computadora. Lenguaje metrológico sutil pero directo al dolor del cliente.
+                                Redacta el {sub_opcion}. Tiene que sonar natural. Lenguaje metrológico sutil pero directo al dolor.
                                 [/MENSAJE]
 
                                 [MARKETING]
-                                Redacta 1 o 2 instrucciones claras y concretas para el departamento de Marketing (ABM). ¿Qué PDF, caso de éxito, ficha técnica o campaña de email necesitamos que le manden a este cliente para respaldar mi {sub_opcion}?
+                                Redacta 1 o 2 instrucciones claras para el departamento de Marketing (ABM) para respaldar el contacto.
                                 [/MARKETING]
 
                                 [BITACORA]
-                                Redacta un párrafo altamente TÉCNICO-COMERCIAL. Es el registro formal para el CRM. Debe ser conciso, en tercera persona o primera persona formal, resumiendo el dolor del cliente, la acción tomada ({sub_opcion}) y el "Next Step". Sin adornos, puro dato duro.
+                                Redacta un párrafo altamente TÉCNICO-COMERCIAL para pegar en el CRM. Debe ser conciso, en tercera persona, resumiendo la acción y el "Next Step".
                                 [/BITACORA]
                                 """
                                 
@@ -492,8 +493,12 @@ if archivo_cargado is not None:
                                 st.session_state.tactica_mensaje = match_mensaje.group(1).strip() if match_mensaje else "Error aislando el mensaje."
                                 st.session_state.tactica_marketing = match_mkt.group(1).strip() if match_mkt else "Error aislando marketing."
                                 st.session_state.tactica_bitacora = match_bitacora.group(1).strip() if match_bitacora else texto_raw
+                                
+                                # GUARDAR TODO EL CONTEXTO PARA EL WORD
                                 st.session_state.tactica_cliente = datos_proy['Cliente']
                                 st.session_state.tactica_id = datos_proy['ID_Proyecto']
+                                st.session_state.tactica_equipo = datos_proy['Descripcion']
+                                st.session_state.tactica_monto = f"${datos_proy['Monto_USD']:,.2f} USD / ${datos_proy['Monto_MXN']:,.2f} MXN"
                                 
                             except Exception as e:
                                 st.error(f"Error con la IA: {e}")
@@ -527,29 +532,65 @@ if archivo_cargado is not None:
                         else:
                             st.button("📞 Guion listo (Solo leer)", disabled=True, use_container_width=True)
                             
-                    # 2. BOTÓN WORD (BITÁCORA)
+                    # 2. BOTÓN WORD (BITÁCORA COMPLETA 360°)
                     with col_ex2:
                         if docx_disponible:
-                            def crear_word(titulo_doc, contenido):
+                            # Esta función crea un documento estructurado sumando todos los datos
+                            def crear_bitacora_completa():
                                 doc = Document()
-                                doc.add_heading(titulo_doc, 0).alignment = 1
-                                doc.add_heading(f"Cliente: {st.session_state.tactica_cliente}", 1)
-                                doc.add_paragraph(f"ID del Proyecto: {st.session_state.tactica_id} | Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-                                doc.add_paragraph("_" * 50)
-                                doc.add_paragraph(contenido)
+                                doc.add_heading("BITÁCORA TÁCTICA | REVENUE OPERATIONS", 0).alignment = 1
+                                
+                                # SECCIÓN 1: Contexto del Proyecto
+                                doc.add_heading("1. Contexto del Proyecto", level=1)
+                                p_ctx = doc.add_paragraph()
+                                p_ctx.add_run("Cliente: ").bold = True
+                                p_ctx.add_run(f"{st.session_state.tactica_cliente}\n")
+                                p_ctx.add_run("Folio SCOTT: ").bold = True
+                                p_ctx.add_run(f"{st.session_state.tactica_id}\n")
+                                p_ctx.add_run("Equipo/Servicio: ").bold = True
+                                p_ctx.add_run(f"{st.session_state.tactica_equipo}\n")
+                                p_ctx.add_run("Valor en Riesgo: ").bold = True
+                                p_ctx.add_run(f"{st.session_state.tactica_monto}\n")
+                                p_ctx.add_run("Fecha de Generación: ").bold = True
+                                p_ctx.add_run(f"{datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                                
+                                # SECCIÓN 2: Resumen para CRM
+                                doc.add_heading("2. Resumen Ejecutivo (Para registro en SCOTT)", level=1)
+                                doc.add_paragraph(st.session_state.tactica_bitacora)
+                                
+                                # SECCIÓN 3: Acción Ejecutada
+                                doc.add_heading(f"3. Acción Ejecutada ({sub_opcion})", level=1)
+                                doc.add_paragraph(st.session_state.tactica_mensaje)
+                                
+                                # SECCIÓN 4: Marketing ABM
+                                doc.add_heading("4. Instrucción Estratégica de Marketing (ABM)", level=1)
+                                doc.add_paragraph(st.session_state.tactica_marketing)
+                                
                                 buffer = io.BytesIO()
                                 doc.save(buffer)
                                 buffer.seek(0)
                                 return buffer
 
-                            buffer_bitacora = crear_word("BITÁCORA DE ACTIVIDAD CRM", st.session_state.tactica_bitacora)
-                            st.download_button("💾 Descargar Bitácora (.docx)", data=buffer_bitacora, file_name=f"Bitacora_{st.session_state.tactica_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+                            buffer_bitacora_completa = crear_bitacora_completa()
+                            st.download_button("💾 Descargar Bitácora Completa (.docx)", data=buffer_bitacora_completa, file_name=f"Bitacora_Completa_{st.session_state.tactica_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
 
-                    # 3. BOTÓN WORD (MARKETING)
+                    # 3. BOTÓN WORD (SÓLO MARKETING)
                     with col_ex3:
                         if docx_disponible:
-                            buffer_mkt = crear_word("SOLICITUD DE MARKETING (ABM)", st.session_state.tactica_marketing)
-                            st.download_button("📢 Exportar Marketing (.docx)", data=buffer_mkt, file_name=f"MKT_{st.session_state.tactica_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+                            def crear_word_mkt():
+                                doc = Document()
+                                doc.add_heading("SOLICITUD DE MARKETING (ABM)", 0).alignment = 1
+                                doc.add_heading(f"Cliente: {st.session_state.tactica_cliente}", 1)
+                                doc.add_paragraph(f"ID del Proyecto: {st.session_state.tactica_id} | Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                                doc.add_paragraph("_" * 50)
+                                doc.add_paragraph(st.session_state.tactica_marketing)
+                                buffer = io.BytesIO()
+                                doc.save(buffer)
+                                buffer.seek(0)
+                                return buffer
+
+                            buffer_mkt = crear_word_mkt()
+                            st.download_button("📢 Exportar Solicitud de Marketing (.docx)", data=buffer_mkt, file_name=f"MKT_{st.session_state.tactica_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
 
     except Exception as e:
         st.error(f"Error procesando el reporte: {e}")
