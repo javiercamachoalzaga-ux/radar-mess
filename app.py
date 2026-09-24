@@ -330,7 +330,6 @@ if archivo_cargado is not None:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # --- FILTROS DINÁMICOS ---
                 tipo_operacion = st.radio("Objetivo Principal:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
 
                 st.markdown("##### Configuración Específica")
@@ -359,7 +358,6 @@ if archivo_cargado is not None:
                     if st.button("🧠 Generar Táctica Comercial", type="primary", use_container_width=True):
                         with st.spinner("Analizando con MEDDPICC/SPIN y estructurando reporte sin censura..."):
                             try:
-                                # CONFIGURACIÓN DE SEGURIDAD PARA EVITAR EL FINISH_REASON 2
                                 safety_settings = [
                                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                                     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -405,47 +403,35 @@ if archivo_cargado is not None:
                                 {instruccion_tactica}
                                 Lenguaje metrológico: Usa términos como "incertidumbre expandida", "trazabilidad", etc.
                                 
-                                INSTRUCCIONES ESTRICTAS DE FORMATO (XML):
-                                Estructura tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML.
+                                REGLAS DE FORMATO ESTRICTO (PROHIBIDO USAR XML O MARKDOWN):
+                                Divide tu respuesta exactamente usando estos 3 marcadores en mayúsculas. Asegúrate de incluir el marcador antes de empezar a redactar cada sección:
 
-                                <MENSAJE>
-                                (Aquí redactas el texto exacto para el {sub_opcion}).
-                                </MENSAJE>
+                                SECCION_MENSAJE:
+                                (Aquí redactas el texto exacto para el cliente. Si es correo o llamada, incluye el Asunto).
 
-                                <MARKETING>
+                                SECCION_MARKETING:
                                 (Aquí redactas la instrucción de Marketing ABM).
-                                </MARKETING>
 
-                                <BITACORA>
+                                SECCION_BITACORA:
                                 (Aquí redactas el reporte hiper-resumido y técnico para el CRM SCOTT).
-                                </BITACORA>
                                 """
                                 
-                                # GENERACIÓN CON PARÁMETROS DE SEGURIDAD DESACTIVADOS
                                 response = model.generate_content(
                                     prompt_maestro,
                                     safety_settings=safety_settings
                                 )
                                 
-                                # VALIDACIÓN ANTES DE EXTRAER
-                                if response.prompt_feedback and getattr(response.prompt_feedback, "block_reason", None):
-                                    texto_raw = "<MENSAJE>Error: El texto fue bloqueado por un filtro interno de Google.</MENSAJE><MARKETING>Error</MARKETING><BITACORA>Error</BITACORA>"
-                                else:
-                                    try:
-                                        texto_raw = response.text
-                                    except ValueError:
-                                        texto_raw = "<MENSAJE>Error técnico: La IA devolvió una respuesta vacía o cortada. Por favor, reintenta.</MENSAJE><MARKETING>Error</MARKETING><BITACORA>Error</BITACORA>"
-
-                                def extract_xml(tag, text):
-                                    match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
-                                    return match.group(1).strip() if match else "Error de formato de IA."
-
-                                st.session_state.tactica_mensaje = extract_xml('MENSAJE', texto_raw)
-                                st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
-                                st.session_state.tactica_bitacora = extract_xml('BITACORA', texto_raw)
+                                texto_raw = response.text
                                 
-                                if "Error de formato" in st.session_state.tactica_mensaje and "Error técnico" not in texto_raw:
-                                    st.session_state.tactica_mensaje = texto_raw
+                                # === SISTEMA DE EXTRACCIÓN BLINDADO ===
+                                s1 = re.search(r'SECCION_MENSAJE:(.*?)(?=SECCION_MARKETING:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                s2 = re.search(r'SECCION_MARKETING:(.*?)(?=SECCION_BITACORA:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                s3 = re.search(r'SECCION_BITACORA:(.*)', texto_raw, re.DOTALL | re.IGNORECASE)
+
+                                # Si el bloque 1 se extrae bien, limpiamos espacios. Si falla el patrón entero, metemos todo en la caja 1 para no perder nada.
+                                st.session_state.tactica_mensaje = s1.group(1).strip() if s1 else texto_raw
+                                st.session_state.tactica_marketing = s2.group(1).strip() if s2 else "Instrucción de Marketing no detectada en el texto generado."
+                                st.session_state.tactica_bitacora = s3.group(1).strip() if s3 else "Texto de Bitácora no detectado en el texto generado."
                                 
                                 st.session_state.tactica_cliente = datos_proy['Cliente']
                                 st.session_state.tactica_id = datos_proy['ID_Proyecto']
@@ -473,7 +459,6 @@ if archivo_cargado is not None:
                     
                     col_ex1, col_ex2, col_ex3 = st.columns(3)
                     
-                    # 1. BOTÓN WHATSAPP / CORREO
                     with col_ex1:
                         if "WhatsApp" in sub_opcion:
                             texto_url = urllib.parse.quote(st.session_state.tactica_mensaje)
@@ -484,7 +469,6 @@ if archivo_cargado is not None:
                         else:
                             st.button("📞 Guion listo (Solo leer)", disabled=True, use_container_width=True)
                             
-                    # 2. BOTÓN WORD (BITÁCORA COMPLETA 360°)
                     with col_ex2:
                         if docx_disponible:
                             def crear_bitacora_completa():
@@ -521,7 +505,6 @@ if archivo_cargado is not None:
                             buffer_bitacora_completa = crear_bitacora_completa()
                             st.download_button("💾 Descargar Bitácora Completa (.docx)", data=buffer_bitacora_completa, file_name=f"Bitacora_Completa_{st.session_state.tactica_id}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
 
-                    # 3. BOTÓN WORD (SÓLO MARKETING)
                     with col_ex3:
                         if docx_disponible:
                             def crear_word_mkt():
