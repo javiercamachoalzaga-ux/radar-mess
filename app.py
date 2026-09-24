@@ -18,7 +18,7 @@ except ImportError:
 st.set_page_config(page_title="MESS | Radar Comercial", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# CONFIGURACIÓN GEMINI API (3.6-FLASH)
+# CONFIGURACIÓN GEMINI API
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
@@ -447,10 +447,10 @@ if archivo_cargado is not None:
                             try:
                                 # MOTOR OPTIMIZADO PARA PREVENIR CONGELAMIENTOS
                                 model = genai.GenerativeModel(
-                                    "gemini-3.6-flash",
+                                    "gemini-1.5-flash",
                                     generation_config={
                                         "temperature": 0.3, 
-                                        "max_output_tokens": 700, 
+                                        "max_output_tokens": 800, 
                                         "top_p": 0.8
                                     }
                                 )
@@ -466,33 +466,46 @@ if archivo_cargado is not None:
                                 Acción solicitada: {tipo_operacion} -> {sub_opcion}
                                 Notas: {contexto_manual}
                                 
-                                INSTRUCCIONES ESTRICTAS:
-                                Genera la respuesta dividida EXACTAMENTE en estas 3 etiquetas.
+                                INSTRUCCIONES ESTRICTAS DE FORMATO:
+                                DEBES estructurar tu respuesta separando las 3 secciones con estos exactos marcadores de tres guiones. No uses asteriscos ni etiquetas extra.
 
-                                [MENSAJE]
-                                Redacta el {sub_opcion}. Tiene que sonar natural. Lenguaje metrológico sutil pero directo al dolor.
-                                [/MENSAJE]
+                                ---MENSAJE---
+                                (Redacta el {sub_opcion}. Lenguaje metrológico sutil pero directo al dolor).
 
-                                [MARKETING]
-                                Redacta 1 o 2 instrucciones claras para el departamento de Marketing (ABM) para respaldar el contacto.
-                                [/MARKETING]
+                                ---MARKETING---
+                                (Redacta 1 o 2 instrucciones claras para el departamento de Marketing (ABM) para respaldar el contacto).
 
-                                [BITACORA]
-                                Redacta un párrafo altamente TÉCNICO-COMERCIAL para pegar en el CRM. Debe ser conciso, en tercera persona, resumiendo la acción y el "Next Step".
-                                [/BITACORA]
+                                ---BITACORA---
+                                (Redacta un párrafo altamente TÉCNICO-COMERCIAL para pegar en el CRM. Resumiendo la acción y el "Next Step").
                                 """
                                 
                                 response = model.generate_content(prompt_maestro)
                                 texto_raw = response.text
                                 
-                                # EXTRACTOR REGEX PARA SEPARAR CADA BLOQUE
-                                match_mensaje = re.search(r'\[MENSAJE\](.*?)\[/MENSAJE\]', texto_raw, re.DOTALL)
-                                match_mkt = re.search(r'\[MARKETING\](.*?)\[/MARKETING\]', texto_raw, re.DOTALL)
-                                match_bitacora = re.search(r'\[BITACORA\](.*?)\[/BITACORA\]', texto_raw, re.DOTALL)
+                                # === SISTEMA DE EXTRACCIÓN ULTRA-ROBUSTO ===
+                                # Limpiamos asteriscos por si la IA intentó poner negritas en los separadores
+                                texto_limpio = re.sub(r'\*+---(MENSAJE|MARKETING|BITACORA)---\*+', r'---\1---', texto_raw)
                                 
-                                st.session_state.tactica_mensaje = match_mensaje.group(1).strip() if match_mensaje else "Error aislando el mensaje."
-                                st.session_state.tactica_marketing = match_mkt.group(1).strip() if match_mkt else "Error aislando marketing."
-                                st.session_state.tactica_bitacora = match_bitacora.group(1).strip() if match_bitacora else texto_raw
+                                # Partimos el texto utilizando los separadores como tijeras exactas
+                                partes = re.split(r'---(MENSAJE|MARKETING|BITACORA)---', texto_limpio)
+                                
+                                # Valores por defecto en caso de error masivo
+                                mensaje_txt = "Formato no detectado. Reintenta generar."
+                                mkt_txt = "Formato no detectado."
+                                bitacora_txt = texto_raw
+                                
+                                # Asignación dinámica segura
+                                for i in range(len(partes)):
+                                    if partes[i] == 'MENSAJE' and i + 1 < len(partes):
+                                        mensaje_txt = partes[i+1].strip()
+                                    elif partes[i] == 'MARKETING' and i + 1 < len(partes):
+                                        mkt_txt = partes[i+1].strip()
+                                    elif partes[i] == 'BITACORA' and i + 1 < len(partes):
+                                        bitacora_txt = partes[i+1].strip()
+                                
+                                st.session_state.tactica_mensaje = mensaje_txt
+                                st.session_state.tactica_marketing = mkt_txt
+                                st.session_state.tactica_bitacora = bitacora_txt
                                 
                                 # GUARDAR TODO EL CONTEXTO PARA EL WORD
                                 st.session_state.tactica_cliente = datos_proy['Cliente']
@@ -535,12 +548,10 @@ if archivo_cargado is not None:
                     # 2. BOTÓN WORD (BITÁCORA COMPLETA 360°)
                     with col_ex2:
                         if docx_disponible:
-                            # Esta función crea un documento estructurado sumando todos los datos
                             def crear_bitacora_completa():
                                 doc = Document()
                                 doc.add_heading("BITÁCORA TÁCTICA | REVENUE OPERATIONS", 0).alignment = 1
                                 
-                                # SECCIÓN 1: Contexto del Proyecto
                                 doc.add_heading("1. Contexto del Proyecto", level=1)
                                 p_ctx = doc.add_paragraph()
                                 p_ctx.add_run("Cliente: ").bold = True
@@ -554,15 +565,12 @@ if archivo_cargado is not None:
                                 p_ctx.add_run("Fecha de Generación: ").bold = True
                                 p_ctx.add_run(f"{datetime.now().strftime('%d/%m/%Y %H:%M')}")
                                 
-                                # SECCIÓN 2: Resumen para CRM
                                 doc.add_heading("2. Resumen Ejecutivo (Para registro en SCOTT)", level=1)
                                 doc.add_paragraph(st.session_state.tactica_bitacora)
                                 
-                                # SECCIÓN 3: Acción Ejecutada
-                                doc.add_heading(f"3. Acción Ejecutada ({sub_opcion})", level=1)
+                                doc.add_heading(f"3. Acción Ejecutada", level=1)
                                 doc.add_paragraph(st.session_state.tactica_mensaje)
                                 
-                                # SECCIÓN 4: Marketing ABM
                                 doc.add_heading("4. Instrucción Estratégica de Marketing (ABM)", level=1)
                                 doc.add_paragraph(st.session_state.tactica_marketing)
                                 
