@@ -1,4 +1,7 @@
 streamlit
 pandas
+numpy
+altair
 google-generativeai
 python-docx
+plotly
