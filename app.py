@@ -20,7 +20,7 @@ except ImportError:
 st.set_page_config(page_title="SAIV | Radar Comercial MESS", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# CONFIGURACIÓN GEMINI API
+# CONFIGURACIÓN GEMINI API (CON SEGURIDAD APAGADA)
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
@@ -29,7 +29,7 @@ else:
     gemini_activo = False
 
 # ==========================================
-# MEMORIA DE SESIÓN (STATE)
+# MEMORIA DE SESIÓN (STATE) PARA TABS DE IA
 # ==========================================
 if 'proyecto_foco' not in st.session_state: st.session_state.proyecto_foco = None
 if 'tactica_analisis' not in st.session_state: st.session_state.tactica_analisis = ""
@@ -96,6 +96,16 @@ if not check_password():
 
 st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT & Auditoría MEDDPICC | Revenue Operations</div>', unsafe_allow_html=True)
+
+# ==========================================
+# TABS DE NAVEGACIÓN (SIEMPRE VISIBLES)
+# ==========================================
+tab_dashboards, tab_enablement, tab_scott, tab_meddpicc = st.tabs([
+    "1. Dashboards CRM", 
+    "2. Proyectos Estancados", 
+    "3. Laboratorio IA (360°)",
+    "4. Dashboard MEDDPICC"
+])
 
 archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
 
@@ -233,19 +243,9 @@ if archivo_cargado is not None:
             df = df[df['Pilar_Estrategico'].isin(filtro_pilar)]
 
         mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
-        
-        # ==========================================
-        # TABS DE NAVEGACIÓN
-        # ==========================================
-        tab_dashboards, tab_enablement, tab_scott, tab_meddpicc = st.tabs([
-            "1. Dashboards CRM", 
-            "2. Proyectos Estancados", 
-            "3. Laboratorio IA (360°)",
-            "4. Dashboard MEDDPICC"
-        ])
 
         # ==========================================
-        # TAB 1: DASHBOARDS DIRECTIVOS (RESTAURADOS AL 100%)
+        # TAB 1: DASHBOARDS DIRECTIVOS
         # ==========================================
         with tab_dashboards:
             st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
@@ -370,7 +370,7 @@ if archivo_cargado is not None:
                         st.altair_chart(grafico_marcas, use_container_width=True)
 
         # ==========================================
-        # TAB 2: ENABLEMENT (TABLA DE AUDITORÍA RESTAURADA)
+        # TAB 2: ENABLEMENT (TABLA DE AUDITORÍA)
         # ==========================================
         with tab_enablement:
             st.markdown("### Riesgo Operativo y Proyectos Estancados")
@@ -390,7 +390,6 @@ if archivo_cargado is not None:
                 
             st.divider()
             st.markdown("#### Base de Datos (Auditoría Rápida)")
-            # TABLA DE AUDITORÍA RESTAURADA
             st.dataframe(
                 df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']],
                 use_container_width=True,
@@ -583,7 +582,6 @@ else:
 with tab_meddpicc:
     st.markdown("### Auditoría de Calificación B2B (Framework MEDDPICC)")
     
-    # CUADRO EXPLICATIVO PARA EVITAR CONFUSIONES
     st.info("""
     💡 **¿Qué es este Dashboard y de dónde salen estos datos?**
     Actualmente el sistema CRM SCOTT no cuenta con casillas para calificar metodologías avanzadas. Por lo tanto, los datos que ves a continuación **son simulados** (ej. Ford, Tremec, BRP) para demostrar cómo se visualizaría tu embudo si pudieras medir el "Health Score" (Nivel de Salud) de tus proyectos utilizando la metodología MEDDPICC.
