@@ -59,7 +59,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# SIMULACIÓN DE DATOS MEDDPICC (MÓDULO 4)
+# SIMULACIÓN DE DATOS MEDDPICC (CORREGIDO A PRUEBA DE FALLOS)
 # ==========================================
 def generar_datos_meddpicc():
     data = {
@@ -84,17 +84,30 @@ def generar_datos_meddpicc():
     df_m = pd.DataFrame(data)
     df_m['Health_Score'] = df_m[['M','E','D1','D2','P','I','C1','C2']].sum(axis=1)
     
-    # Semaforización
-    condiciones = [
-        (df_m['Health_Score'] < 8),
-        (df_m['Health_Score'] >= 8) & (df_m['Health_Score'] <= 12),
-        (df_m['Health_Score'] > 12)
-    ]
-    valores = ['Riesgo Alto', 'Precaución', 'Saludable']
-    df_m['Estado'] = np.select(condiciones, valores)
+    # Semaforización segura (Sin dependencias estrictas de Numpy)
+    def asignar_estado(score):
+        if score < 8:
+            return 'Riesgo Alto'
+        elif 8 <= score <= 12:
+            return 'Precaución'
+        else:
+            return 'Saludable'
+            
+    df_m['Estado'] = df_m['Health_Score'].apply(asignar_estado)
     return df_m
 
 df_meddpicc = generar_datos_meddpicc()
+
+def check_password():
+    if "mi_contrasena" not in st.secrets: return True
+    st.sidebar.header("Acceso Restringido")
+    pwd = st.sidebar.text_input("Contraseña", type="password")
+    if pwd == st.secrets["mi_contrasena"]: return True
+    return False
+
+if not check_password():
+    st.info("Ingresa tu contraseña en el menú lateral para acceder al sistema.")
+    st.stop()
 
 st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT & Auditoría MEDDPICC | Revenue Operations</div>', unsafe_allow_html=True)
@@ -173,7 +186,6 @@ if archivo_cargado is not None:
             
             df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
-            # AGRUPACIÓN POR PROYECTO
             df = df_clean.groupby('ID_Proyecto').agg({
                 'Cliente_Final': 'first', 'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
                 'Estatus': 'first', 'Etapa': 'first',
@@ -201,7 +213,7 @@ if archivo_cargado is not None:
 
             # --- RENDERIZADO TABS 1 Y 2 ---
             with tab_dashboards:
-                st.info("Visualización CRM cargada. Tu Pareto y embudo están listos (Código minimizado por limpieza).")
+                st.info("Visualización CRM cargada correctamente.")
                 st.dataframe(df.head(5))
 
             with tab_enablement:
@@ -212,11 +224,11 @@ if archivo_cargado is not None:
                         with st.container(border=True):
                             st.markdown(f"**{row['ID_Proyecto']} | {row['Cliente']}**")
                             st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Riesgo: **${row['Monto_USD']:,.2f} USD**")
-                            if st.button(f"Analizar en Laboratorio", key=f"btn_{row['ID_Proyecto']}"):
+                            if st.button(f"Analizar Estrategia 360", key=f"btn_{row['ID_Proyecto']}"):
                                 st.session_state.proyecto_foco = str(row['ID_Proyecto'])
                                 st.success("Proyecto enviado. Abre la Pestaña 3.")
                 else:
-                    st.success("Embudo limpio.")
+                    st.success("Embudo limpio. No hay proyectos estancados.")
 
             # ==========================================
             # TAB 3: LABORATORIO TÁCTICO (NUEVA VISIÓN 360°)
@@ -248,7 +260,7 @@ if archivo_cargado is not None:
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # SIN BOTONES, SOLO CONTEXTO DIRECTO
+                    # SIN BOTONES, SOLO CONTEXTO DIRECTO PARA VISUALIZAR TODO SIMULTÁNEO
                     col1, col2 = st.columns(2)
                     with col1: interlocutor = st.selectbox("Perfil del Interlocutor:", ["Ingeniero / Calidad / Mantenimiento", "Comprador / Finanzas / Gerente Planta"])
                     with col2: contexto_manual = st.text_input("Notas de situación actual (Ej. 'El cliente compara con Zeiss y le urge'): ")
@@ -257,6 +269,7 @@ if archivo_cargado is not None:
                         if st.button("🧠 Generar Estrategia 360°", type="primary", use_container_width=True):
                             with st.spinner("Analizando con MEDDPICC, SPIN y lenguaje metrológico..."):
                                 try:
+                                    # FILTROS DE SEGURIDAD APAGADOS PARA EVITAR BLOQUEOS
                                     safety_settings = [
                                         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                                         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -281,7 +294,7 @@ if archivo_cargado is not None:
                                     3. Usa terminología de metrología industrial: "Incertidumbre de medición", "GD&T", "Trazabilidad", "Resolución", "Acreditación ISO/IEC 17025", etc.
                                     
                                     FORMATO DE SALIDA ESTRICTO (6 BLOQUES OBLIGATORIOS):
-                                    Separa tu respuesta usando ESTOS EXACTOS MARCADORES. No uses negritas ni Markdown en los marcadores.
+                                    Separa tu respuesta usando ESTOS EXACTOS MARCADORES. Asegúrate de incluir el marcador antes de empezar a redactar cada sección. No uses viñetas ni asteriscos en los marcadores.
 
                                     SECCION_ANALISIS:
                                     (Análisis de la cuenta B2B usando las metodologías).
@@ -305,23 +318,23 @@ if archivo_cargado is not None:
                                     response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
                                     texto_raw = response.text
                                     
-                                    # Extracción Múltiple Robusta
-                                    extracciones = {}
-                                    secciones = ['ANALISIS', 'WHATSAPP', 'CORREO', 'LLAMADA', 'MARKETING', 'BITACORA']
-                                    
-                                    for i, sec in enumerate(secciones):
-                                        inicio = f"SECCION_{sec}:"
-                                        fin = f"SECCION_{secciones[i+1]}:" if i+1 < len(secciones) else "$"
-                                        patron = f"{inicio}(.*?)(?={fin})"
-                                        match = re.search(patron, texto_raw, re.DOTALL | re.IGNORECASE)
-                                        extracciones[sec] = match.group(1).strip() if match else "Error de formato."
+                                    # EXTRACCIÓN MÚLTIPLE ROBUSTA CON REGEX EXPLICITO
+                                    s1 = re.search(r'SECCION_ANALISIS:(.*?)(?=SECCION_WHATSAPP:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                    s2 = re.search(r'SECCION_WHATSAPP:(.*?)(?=SECCION_CORREO:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                    s3 = re.search(r'SECCION_CORREO:(.*?)(?=SECCION_LLAMADA:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                    s4 = re.search(r'SECCION_LLAMADA:(.*?)(?=SECCION_MARKETING:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                    s5 = re.search(r'SECCION_MARKETING:(.*?)(?=SECCION_BITACORA:)', texto_raw, re.DOTALL | re.IGNORECASE)
+                                    s6 = re.search(r'SECCION_BITACORA:(.*)', texto_raw, re.DOTALL | re.IGNORECASE)
 
-                                    st.session_state.tactica_analisis = extracciones['ANALISIS']
-                                    st.session_state.tactica_whatsapp = extracciones['WHATSAPP']
-                                    st.session_state.tactica_correo = extracciones['CORREO']
-                                    st.session_state.tactica_llamada = extracciones['LLAMADA']
-                                    st.session_state.tactica_marketing = extracciones['MARKETING']
-                                    st.session_state.tactica_bitacora = extracciones['BITACORA']
+                                    st.session_state.tactica_analisis = s1.group(1).strip() if s1 else "Error aislando sección."
+                                    st.session_state.tactica_whatsapp = s2.group(1).strip() if s2 else "Error aislando sección."
+                                    st.session_state.tactica_correo = s3.group(1).strip() if s3 else "Error aislando sección."
+                                    st.session_state.tactica_llamada = s4.group(1).strip() if s4 else "Error aislando sección."
+                                    st.session_state.tactica_marketing = s5.group(1).strip() if s5 else "Error aislando sección."
+                                    st.session_state.tactica_bitacora = s6.group(1).strip() if s6 else "Error aislando sección."
+                                    
+                                    # Si ocurre un error grave en la separación, mostrar el crudo en la primera caja
+                                    if not s1: st.session_state.tactica_analisis = texto_raw
                                     
                                     st.session_state.tactica_cliente = datos_proy['Cliente']
                                     st.session_state.tactica_id = datos_proy['ID_Proyecto']
@@ -331,7 +344,7 @@ if archivo_cargado is not None:
                                 except Exception as e:
                                     st.error(f"Error de IA: {e}")
 
-                    # VISTA SIMULTÁNEA
+                    # VISTA SIMULTÁNEA EN 2 COLUMNAS
                     if st.session_state.tactica_whatsapp:
                         st.success("Arsenal táctico generado con éxito.")
                         
@@ -342,6 +355,8 @@ if archivo_cargado is not None:
                             
                             st.markdown("#### 📲 Mensaje WhatsApp")
                             st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_whatsapp}</div>", unsafe_allow_html=True)
+                            if st.button("📱 Enviar a WhatsApp"):
+                                st.link_button("Abrir Web", f"https://wa.me/?text={urllib.parse.quote(st.session_state.tactica_whatsapp)}")
                             
                             st.markdown("#### 📞 Guion Llamada")
                             st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_llamada}</div>", unsafe_allow_html=True)
@@ -349,6 +364,8 @@ if archivo_cargado is not None:
                         with colB:
                             st.markdown("#### ✉️ Correo Electrónico")
                             st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_correo}</div>", unsafe_allow_html=True)
+                            if st.button("📧 Redactar Correo"):
+                                st.link_button("Abrir Mail", f"mailto:?subject=Seguimiento Proyecto {st.session_state.tactica_id}&body={urllib.parse.quote(st.session_state.tactica_correo)}")
                             
                             st.markdown("#### 🎯 Solicitud Marketing (ABM)")
                             st.warning(st.session_state.tactica_marketing)
@@ -356,10 +373,10 @@ if archivo_cargado is not None:
                             st.markdown("#### 📋 Bitácora CRM (SCOTT)")
                             st.success(st.session_state.tactica_bitacora)
                             
-                        # BOTONERA DE EXPORTACIÓN (Sin cambiar lógica compleja de Word)
+                        # BOTONERA DE EXPORTACIÓN A WORD
                         if docx_disponible:
                             st.divider()
-                            st.markdown("### 📤 Central de Exportación")
+                            st.markdown("### 📤 Exportar Documento 360°")
                             def exportar_todo():
                                 doc = Document()
                                 doc.add_heading("ARSENAL TÁCTICO 360° | REVENUE OPERATIONS", 0)
@@ -397,7 +414,6 @@ with tab_meddpicc:
     st.markdown("### Auditoría de Calificación B2B (Framework MEDDPICC)")
     st.caption("Evalúa la madurez de calificación cruzando las etapas del embudo con el Health Score del proyecto.")
     
-    # Filtros para el Dashboard
     col_f1, col_f2 = st.columns(2)
     with col_f1: 
         fases_disp = df_meddpicc['Etapa_Pipeline'].unique()
@@ -405,10 +421,8 @@ with tab_meddpicc:
     with col_f2: 
         score_min = st.slider("Health Score Mínimo (Suma MEDDPICC):", 0, 16, 0)
         
-    # Aplicar filtros
     df_filtrado = df_meddpicc[(df_meddpicc['Etapa_Pipeline'].isin(filtro_etapa)) & (df_meddpicc['Health_Score'] >= score_min)]
     
-    # KPIs Top
     if not df_filtrado.empty:
         val_total = df_filtrado['Valor_USD'].sum()
         avg_score = df_filtrado['Health_Score'].mean()
@@ -421,7 +435,6 @@ with tab_meddpicc:
         
         st.divider()
         
-        # Gráfico 1: Scatter Plot Plotly
         st.markdown("#### Matriz de Dispersión: Madurez vs. Riesgo")
         color_map = {'Riesgo Alto': '#e74c3c', 'Precaución': '#f1c40f', 'Saludable': '#2ecc71'}
         
@@ -437,18 +450,15 @@ with tab_meddpicc:
             size_max=45,
             labels={'Etapa_Pipeline': 'Etapa del CRM (1-5)', 'Health_Score': 'Health Score MEDDPICC (0-16)'}
         )
-        # Añadir cuadrícula roja visual para zona de peligro
         fig_scatter.add_hrect(y0=0, y1=8, line_width=0, fillcolor="red", opacity=0.05)
         fig_scatter.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig_scatter, use_container_width=True)
         
         st.divider()
         
-        # Gráfico 2: Heatmap de Brechas MEDDPICC
         st.markdown("#### Matriz de Calor (Puntos Ciegos MEDDPICC)")
         st.caption("0: Desconocido (Rojo) | 1: Identificado (Amarillo) | 2: Validado (Verde)")
         
-        # Preparar data para Heatmap
         df_heat = df_filtrado.sort_values(by="Valor_USD", ascending=True)
         z_data = df_heat[['M','E','D1','D2','P','I','C1','C2']].values
         y_labels = df_heat['Oportunidad'].tolist()
