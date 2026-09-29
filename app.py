@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
 import re
 import google.generativeai as genai
@@ -58,30 +56,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# ==========================================
-# SIMULACIÓN DE DATOS MEDDPICC
-# ==========================================
-def generar_datos_meddpicc():
-    data = {
-        'Oportunidad': ['CMM Mitutoyo Crysta-Apex - Ford', 'Scantech SimScan - Fulltech', 'Brazo Faro / Servicios - Tremec', 'Calibración Dimensional Anual - Dana', 'Zeiss Contura (Competencia) - BRP'],
-        'Valor_USD': [85000, 32842, 45000, 8500, 120000],
-        'Etapa_Pipeline': [3, 4, 2, 5, 1],
-        'M': [1, 2, 0, 2, 0], 'E': [2, 1, 1, 2, 0], 'D1': [1, 2, 1, 2, 1], 'D2': [1, 2, 0, 2, 0],
-        'P': [2, 2, 1, 2, 1], 'I': [1, 1, 0, 2, 0], 'C1': [2, 2, 1, 2, 0], 'C2': [1, 2, 0, 2, 1]
-    }
-    df_m = pd.DataFrame(data)
-    df_m['Health_Score'] = df_m[['M','E','D1','D2','P','I','C1','C2']].sum(axis=1)
-    
-    def asignar_estado(score):
-        if score < 8: return 'Riesgo Alto'
-        elif 8 <= score <= 12: return 'Precaución'
-        else: return 'Saludable'
-            
-    df_m['Estado'] = df_m['Health_Score'].apply(asignar_estado)
-    return df_m
-
-df_meddpicc = generar_datos_meddpicc()
-
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("Acceso Restringido")
@@ -94,16 +68,15 @@ if not check_password():
     st.stop()
 
 st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Módulo CRM SCOTT & Auditoría MEDDPICC | Revenue Operations</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
 # ==========================================
-# TABS DE NAVEGACIÓN (SIEMPRE VISIBLES)
+# TABS DE NAVEGACIÓN (AHORA SON SOLO 3)
 # ==========================================
-tab_dashboards, tab_enablement, tab_scott, tab_meddpicc = st.tabs([
+tab_dashboards, tab_enablement, tab_scott = st.tabs([
     "1. Dashboards CRM", 
     "2. Proyectos Estancados", 
-    "3. Laboratorio IA",
-    "4. Dashboard MEDDPICC"
+    "3. Laboratorio IA"
 ])
 
 archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
@@ -319,7 +292,7 @@ if archivo_cargado is not None:
             st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA (BOTONES + OBJECIONES + MEDDPICC/SPIN/SANDLER)
+        # TAB 3: LABORATORIO TÁCTICO IA
         # ==========================================
         with tab_scott:
             st.markdown("### Laboratorio Táctico IA (MEDDPICC, SPIN & Sandler)")
@@ -348,7 +321,6 @@ if archivo_cargado is not None:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # --- BOTONES RESTAURADOS ---
                 tipo_operacion = st.radio("Objetivo Principal de la Táctica:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
 
                 col1, col2 = st.columns(2)
@@ -392,7 +364,7 @@ if archivo_cargado is not None:
                                 
                                 INSTRUCCIÓN METODOLÓGICA (INTEGRACIÓN ESTRATÉGICA):
                                 1. ESTRATEGIA BASE (MEDDPICC y SPIN): Evalúa la madurez de la cuenta con MEDDPICC (Economic Buyer, Criterios, Champion) y formula el dolor con SPIN Selling (Preguntas de Implicación).
-                                2. ACELERADOR DE CIERRES (SANDLER): Agrega el Método Sandler a tu estrategia para forzar cierres rápidos, ir directo al punto y evitar el desgaste en el seguimiento (buscar el "Sí/No" claro).
+                                2. ACELERADOR DE CIERRES (SANDLER): Agrega el Método Sandler a tu estrategia para forzar cierres rápidos, ir directo al punto y evitar el desgaste en el seguimiento.
                                 3. LENGUAJE TÉCNICO: Usa terminología de metrología industrial: "Incertidumbre de medición", "GD&T", "Trazabilidad", "Resolución", "Acreditación ISO 17025", etc.
                                 
                                 FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML OBLIGATORIAS):
@@ -422,7 +394,6 @@ if archivo_cargado is not None:
                                 response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
                                 texto_raw = response.text
                                 
-                                # === EXTRACCIÓN XML BLINDADA (INFALIBLE) ===
                                 def extract_xml(tag, text):
                                     match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
                                     return match.group(1).strip() if match else "Error aislando sección."
@@ -433,7 +404,6 @@ if archivo_cargado is not None:
                                 st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
                                 st.session_state.tactica_bitacora = extract_xml('BITACORA', texto_raw)
                                 
-                                # Fallback si la IA ignoró por completo el XML
                                 if "Error aislando" in st.session_state.tactica_mensaje:
                                     st.session_state.tactica_mensaje = texto_raw
                                 
@@ -445,7 +415,6 @@ if archivo_cargado is not None:
                             except Exception as e:
                                 st.error(f"Error de IA: {e}")
 
-                # VISTA DE RESULTADOS
                 if st.session_state.tactica_mensaje:
                     st.success(f"Táctica generada con éxito para: {sub_opcion}")
                     
@@ -464,7 +433,6 @@ if archivo_cargado is not None:
                     st.markdown("#### 📋 Bitácora CRM (SCOTT)")
                     st.success(st.session_state.tactica_bitacora)
                         
-                    # EXPORTACIÓN
                     if docx_disponible:
                         st.divider()
                         st.markdown("### 📤 Exportar Documento")
@@ -494,59 +462,3 @@ else:
     with tab_dashboards: st.warning("Sube el archivo CSV del CRM SCOTT en la barra lateral para ver tus datos.")
     with tab_enablement: st.warning("Requiere datos.")
     with tab_scott: st.warning("Requiere datos.")
-
-# ==========================================
-# TAB 4: MÓDULO MEDDPICC (EXPLICADO)
-# ==========================================
-with tab_meddpicc:
-    st.markdown("### Auditoría de Calificación B2B (Framework MEDDPICC)")
-    st.info("💡 **Simulador:** Como el CRM no exporta MEDDPICC, estos datos son simulados para mostrar la visión del embudo.")
-    
-    col_f1, col_f2 = st.columns(2)
-    with col_f1: 
-        fases_disp = df_meddpicc['Etapa_Pipeline'].unique()
-        filtro_etapa = st.multiselect("Filtrar por Etapa de Pipeline:", sorted(fases_disp), default=sorted(fases_disp))
-    with col_f2: 
-        score_min = st.slider("Health Score Mínimo (Suma MEDDPICC):", 0, 16, 0)
-        
-    df_filtrado = df_meddpicc[(df_meddpicc['Etapa_Pipeline'].isin(filtro_etapa)) & (df_meddpicc['Health_Score'] >= score_min)]
-    
-    if not df_filtrado.empty:
-        val_total = df_filtrado['Valor_USD'].sum()
-        avg_score = df_filtrado['Health_Score'].mean()
-        riesgos = df_filtrado[(df_filtrado['Etapa_Pipeline'] >= 4) & (df_filtrado['Health_Score'] < 10)].shape[0]
-        
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Valor Total Pipeline", f"${val_total:,.0f} USD")
-        k2.metric("Promedio Health Score", f"{avg_score:.1f} / 16")
-        k3.metric("Riesgo Crítico", f"{riesgos} cuentas", "Etapa Avanzada + Score Bajo")
-        
-        st.divider()
-        st.markdown("#### Matriz de Dispersión: Madurez vs. Riesgo")
-        color_map = {'Riesgo Alto': '#e74c3c', 'Precaución': '#f1c40f', 'Saludable': '#2ecc71'}
-        
-        fig_scatter = px.scatter(
-            df_filtrado, x="Etapa_Pipeline", y="Health_Score", size="Valor_USD", color="Estado",
-            color_discrete_map=color_map, hover_name="Oportunidad",
-            hover_data={"Valor_USD": ':,.0f', "Etapa_Pipeline": True, "Estado": False},
-            size_max=45, labels={'Etapa_Pipeline': 'Etapa del CRM (1-5)', 'Health_Score': 'Health Score MEDDPICC (0-16)'}
-        )
-        fig_scatter.add_hrect(y0=0, y1=8, line_width=0, fillcolor="red", opacity=0.05)
-        fig_scatter.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig_scatter, use_container_width=True)
-        
-        st.divider()
-        st.markdown("#### Matriz de Calor (Puntos Ciegos MEDDPICC)")
-        
-        df_heat = df_filtrado.sort_values(by="Valor_USD", ascending=True)
-        z_data = df_heat[['M','E','D1','D2','P','I','C1','C2']].values
-        y_labels = df_heat['Oportunidad'].tolist()
-        x_labels = ['M (Métricas)', 'E (Econ. Buyer)', 'D1 (Criteria)', 'D2 (Process)', 'P (Paperwork)', 'I (Implicación)', 'C1 (Champion)', 'C2 (Competencia)']
-        
-        fig_heat = go.Figure(data=go.Heatmap(
-            z=z_data, x=x_labels, y=y_labels,
-            colorscale=[[0, '#e74c3c'], [0.5, '#f1c40f'], [1, '#2ecc71']],
-            showscale=False, text=z_data, texttemplate="%{text}", textfont={"size":14, "color":"white"}
-        ))
-        fig_heat.update_layout(height=max(300, len(y_labels)*50), margin=dict(l=0, r=0, t=10, b=0))
-        st.plotly_chart(fig_heat, use_container_width=True)
