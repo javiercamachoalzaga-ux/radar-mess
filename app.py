@@ -292,7 +292,7 @@ if archivo_cargado is not None:
             st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA
+        # TAB 3: LABORATORIO TÁCTICO IA (OBJECIONES + ETIQUETAS EN INGLÉS)
         # ==========================================
         with tab_scott:
             st.markdown("### Laboratorio Táctico IA (MEDDPICC, SPIN & Sandler)")
@@ -367,43 +367,45 @@ if archivo_cargado is not None:
                                 2. ACELERADOR DE CIERRES (SANDLER): Agrega el Método Sandler a tu estrategia para forzar cierres rápidos, ir directo al punto y evitar el desgaste en el seguimiento.
                                 3. LENGUAJE TÉCNICO: Usa terminología de metrología industrial: "Incertidumbre de medición", "GD&T", "Trazabilidad", "Resolución", "Acreditación ISO 17025", etc.
                                 
-                                FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML OBLIGATORIAS):
-                                Debes estructurar tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML (asegúrate de cerrarlas). No uses Markdown fuera de las etiquetas.
+                                FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML EN INGLÉS OBLIGATORIAS):
+                                Debes estructurar tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML en inglés para evitar errores de extracción. El texto adentro de las etiquetas debe ser en ESPAÑOL. No uses Markdown fuera de las etiquetas.
 
-                                <ANALISIS>
+                                <ANALYSIS>
                                 (Desarrolla la estrategia inicial detallando cómo aplicar MEDDPICC y SPIN en esta cuenta, y suma explícitamente cómo usar Sandler para un cierre rápido o calificar si vale la pena el esfuerzo).
-                                </ANALISIS>
+                                </ANALYSIS>
 
-                                <MENSAJE>
+                                <MESSAGE>
                                 (Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Lenguaje empático pero directo al dolor. Si es visita, redacta los puntos a tratar).
-                                </MENSAJE>
+                                </MESSAGE>
 
-                                <OBJECIONES>
+                                <OBJECTIONS>
                                 (Redacta 2 posibles objeciones del cliente basadas en este equipo/monto y cómo rebatirlas estratégicamente con lenguaje metrológico).
-                                </OBJECIONES>
+                                </OBJECTIONS>
 
                                 <MARKETING>
                                 (Instrucción concreta de ABM para el departamento de Marketing, ej. enviar caso de éxito o brochure técnico).
                                 </MARKETING>
 
-                                <BITACORA>
+                                <LOG>
                                 (Reporte hiper-resumido y técnico en tercera persona para pegar en el CRM SCOTT).
-                                </BITACORA>
+                                </LOG>
                                 """
                                 
                                 response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
                                 texto_raw = response.text
                                 
+                                # === EXTRACCIÓN XML BLINDADA (ETIQUETAS EN INGLÉS) ===
                                 def extract_xml(tag, text):
-                                    match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
+                                    match = re.search(rf'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
                                     return match.group(1).strip() if match else "Error aislando sección."
 
-                                st.session_state.tactica_analisis = extract_xml('ANALISIS', texto_raw)
-                                st.session_state.tactica_mensaje = extract_xml('MENSAJE', texto_raw)
-                                st.session_state.tactica_objeciones = extract_xml('OBJECIONES', texto_raw)
+                                st.session_state.tactica_analisis = extract_xml('ANALYSIS', texto_raw)
+                                st.session_state.tactica_mensaje = extract_xml('MESSAGE', texto_raw)
+                                st.session_state.tactica_objeciones = extract_xml('OBJECTIONS', texto_raw)
                                 st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
-                                st.session_state.tactica_bitacora = extract_xml('BITACORA', texto_raw)
+                                st.session_state.tactica_bitacora = extract_xml('LOG', texto_raw)
                                 
+                                # Fallback robusto por si la IA ignoró el XML por completo
                                 if "Error aislando" in st.session_state.tactica_mensaje:
                                     st.session_state.tactica_mensaje = texto_raw
                                 
@@ -415,6 +417,7 @@ if archivo_cargado is not None:
                             except Exception as e:
                                 st.error(f"Error de IA: {e}")
 
+                # VISTA DE RESULTADOS
                 if st.session_state.tactica_mensaje:
                     st.success(f"Táctica generada con éxito para: {sub_opcion}")
                     
@@ -433,6 +436,7 @@ if archivo_cargado is not None:
                     st.markdown("#### 📋 Bitácora CRM (SCOTT)")
                     st.success(st.session_state.tactica_bitacora)
                         
+                    # EXPORTACIÓN
                     if docx_disponible:
                         st.divider()
                         st.markdown("### 📤 Exportar Documento")
