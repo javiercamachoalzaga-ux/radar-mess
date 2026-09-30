@@ -7,7 +7,6 @@ import re
 import google.generativeai as genai
 import urllib.parse
 import io
-import json
 
 # Intenta importar la librería de Word
 try:
@@ -116,6 +115,7 @@ if archivo_cargado is not None:
                         return df_data[col].copy()
             return pd.Series([None] * len(df_data))
 
+        # --- CONSTRUCCIÓN INICIAL (SIN BORRAR FILAS AÚN) ---
         df_clean = pd.DataFrame()
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
@@ -127,6 +127,50 @@ if archivo_cargado is not None:
         df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
+        def extraer_numero(val_str):
+            try:
+                v = str(val_str).upper().replace('$', '').replace('USD', '').replace('MXN', '').replace(' ', '').strip()
+                if ',' in v and '.' in v:
+                    v = v.replace(',', '')
+                elif ',' in v and len(v.split(',')[-1]) != 2:
+                    v = v.replace(',', '')
+                elif ',' in v and len(v.split(',')[-1]) == 2:
+                    v = v.replace(',', '.')
+                v = ''.join(c for c in v if c.isdigit() or c == '.')
+                return float(v) if v else 0.0
+            except: 
+                return 0.0
+
+        # --- MOTOR EXTRACCIÓN DE MONEDAS (SÚPER BLINDADO) ---
+        # Extraemos el dinero respetando las filas exactas antes de limpiar vacíos
+        monto_mxn = np.zeros(len(df_data))
+        monto_usd = np.zeros(len(df_data))
+        col_moneda = buscar_col(["MONEDA", "DIVISA"])
+        
+        for col in df_data.columns:
+            col_name = str(col).upper().strip()
+            # Identificar columnas financieras
+            if any(k in col_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
+                is_col_usd = 'USD' in col_name or 'US$' in col_name
+                
+                for i in range(len(df_data)):
+                    val_raw = df_data[col].iloc[i]
+                    val_str = str(val_raw).upper()
+                    num = extraer_numero(val_raw)
+                    
+                    # Revisar celda de moneda si existe
+                    moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
+                    
+                    # Decisión de moneda
+                    if is_col_usd or 'USD' in val_str or 'US$' in val_str or 'USD' in moneda_fila or 'US$' in moneda_fila or 'DÓLA' in moneda_fila or 'DOLA' in moneda_fila:
+                        monto_usd[i] += num
+                    else:
+                        monto_mxn[i] += num
+                        
+        df_clean['Monto_MXN'] = monto_mxn
+        df_clean['Monto_USD'] = monto_usd
+
+        # --- AHORA SÍ, FILTRAMOS LAS FILAS VACÍAS ---
         df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
 
         def sanear_y_limpiar(texto):
@@ -139,36 +183,6 @@ if archivo_cargado is not None:
         df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
         df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
 
-        def extraer_numero(val_str):
-            try: return float(''.join(c for c in str(val_str).upper() if c.isdigit() or c == '.'))
-            except: return 0.0
-
-        # --- MOTOR DE EXTRACCIÓN DE MONEDAS BLINDADO ---
-        monto_mxn = np.zeros(len(df_clean))
-        monto_usd = np.zeros(len(df_clean))
-        col_moneda = buscar_col(["MONEDA", "DIVISA"])
-        
-        for col in df_data.columns:
-            col_name = str(col).upper().strip()
-            if col_name.startswith("VALOR"):
-                is_col_usd = 'USD' in col_name
-                
-                valores = df_data[col].iloc[df_clean.index]
-                for i, val in enumerate(valores):
-                    val_str = str(val).upper()
-                    num = extraer_numero(val)
-                    
-                    # Verificamos si hay columna "MONEDA"
-                    moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
-                    
-                    if is_col_usd or 'USD' in val_str or 'USD' in moneda_fila:
-                        monto_usd[i] += num
-                    else:
-                        monto_mxn[i] += num
-        
-        df_clean['Monto_MXN'] = monto_mxn
-        df_clean['Monto_USD'] = monto_usd
-
         # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
@@ -180,7 +194,9 @@ if archivo_cargado is not None:
         }).reset_index()
 
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
+        # Filtramos para mostrar solo proyectos con valor monetario
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
+        
         filtro_estatus = df['Estatus'].str.contains('PROCESO', case=False, na=False)
         filtro_etapa = df['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
         df = df[filtro_estatus | filtro_etapa].copy()
@@ -293,31 +309,30 @@ if archivo_cargado is not None:
                 
             st.divider()
             st.markdown("#### Auditoría Rápida CRM")
-            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
+            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA (EMPAQUETADOR Y LENGUAJE HUMANO)
+        # TAB 3: LABORATORIO TÁCTICO IA
         # ==========================================
         with tab_scott:
             st.markdown("### Copiloto Estratégico (Key Account Management)")
             st.caption("Arma estrategias para un proyecto único o consolida varios proyectos en una sola negociación de paquete.")
             
-            # --- 1. SELECCIÓN DE CLIENTE ---
             clientes_disponibles = sorted(df['Cliente'].unique().tolist())
             cliente_seleccionado = st.selectbox("1. Selecciona la Cuenta / Cliente:", ["-- Selecciona un cliente --"] + clientes_disponibles)
             
             if cliente_seleccionado != "-- Selecciona un cliente --":
                 df_cliente = df[df['Cliente'] == cliente_seleccionado]
                 
-                # --- 2. MULTI-SELECCIÓN DE PROYECTOS ---
-                opciones_proyectos_cliente = df_cliente.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD", axis=1).tolist()
-                proyectos_seleccionados = st.multiselect("2. Selecciona los folios a incluir en esta estrategia (Puedes elegir varios):", opciones_proyectos_cliente)
+                opciones_proyectos_cliente = df_cliente.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
+                proyectos_seleccionados = st.multiselect("2. Selecciona los folios a incluir en esta estrategia:", opciones_proyectos_cliente)
                 
                 if proyectos_seleccionados:
                     ids_seleccionados = [opc.split("]")[0].replace("[", "") for opc in proyectos_seleccionados]
                     df_seleccion = df[df['ID_Proyecto'].astype(str).isin(ids_seleccionados)]
                     
                     monto_total_usd = df_seleccion['Monto_USD'].sum()
+                    monto_total_mxn = df_seleccion['Monto_MXN'].sum()
                     equipos_combinados = " | ".join(df_seleccion['Descripcion'].tolist())
                     ids_combinados = ", ".join(df_seleccion['ID_Proyecto'].astype(str).tolist())
                     es_paquete = len(df_seleccion) > 1
@@ -326,7 +341,7 @@ if archivo_cargado is not None:
                     <div class="ficha-scott">
                         <h4>{cliente_seleccionado} (Folios: {ids_combinados})</h4>
                         <b>Equipos Involucrados:</b> <span style='color:#003a70;'>{equipos_combinados}</span><br>
-                        <b>Monto Total a Negociar:</b> <span style='color:#27ae60; font-weight:bold; font-size:18px;'>${monto_total_usd:,.2f} USD</span>
+                        <b>Monto Total a Negociar:</b> <span style='color:#27ae60; font-weight:bold; font-size:18px;'>${monto_total_usd:,.2f} USD</span> | <span style='color:#8e44ad; font-weight:bold;'>${monto_total_mxn:,.2f} MXN</span>
                         {'<br><span style="color:#e67e22; font-weight:bold;">⚠️ Estrategia de Paquete (Bundle) Activada</span>' if es_paquete else ''}
                     </div>
                     """, unsafe_allow_html=True)
@@ -370,7 +385,7 @@ if archivo_cargado is not None:
                                     Cliente: {cliente_seleccionado} (Perfil: {interlocutor})
                                     Giro e Instrucciones de Terminología: {giro_cliente}
                                     Equipos/Servicios: {equipos_combinados}
-                                    Monto Total: ${monto_total_usd} USD
+                                    Monto Total: ${monto_total_usd} USD y ${monto_total_mxn} MXN
                                     Proyectos Agrupados: {len(df_seleccion)}
                                     Acción Solicitada: {sub_opcion}
                                     Notas Adicionales: {contexto_manual}
@@ -411,7 +426,6 @@ if archivo_cargado is not None:
                                     response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
                                     texto_raw = response.text
                                     
-                                    # === EXTRACCIÓN XML ROBUSTA A PRUEBA DE PÁRRAFOS ===
                                     def extract_xml(tag, text):
                                         match = re.search(fr'<{tag}[^>]*>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
                                         return match.group(1).strip() if match else "Error aislando sección."
@@ -422,14 +436,13 @@ if archivo_cargado is not None:
                                     st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
                                     st.session_state.tactica_bitacora = extract_xml('LOG', texto_raw)
                                     
-                                    # Fallback extremo por si la IA ignoró completamente las etiquetas
                                     if "Error aislando" in st.session_state.tactica_mensaje:
                                         st.session_state.tactica_mensaje = texto_raw
                                     
                                     st.session_state.tactica_cliente = cliente_seleccionado
                                     st.session_state.tactica_id = ids_combinados
                                     st.session_state.tactica_equipo = equipos_combinados
-                                    st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD"
+                                    st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD / ${monto_total_mxn:,.2f} MXN"
                                     
                                 except Exception as e:
                                     st.error(f"Error de IA: {e}")
