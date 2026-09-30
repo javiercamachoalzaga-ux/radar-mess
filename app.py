@@ -7,6 +7,7 @@ import re
 import google.generativeai as genai
 import urllib.parse
 import io
+import json
 
 # Intenta importar la librería de Word
 try:
@@ -141,15 +142,13 @@ if archivo_cargado is not None:
             except: 
                 return 0.0
 
-        # --- MOTOR EXTRACCIÓN DE MONEDAS (SÚPER BLINDADO) ---
-        # Extraemos el dinero respetando las filas exactas antes de limpiar vacíos
+        # --- MOTOR EXTRACCIÓN DE MONEDAS ---
         monto_mxn = np.zeros(len(df_data))
         monto_usd = np.zeros(len(df_data))
         col_moneda = buscar_col(["MONEDA", "DIVISA"])
         
         for col in df_data.columns:
             col_name = str(col).upper().strip()
-            # Identificar columnas financieras
             if any(k in col_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
                 is_col_usd = 'USD' in col_name or 'US$' in col_name
                 
@@ -158,10 +157,8 @@ if archivo_cargado is not None:
                     val_str = str(val_raw).upper()
                     num = extraer_numero(val_raw)
                     
-                    # Revisar celda de moneda si existe
                     moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
                     
-                    # Decisión de moneda
                     if is_col_usd or 'USD' in val_str or 'US$' in val_str or 'USD' in moneda_fila or 'US$' in moneda_fila or 'DÓLA' in moneda_fila or 'DOLA' in moneda_fila:
                         monto_usd[i] += num
                     else:
@@ -234,8 +231,6 @@ if archivo_cargado is not None:
         if filtro_pilar:
             df = df[df['Pilar_Estrategico'].isin(filtro_pilar)]
 
-        mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
-
         # ==========================================
         # TAB 1: DASHBOARDS CRM
         # ==========================================
@@ -243,13 +238,13 @@ if archivo_cargado is not None:
             st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
             META_MENSUAL_USD = 80000.00
             
-            df_mes = df[(df['Fecha_Cierre_DT'].dt.month == mes_actual) & (df['Fecha_Cierre_DT'].dt.year == anio_actual)]
-            usd_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
-            mxn_caliente = df_mes[df_mes['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
+            # --- CORRECCIÓN: SUMAMOS TODO EL PIPELINE CALIENTE SIN IMPORTAR LA FECHA ---
+            usd_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
+            mxn_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
             
             col_g1, col_g2, col_g3 = st.columns(3)
             col_g1.metric("Meta Comercial Mensual", f"${META_MENSUAL_USD:,.2f} USD")
-            col_g2.metric("Pipeline Probable (USD)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN extra")
+            col_g2.metric("Pipeline Probable (Activo)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN extra")
             if (META_MENSUAL_USD - usd_caliente) > 0:
                 col_g3.metric("GAP (Brecha para Meta)", f"${(META_MENSUAL_USD - usd_caliente):,.2f} USD", "- Acción requerida")
             else:
