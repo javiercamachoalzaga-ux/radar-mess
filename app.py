@@ -7,6 +7,7 @@ import re
 import google.generativeai as genai
 import urllib.parse
 import io
+import json
 
 # Intenta importar la librería de Word
 try:
@@ -142,15 +143,31 @@ if archivo_cargado is not None:
             try: return float(''.join(c for c in str(val_str).upper() if c.isdigit() or c == '.'))
             except: return 0.0
 
-        monto_mxn, monto_usd = pd.Series([0.0]*len(df_clean)), pd.Series([0.0]*len(df_clean))
+        # --- MOTOR DE EXTRACCIÓN DE MONEDAS BLINDADO ---
+        monto_mxn = np.zeros(len(df_clean))
+        monto_usd = np.zeros(len(df_clean))
+        col_moneda = buscar_col(["MONEDA", "DIVISA"])
         
         for col in df_data.columns:
-            if str(col).upper().strip().startswith("VALOR"):
-                valores_columna = df_data[col].iloc[df_clean.index]
-                monto_mxn += valores_columna.apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0).values
-                monto_usd += valores_columna.apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0).values
+            col_name = str(col).upper().strip()
+            if col_name.startswith("VALOR"):
+                is_col_usd = 'USD' in col_name
+                
+                valores = df_data[col].iloc[df_clean.index]
+                for i, val in enumerate(valores):
+                    val_str = str(val).upper()
+                    num = extraer_numero(val)
+                    
+                    # Verificamos si hay columna "MONEDA"
+                    moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
+                    
+                    if is_col_usd or 'USD' in val_str or 'USD' in moneda_fila:
+                        monto_usd[i] += num
+                    else:
+                        monto_mxn[i] += num
         
-        df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
+        df_clean['Monto_MXN'] = monto_mxn
+        df_clean['Monto_USD'] = monto_usd
 
         # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
@@ -279,7 +296,7 @@ if archivo_cargado is not None:
             st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA (MOTOR XML BLINDADO)
+        # TAB 3: LABORATORIO TÁCTICO IA (EMPAQUETADOR Y LENGUAJE HUMANO)
         # ==========================================
         with tab_scott:
             st.markdown("### Copiloto Estratégico (Key Account Management)")
@@ -335,7 +352,7 @@ if archivo_cargado is not None:
                     
                     if gemini_activo:
                         if st.button("🧠 Generar Estrategia Consultiva", type="primary", use_container_width=True):
-                            with st.spinner("Diseñando estrategia empática y consolidando información..."):
+                            with st.spinner("Diseñando estrategia empática y consolidando información en formato estricto..."):
                                 try:
                                     safety_settings = [
                                         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
