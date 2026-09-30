@@ -7,7 +7,6 @@ import re
 import google.generativeai as genai
 import urllib.parse
 import io
-import json
 
 # Intenta importar la librería de Word
 try:
@@ -87,6 +86,7 @@ if archivo_cargado is not None:
         # --- LECTOR ROBUSTO SCOTT ---
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', header=None, sep=None, engine='python')
         header_idx = -1
+        
         for idx, row in df_raw.iterrows():
             row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
             if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
@@ -106,25 +106,27 @@ if archivo_cargado is not None:
             df_data.columns = headers
         else:
             df_data.columns = headers[:len(df_data.columns)]
-            
-        df_data = df_data.dropna(subset=['PROYECTO']).reset_index(drop=True)
 
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
                 for col in df_data.columns:
-                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
+                    col_limpia = str(col).upper().strip()
+                    if col_limpia == clave or col_limpia == f"{clave}.1":
                         return df_data[col].copy()
             return pd.Series([None] * len(df_data))
 
         df_clean = pd.DataFrame()
-        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
-        df_clean['Cliente'] = buscar_col(["CLIENTE"])
+        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
+        df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
+        df_clean['Cotizacion'] = buscar_col(["COTIZACION", "COTIZACIÓN"])
         df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
         df_clean['Estatus'] = buscar_col(["ESTATUS"])
         df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+
+        df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
 
         def sanear_y_limpiar(texto):
             if pd.isna(texto): return ""
@@ -140,17 +142,21 @@ if archivo_cargado is not None:
             try: return float(''.join(c for c in str(val_str).upper() if c.isdigit() or c == '.'))
             except: return 0.0
 
-        monto_mxn, monto_usd = pd.Series([0.0]*len(df_data)), pd.Series([0.0]*len(df_data))
+        monto_mxn, monto_usd = pd.Series([0.0]*len(df_clean)), pd.Series([0.0]*len(df_clean))
+        
         for col in df_data.columns:
             if str(col).upper().strip().startswith("VALOR"):
-                monto_mxn += df_data[col].apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0)
-                monto_usd += df_data[col].apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0)
+                valores_columna = df_data[col].iloc[df_clean.index]
+                monto_mxn += valores_columna.apply(lambda x: extraer_numero(x) if 'USD' not in str(x).upper() else 0.0).values
+                monto_usd += valores_columna.apply(lambda x: extraer_numero(x) if 'USD' in str(x).upper() else 0.0).values
         
         df_clean['Monto_MXN'], df_clean['Monto_USD'] = monto_mxn, monto_usd
 
         # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
-            'Cliente_Final': 'first', 'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
+            'Cliente_Final': 'first',
+            'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
+            'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
             'Estatus': 'first', 'Etapa': 'first',
             'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
             'Monto_MXN': 'sum', 'Monto_USD': 'sum'
@@ -273,7 +279,7 @@ if archivo_cargado is not None:
             st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA (EMPAQUETADOR Y LENGUAJE HUMANO)
+        # TAB 3: LABORATORIO TÁCTICO IA (MOTOR XML BLINDADO)
         # ==========================================
         with tab_scott:
             st.markdown("### Copiloto Estratégico (Key Account Management)")
@@ -291,11 +297,9 @@ if archivo_cargado is not None:
                 proyectos_seleccionados = st.multiselect("2. Selecciona los folios a incluir en esta estrategia (Puedes elegir varios):", opciones_proyectos_cliente)
                 
                 if proyectos_seleccionados:
-                    # Extraer IDs y filtrar
                     ids_seleccionados = [opc.split("]")[0].replace("[", "") for opc in proyectos_seleccionados]
                     df_seleccion = df[df['ID_Proyecto'].astype(str).isin(ids_seleccionados)]
                     
-                    # Consolidar datos
                     monto_total_usd = df_seleccion['Monto_USD'].sum()
                     equipos_combinados = " | ".join(df_seleccion['Descripcion'].tolist())
                     ids_combinados = ", ".join(df_seleccion['ID_Proyecto'].astype(str).tolist())
@@ -331,7 +335,7 @@ if archivo_cargado is not None:
                     
                     if gemini_activo:
                         if st.button("🧠 Generar Estrategia Consultiva", type="primary", use_container_width=True):
-                            with st.spinner("Diseñando estrategia empática y consolidando información en formato estricto..."):
+                            with st.spinner("Diseñando estrategia empática y consolidando información..."):
                                 try:
                                     safety_settings = [
                                         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -363,42 +367,52 @@ if archivo_cargado is not None:
                                     INTEGRACIÓN METODOLÓGICA INVISIBLE:
                                     Usa MEDDPICC para mapear la cuenta, SPIN para tocar el dolor, y Sandler para el cierre (buscar el sí/no claro sin rogar). Aplícalo en el análisis y en los mensajes de forma invisible y fluida.
                                     
-                                    FORMATO DE SALIDA ESTRICTO (JSON):
-                                    Devuelve ÚNICAMENTE un objeto JSON válido con las siguientes claves exactas en minúscula. Todo el contenido dentro de los valores del JSON debe estar redactado en ESPAÑOL. No incluyas comillas triples (```) ni texto adicional fuera del JSON:
-                                    {{
-                                      "analisis": "(Análisis estratégico humano. Evalúa la cuenta y explica cómo vender la solución (o el paquete si son varios). Define cómo usar Sandler aquí.)",
-                                      "mensaje": "(Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Muy humano, claro, empático y al punto.)",
-                                      "objeciones": "(Menciona 2 posibles objeciones del cliente ante esta propuesta y cómo rebatirlas como consultor experto, no como folleto.)",
-                                      "marketing": "(Instrucción para el equipo de Marketing sobre qué material de apoyo enviar para esta cuenta/giro)",
-                                      "bitacora": "(Reporte súper breve para pegar en el CRM SCOTT)"
-                                    }}
+                                    FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML OBLIGATORIAS):
+                                    Debes estructurar tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML en inglés. El texto adentro de las etiquetas debe ser en ESPAÑOL. NO uses formato JSON. Usa este formato exacto:
+
+                                    <ANALYSIS>
+                                    (Análisis estratégico humano. Evalúa la cuenta y explica cómo vender la solución (o el paquete si son varios). Define cómo usar Sandler aquí.)
+                                    </ANALYSIS>
+
+                                    <MESSAGE>
+                                    (Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Muy humano, claro, empático y al punto.)
+                                    </MESSAGE>
+
+                                    <OBJECTIONS>
+                                    (Menciona 2 posibles objeciones del cliente ante esta propuesta y cómo rebatirlas como consultor experto, no como folleto.)
+                                    </OBJECTIONS>
+
+                                    <MARKETING>
+                                    (Instrucción para el equipo de Marketing sobre qué material de apoyo enviar para esta cuenta/giro)
+                                    </MARKETING>
+
+                                    <LOG>
+                                    (Reporte súper breve para pegar en el CRM SCOTT)
+                                    </LOG>
                                     """
                                     
                                     response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
-                                    texto_raw = response.text.strip()
+                                    texto_raw = response.text
                                     
-                                    # Limpiar código markdown de la respuesta de Gemini
-                                    if texto_raw.startswith("```json"): texto_raw = texto_raw[7:]
-                                    if texto_raw.startswith("```"): texto_raw = texto_raw[3:]
-                                    if texto_raw.endswith("```"): texto_raw = texto_raw[:-3]
-                                    texto_raw = texto_raw.strip()
+                                    # === EXTRACCIÓN XML ROBUSTA A PRUEBA DE PÁRRAFOS ===
+                                    def extract_xml(tag, text):
+                                        match = re.search(fr'<{tag}[^>]*>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
+                                        return match.group(1).strip() if match else "Error aislando sección."
+
+                                    st.session_state.tactica_analisis = extract_xml('ANALYSIS', texto_raw)
+                                    st.session_state.tactica_mensaje = extract_xml('MESSAGE', texto_raw)
+                                    st.session_state.tactica_objeciones = extract_xml('OBJECTIONS', texto_raw)
+                                    st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
+                                    st.session_state.tactica_bitacora = extract_xml('LOG', texto_raw)
                                     
-                                    try:
-                                        datos_json = json.loads(texto_raw)
-                                        st.session_state.tactica_analisis = datos_json.get("analisis", "Dato no generado por la IA.")
-                                        st.session_state.tactica_mensaje = datos_json.get("mensaje", "Dato no generado por la IA.")
-                                        st.session_state.tactica_objeciones = datos_json.get("objeciones", "Dato no generado por la IA.")
-                                        st.session_state.tactica_marketing = datos_json.get("marketing", "Dato no generado por la IA.")
-                                        st.session_state.tactica_bitacora = datos_json.get("bitacora", "Dato no generado por la IA.")
-                                    except json.JSONDecodeError:
-                                        st.error("La IA generó una respuesta que no pudo ser procesada estructuralmente. Intenta nuevamente.")
-                                        st.session_state.tactica_mensaje = ""
+                                    # Fallback extremo por si la IA ignoró completamente las etiquetas
+                                    if "Error aislando" in st.session_state.tactica_mensaje:
+                                        st.session_state.tactica_mensaje = texto_raw
                                     
-                                    if st.session_state.tactica_mensaje:
-                                        st.session_state.tactica_cliente = cliente_seleccionado
-                                        st.session_state.tactica_id = ids_combinados
-                                        st.session_state.tactica_equipo = equipos_combinados
-                                        st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD"
+                                    st.session_state.tactica_cliente = cliente_seleccionado
+                                    st.session_state.tactica_id = ids_combinados
+                                    st.session_state.tactica_equipo = equipos_combinados
+                                    st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD"
                                     
                                 except Exception as e:
                                     st.error(f"Error de IA: {e}")
