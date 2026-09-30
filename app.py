@@ -7,6 +7,7 @@ import re
 import google.generativeai as genai
 import urllib.parse
 import io
+import json
 
 # Intenta importar la librería de Word
 try:
@@ -71,19 +72,19 @@ st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingenierí
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
 # ==========================================
-# TABS DE NAVEGACIÓN (AHORA SON SOLO 3)
+# TABS DE NAVEGACIÓN
 # ==========================================
 tab_dashboards, tab_enablement, tab_scott = st.tabs([
     "1. Dashboards CRM", 
     "2. Proyectos Estancados", 
-    "3. Laboratorio IA"
+    "3. Laboratorio IA (Estrategia Integral)"
 ])
 
 archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
 
 if archivo_cargado is not None:
     try:
-        # --- LECTOR ROBUSTO Y ALINEACIÓN DE ARCHIVOS SCOTT ---
+        # --- LECTOR ROBUSTO SCOTT ---
         df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', header=None, sep=None, engine='python')
         header_idx = -1
         for idx, row in df_raw.iterrows():
@@ -106,11 +107,7 @@ if archivo_cargado is not None:
         else:
             df_data.columns = headers[:len(df_data.columns)]
             
-        if 'PROYECTO' in df_data.columns:
-            df_data = df_data.dropna(subset=['PROYECTO']).reset_index(drop=True)
-        else:
-            st.error("Fallo de lectura en la columna PROYECTO.")
-            st.stop()
+        df_data = df_data.dropna(subset=['PROYECTO']).reset_index(drop=True)
 
         def buscar_col(palabras_clave):
             for clave in palabras_clave:
@@ -122,7 +119,6 @@ if archivo_cargado is not None:
         df_clean = pd.DataFrame()
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE"])
-        df_clean['Cotizacion'] = buscar_col(["COTIZACION"])
         df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
         df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
@@ -154,9 +150,7 @@ if archivo_cargado is not None:
 
         # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
-            'Cliente_Final': 'first',
-            'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
-            'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
+            'Cliente_Final': 'first', 'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
             'Estatus': 'first', 'Etapa': 'first',
             'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
             'Monto_MXN': 'sum', 'Monto_USD': 'sum'
@@ -168,22 +162,13 @@ if archivo_cargado is not None:
         filtro_etapa = df['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
         df = df[filtro_estatus | filtro_etapa].copy()
         
-        # CLASIFICACIÓN
         def clasificar_pilar(row):
             texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
-            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama (Servicios Especiales)"
-            elif any(k in texto for k in ["CALIBRACIÓN", "CALIBRACION", "LABORATORIO", "DIMENSIONAL", "PRENSA"]): return "2. Calibraciones (Comunes)"
-            else: return "3. Productos (Equipos y Consumibles)"
+            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
+            elif any(k in texto for k in ["CALIBRACIÓN", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
+            else: return "3. Productos Generales"
         
-        def clasificar_marca(desc):
-            texto = str(desc).upper()
-            marcas = ["BATY", "MITUTOYO", "ZEISS", "FLUKE", "MAGTROL", "BUEHLER", "WILSON", "SCANTECH", "KREON", "TAYLOR HOBSON", "GALDABINI", "ANTON PAAR"]
-            for marca in marcas:
-                if marca in texto: return marca.title()
-            return "Multimarca / No Especificada"
-            
         df['Pilar_Estrategico'] = df.apply(clasificar_pilar, axis=1)
-        df['Marca_Detectada'] = df['Descripcion'].apply(clasificar_marca)
         
         def clasificar_fase(etapa):
             e = str(etapa).upper()
@@ -201,7 +186,7 @@ if archivo_cargado is not None:
         st.sidebar.divider()
         st.sidebar.header("Filtros Directivos")
         opciones_pilares = df['Pilar_Estrategico'].unique().tolist()
-        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar de Negocio:", opciones_pilares, default=opciones_pilares)
+        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar:", opciones_pilares, default=opciones_pilares)
         busqueda_proyecto = st.sidebar.text_input("Buscar Folio o Cliente:")
         
         if busqueda_proyecto:
@@ -213,7 +198,7 @@ if archivo_cargado is not None:
         mes_actual, anio_actual = pd.Timestamp.now().month, pd.Timestamp.now().year
 
         # ==========================================
-        # TAB 1: DASHBOARDS
+        # TAB 1: DASHBOARDS CRM
         # ==========================================
         with tab_dashboards:
             st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
@@ -235,7 +220,6 @@ if archivo_cargado is not None:
             col_sel1, col_sel2 = st.columns([1, 3])
             with col_sel1: moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
             col_val = 'Monto_USD' if moneda_sel == "USD ($)" else 'Monto_MXN'
-            simbolo_moneda = '$,.2f'
             
             st.divider()
             
@@ -249,8 +233,8 @@ if archivo_cargado is not None:
                     
                     barras_pareto = alt.Chart(df_pareto).mark_bar(color='#34495e').encode(
                         x=alt.X('Cliente', sort=None, title='Cliente', axis=alt.Axis(labelLimit=0)),
-                        y=alt.Y(col_val, title=f'Valor {moneda_sel}'),
-                        tooltip=['Cliente', alt.Tooltip(col_val, format=simbolo_moneda), alt.Tooltip('Porcentaje', format='.1%')]
+                        y=alt.Y(col_val, title=f'Valor'),
+                        tooltip=['Cliente', alt.Tooltip(col_val, format='$,.2f'), alt.Tooltip('Porcentaje', format='.1%')]
                     )
                     linea_pareto = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
                         x=alt.X('Cliente', sort=None),
@@ -262,13 +246,13 @@ if archivo_cargado is not None:
                 st.divider()
                 col_g1, col_g2 = st.columns(2)
                 with col_g1:
-                    st.markdown(f"**Forecast por Área ({moneda_sel})**")
+                    st.markdown(f"**Forecast por Área**")
                     df_areas = df.groupby('Area')[col_val].sum().reset_index()
-                    if not df_areas.empty: st.altair_chart(alt.Chart(df_areas[df_areas[col_val]>0]).mark_bar(color='#003a70').encode(x=alt.X(col_val, title=''), y=alt.Y('Area', sort='-x', title='', axis=alt.Axis(labelLimit=0)), tooltip=['Area', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
+                    if not df_areas.empty: st.altair_chart(alt.Chart(df_areas[df_areas[col_val]>0]).mark_bar(color='#003a70').encode(x=alt.X(col_val, title=''), y=alt.Y('Area', sort='-x', title=''), tooltip=['Area', alt.Tooltip(col_val, format='$,.2f')]).properties(height=350), use_container_width=True)
                 with col_g2:
-                    st.markdown(f"**Salud del Embudo ({moneda_sel})**")
+                    st.markdown(f"**Salud del Embudo**")
                     df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-                    if not df_graf_fases.empty: st.altair_chart(alt.Chart(df_graf_fases[df_graf_fases[col_val]>0]).mark_bar(color='#2ecc71').encode(x=alt.X(col_val, title=''), y=alt.Y('Fase_Pipeline', sort='-x', title='', axis=alt.Axis(labelLimit=0)), tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format=simbolo_moneda)]).properties(height=350), use_container_width=True)
+                    if not df_graf_fases.empty: st.altair_chart(alt.Chart(df_graf_fases[df_graf_fases[col_val]>0]).mark_bar(color='#2ecc71').encode(x=alt.X(col_val, title=''), y=alt.Y('Fase_Pipeline', sort='-x', title=''), tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format='$,.2f')]).properties(height=350), use_container_width=True)
 
         # ==========================================
         # TAB 2: ENABLEMENT
@@ -281,185 +265,186 @@ if archivo_cargado is not None:
                     with st.container(border=True):
                         st.markdown(f"**{row['ID_Proyecto']} | {row['Cliente']}**")
                         st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Riesgo: **${row['Monto_USD']:,.2f} USD**")
-                        if st.button(f"Analizar en Laboratorio IA", key=f"btn_{row['ID_Proyecto']}"):
-                            st.session_state.proyecto_foco = str(row['ID_Proyecto'])
-                            st.success("Proyecto enviado. Abre la Pestaña 3.")
             else:
                 st.success("Embudo limpio.")
                 
             st.divider()
             st.markdown("#### Auditoría Rápida CRM")
-            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Cotizacion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
+            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD']], use_container_width=True, hide_index=True)
 
         # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA (OBJECIONES + ETIQUETAS EN INGLÉS)
+        # TAB 3: LABORATORIO TÁCTICO IA (EMPAQUETADOR Y LENGUAJE HUMANO)
         # ==========================================
         with tab_scott:
-            st.markdown("### Laboratorio Táctico IA (MEDDPICC, SPIN & Sandler)")
-            st.caption("Selecciona tu proyecto y define tu estrategia de cierre o visita.")
+            st.markdown("### Copiloto Estratégico (Key Account Management)")
+            st.caption("Arma estrategias para un proyecto único o consolida varios proyectos en una sola negociación de paquete.")
             
-            opciones_proyectos = df.apply(lambda x: f"[{x['ID_Proyecto']}] {x['Cliente']} - {str(x['Descripcion'])[:60]}...", axis=1).tolist()
-            opciones_proyectos.insert(0, "-- Selecciona un proyecto clave --")
+            # --- 1. SELECCIÓN DE CLIENTE ---
+            clientes_disponibles = sorted(df['Cliente'].unique().tolist())
+            cliente_seleccionado = st.selectbox("1. Selecciona la Cuenta / Cliente:", ["-- Selecciona un cliente --"] + clientes_disponibles)
             
-            index_default = 0
-            if st.session_state.proyecto_foco:
-                for i, opcion in enumerate(opciones_proyectos):
-                    if f"[{st.session_state.proyecto_foco}]" in opcion:
-                        index_default = i; break
-            
-            seleccion = st.selectbox("Seleccionar Proyecto Objetivo:", opciones_proyectos, index=index_default)
-            
-            if seleccion != "-- Selecciona un proyecto clave --":
-                id_seleccionado = seleccion.split("]")[0].replace("[", "")
-                datos_proy = df[df['ID_Proyecto'].astype(str) == id_seleccionado].iloc[0]
+            if cliente_seleccionado != "-- Selecciona un cliente --":
+                df_cliente = df[df['Cliente'] == cliente_seleccionado]
                 
-                st.markdown(f"""
-                <div class="ficha-scott">
-                    <h4>{datos_proy['Cliente']} (Folio: {datos_proy['ID_Proyecto']})</h4>
-                    <b>Equipo:</b> <span style='color:#003a70;'>{datos_proy['Descripcion']}</span> | 
-                    <b>Monto:</b> ${datos_proy['Monto_USD']:,.2f} USD
-                </div>
-                """, unsafe_allow_html=True)
+                # --- 2. MULTI-SELECCIÓN DE PROYECTOS ---
+                opciones_proyectos_cliente = df_cliente.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD", axis=1).tolist()
+                proyectos_seleccionados = st.multiselect("2. Selecciona los folios a incluir en esta estrategia (Puedes elegir varios):", opciones_proyectos_cliente)
                 
-                tipo_operacion = st.radio("Objetivo Principal de la Táctica:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if tipo_operacion == "Aceleración y Cierre (Virtual)":
-                        sub_opcion = st.radio("¿Qué canal vas a usar?", ["Mensaje de WhatsApp", "Correo Electrónico Ejecutivo", "Guion de Llamada Telefónica"])
-                    else:
-                        sub_opcion = st.radio("¿Qué tipo de visita harás?", [
-                            "Visita de Prospección (Primer Contacto)",
-                            "Visita Técnica (Acompañado de Product Manager)",
-                            "Visita de Negociación (Acompañado de Gerencia - Martín Becerra)",
-                            "Visita Estratégica (Acompañado de Dirección - Óscar Morales)"
-                        ])
-                
-                with col2: 
-                    interlocutor = st.selectbox("Perfil del Interlocutor:", ["Ingeniero / Calidad / Mantenimiento", "Comprador / Finanzas / Gerente Planta"])
-                    contexto_manual = st.text_area("Notas de situación actual (Ej. 'El cliente compara con Zeiss y le urge'): ")
-                
-                if gemini_activo:
-                    if st.button("🧠 Generar Táctica 360° y Manejo de Objeciones", type="primary", use_container_width=True):
-                        with st.spinner("Integrando MEDDPICC, SPIN y Sandler. Estructurando análisis..."):
-                            try:
-                                safety_settings = [
-                                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-                                ]
-
-                                model = genai.GenerativeModel("gemini-3.6-flash", generation_config={"temperature": 0.3, "max_output_tokens": 2500, "top_p": 0.8})
-
-                                prompt_maestro = f"""
-                                Eres Javier Camacho, ejecutivo B2B top de MESS Servicios Metrológicos.
-                                
-                                CONTEXTO DEL PROYECTO:
-                                Cliente: {datos_proy['Cliente']} (Perfil: {interlocutor})
-                                Equipo: {datos_proy['Descripcion']}
-                                Monto: ${datos_proy['Monto_USD']} USD
-                                Acción Solicitada: {sub_opcion}
-                                Notas: {contexto_manual}
-                                
-                                INSTRUCCIÓN METODOLÓGICA (INTEGRACIÓN ESTRATÉGICA):
-                                1. ESTRATEGIA BASE (MEDDPICC y SPIN): Evalúa la madurez de la cuenta con MEDDPICC (Economic Buyer, Criterios, Champion) y formula el dolor con SPIN Selling (Preguntas de Implicación).
-                                2. ACELERADOR DE CIERRES (SANDLER): Agrega el Método Sandler a tu estrategia para forzar cierres rápidos, ir directo al punto y evitar el desgaste en el seguimiento.
-                                3. LENGUAJE TÉCNICO: Usa terminología de metrología industrial: "Incertidumbre de medición", "GD&T", "Trazabilidad", "Resolución", "Acreditación ISO 17025", etc.
-                                
-                                FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML EN INGLÉS OBLIGATORIAS):
-                                Debes estructurar tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML en inglés para evitar errores de extracción. El texto adentro de las etiquetas debe ser en ESPAÑOL. No uses Markdown fuera de las etiquetas.
-
-                                <ANALYSIS>
-                                (Desarrolla la estrategia inicial detallando cómo aplicar MEDDPICC y SPIN en esta cuenta, y suma explícitamente cómo usar Sandler para un cierre rápido o calificar si vale la pena el esfuerzo).
-                                </ANALYSIS>
-
-                                <MESSAGE>
-                                (Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Lenguaje empático pero directo al dolor. Si es visita, redacta los puntos a tratar).
-                                </MESSAGE>
-
-                                <OBJECTIONS>
-                                (Redacta 2 posibles objeciones del cliente basadas en este equipo/monto y cómo rebatirlas estratégicamente con lenguaje metrológico).
-                                </OBJECTIONS>
-
-                                <MARKETING>
-                                (Instrucción concreta de ABM para el departamento de Marketing, ej. enviar caso de éxito o brochure técnico).
-                                </MARKETING>
-
-                                <LOG>
-                                (Reporte hiper-resumido y técnico en tercera persona para pegar en el CRM SCOTT).
-                                </LOG>
-                                """
-                                
-                                response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
-                                texto_raw = response.text
-                                
-                                # === EXTRACCIÓN XML BLINDADA (ETIQUETAS EN INGLÉS) ===
-                                def extract_xml(tag, text):
-                                    match = re.search(rf'<{tag}>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
-                                    return match.group(1).strip() if match else "Error aislando sección."
-
-                                st.session_state.tactica_analisis = extract_xml('ANALYSIS', texto_raw)
-                                st.session_state.tactica_mensaje = extract_xml('MESSAGE', texto_raw)
-                                st.session_state.tactica_objeciones = extract_xml('OBJECTIONS', texto_raw)
-                                st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
-                                st.session_state.tactica_bitacora = extract_xml('LOG', texto_raw)
-                                
-                                # Fallback robusto por si la IA ignoró el XML por completo
-                                if "Error aislando" in st.session_state.tactica_mensaje:
-                                    st.session_state.tactica_mensaje = texto_raw
-                                
-                                st.session_state.tactica_cliente = datos_proy['Cliente']
-                                st.session_state.tactica_id = datos_proy['ID_Proyecto']
-                                st.session_state.tactica_equipo = datos_proy['Descripcion']
-                                st.session_state.tactica_monto = f"${datos_proy['Monto_USD']:,.2f} USD"
-                                
-                            except Exception as e:
-                                st.error(f"Error de IA: {e}")
-
-                # VISTA DE RESULTADOS
-                if st.session_state.tactica_mensaje:
-                    st.success(f"Táctica generada con éxito para: {sub_opcion}")
+                if proyectos_seleccionados:
+                    # Extraer IDs y filtrar
+                    ids_seleccionados = [opc.split("]")[0].replace("[", "") for opc in proyectos_seleccionados]
+                    df_seleccion = df[df['ID_Proyecto'].astype(str).isin(ids_seleccionados)]
                     
-                    st.markdown("#### 🧠 Análisis Estratégico (MEDDPICC + SPIN + Sandler)")
-                    st.info(st.session_state.tactica_analisis)
+                    # Consolidar datos
+                    monto_total_usd = df_seleccion['Monto_USD'].sum()
+                    equipos_combinados = " | ".join(df_seleccion['Descripcion'].tolist())
+                    ids_combinados = ", ".join(df_seleccion['ID_Proyecto'].astype(str).tolist())
+                    es_paquete = len(df_seleccion) > 1
                     
-                    st.markdown(f"#### 💬 Acción Ejecutada: {sub_opcion}")
-                    st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_mensaje}</div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="ficha-scott">
+                        <h4>{cliente_seleccionado} (Folios: {ids_combinados})</h4>
+                        <b>Equipos Involucrados:</b> <span style='color:#003a70;'>{equipos_combinados}</span><br>
+                        <b>Monto Total a Negociar:</b> <span style='color:#27ae60; font-weight:bold; font-size:18px;'>${monto_total_usd:,.2f} USD</span>
+                        {'<br><span style="color:#e67e22; font-weight:bold;">⚠️ Estrategia de Paquete (Bundle) Activada</span>' if es_paquete else ''}
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    st.markdown("#### 🛡️ Manejo de Objeciones")
-                    st.warning(st.session_state.tactica_objeciones)
+                    st.markdown("#### Configuración de la Táctica")
+                    tipo_operacion = st.radio("Objetivo Principal:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if tipo_operacion == "Aceleración y Cierre (Virtual)":
+                            sub_opcion = st.radio("¿Qué canal vas a usar?", ["Mensaje de WhatsApp", "Correo Electrónico Ejecutivo", "Guion de Llamada Telefónica"])
+                        else:
+                            sub_opcion = st.radio("¿Qué tipo de visita harás?", [
+                                "Visita de Prospección (Primer Contacto)",
+                                "Visita Técnica (Acompañado de Product Manager)",
+                                "Visita Estratégica / Negociación (Con Gerencia o Dirección)"
+                            ])
+                        interlocutor = st.selectbox("Perfil del Interlocutor:", ["Ingeniero / Calidad / Mantenimiento", "Comprador / Finanzas / Gerente Planta", "Director / Dueño"])
                     
-                    st.markdown("#### 🎯 Solicitud Marketing (ABM)")
-                    st.info(st.session_state.tactica_marketing)
+                    with col2: 
+                        giro_cliente = st.text_input("Giro o Terminología del cliente (Ej. 'Usar casting, no fundición. Sector Aeroespacial'):", placeholder="Sector, términos clave a usar o evitar...")
+                        contexto_manual = st.text_area("Notas de situación actual (Ej. 'Están evaluando a Zeiss, no tienen presupuesto liberado'):", height=100)
                     
-                    st.markdown("#### 📋 Bitácora CRM (SCOTT)")
-                    st.success(st.session_state.tactica_bitacora)
+                    if gemini_activo:
+                        if st.button("🧠 Generar Estrategia Consultiva", type="primary", use_container_width=True):
+                            with st.spinner("Diseñando estrategia empática y consolidando información en formato estricto..."):
+                                try:
+                                    safety_settings = [
+                                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+                                    ]
+
+                                    model = genai.GenerativeModel("gemini-3.6-flash", generation_config={"temperature": 0.4, "max_output_tokens": 2500, "top_p": 0.8})
+
+                                    prompt_maestro = f"""
+                                    Eres Javier Camacho, un Asesor Consultivo B2B y Key Account Manager de MESS Servicios Metrológicos.
+                                    
+                                    CONTEXTO DE LA NEGOCIACIÓN:
+                                    Cliente: {cliente_seleccionado} (Perfil: {interlocutor})
+                                    Giro e Instrucciones de Terminología: {giro_cliente}
+                                    Equipos/Servicios: {equipos_combinados}
+                                    Monto Total: ${monto_total_usd} USD
+                                    Proyectos Agrupados: {len(df_seleccion)}
+                                    Acción Solicitada: {sub_opcion}
+                                    Notas Adicionales: {contexto_manual}
+                                    
+                                    DIRECTRICES DE TONO (MANDATORIO POR DIRECCIÓN GENERAL):
+                                    - COMUNICACIÓN HUMANIZADA: Escribe de humano a humano. Sé profesional, empático, natural y conversacional.
+                                    - CERO EXAGERACIÓN TÉCNICA: No uses términos rimbombantes. Menciona la técnica de forma sutil solo si el cliente la requiere para entender el valor.
+                                    - ADAPTACIÓN AL GIRO: Respeta estrictamente el giro y la terminología indicada. No inventes procesos industriales que no aplican.
+                                    - SI HAY MÚLTIPLES PROYECTOS: Tu estrategia DEBE enfocarse en vender esto como un "Paquete" o "Solución Integral" (Bundle) para facilitar la decisión del cliente y negociar mejores condiciones globales.
+                                    
+                                    INTEGRACIÓN METODOLÓGICA INVISIBLE:
+                                    Usa MEDDPICC para mapear la cuenta, SPIN para tocar el dolor, y Sandler para el cierre (buscar el sí/no claro sin rogar). Aplícalo en el análisis y en los mensajes de forma invisible y fluida.
+                                    
+                                    FORMATO DE SALIDA ESTRICTO (JSON):
+                                    Devuelve ÚNICAMENTE un objeto JSON válido con las siguientes claves exactas en minúscula. Todo el contenido dentro de los valores del JSON debe estar redactado en ESPAÑOL. No incluyas comillas triples (```) ni texto adicional fuera del JSON:
+                                    {{
+                                      "analisis": "(Análisis estratégico humano. Evalúa la cuenta y explica cómo vender la solución (o el paquete si son varios). Define cómo usar Sandler aquí.)",
+                                      "mensaje": "(Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Muy humano, claro, empático y al punto.)",
+                                      "objeciones": "(Menciona 2 posibles objeciones del cliente ante esta propuesta y cómo rebatirlas como consultor experto, no como folleto.)",
+                                      "marketing": "(Instrucción para el equipo de Marketing sobre qué material de apoyo enviar para esta cuenta/giro)",
+                                      "bitacora": "(Reporte súper breve para pegar en el CRM SCOTT)"
+                                    }}
+                                    """
+                                    
+                                    response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
+                                    texto_raw = response.text.strip()
+                                    
+                                    # Limpiar código markdown de la respuesta de Gemini
+                                    if texto_raw.startswith("```json"): texto_raw = texto_raw[7:]
+                                    if texto_raw.startswith("```"): texto_raw = texto_raw[3:]
+                                    if texto_raw.endswith("```"): texto_raw = texto_raw[:-3]
+                                    texto_raw = texto_raw.strip()
+                                    
+                                    try:
+                                        datos_json = json.loads(texto_raw)
+                                        st.session_state.tactica_analisis = datos_json.get("analisis", "Dato no generado por la IA.")
+                                        st.session_state.tactica_mensaje = datos_json.get("mensaje", "Dato no generado por la IA.")
+                                        st.session_state.tactica_objeciones = datos_json.get("objeciones", "Dato no generado por la IA.")
+                                        st.session_state.tactica_marketing = datos_json.get("marketing", "Dato no generado por la IA.")
+                                        st.session_state.tactica_bitacora = datos_json.get("bitacora", "Dato no generado por la IA.")
+                                    except json.JSONDecodeError:
+                                        st.error("La IA generó una respuesta que no pudo ser procesada estructuralmente. Intenta nuevamente.")
+                                        st.session_state.tactica_mensaje = ""
+                                    
+                                    if st.session_state.tactica_mensaje:
+                                        st.session_state.tactica_cliente = cliente_seleccionado
+                                        st.session_state.tactica_id = ids_combinados
+                                        st.session_state.tactica_equipo = equipos_combinados
+                                        st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD"
+                                    
+                                except Exception as e:
+                                    st.error(f"Error de IA: {e}")
+
+                    # VISTA DE RESULTADOS
+                    if st.session_state.tactica_mensaje:
+                        st.success(f"Estrategia Consultiva generada con éxito para: {sub_opcion}")
                         
-                    # EXPORTACIÓN
-                    if docx_disponible:
-                        st.divider()
-                        st.markdown("### 📤 Exportar Documento")
-                        def exportar_todo():
-                            doc = Document()
-                            doc.add_heading("TÁCTICA B2B | REVENUE OPERATIONS", 0)
-                            doc.add_paragraph(f"Cliente: {st.session_state.tactica_cliente}\nFolio: {st.session_state.tactica_id}\nEquipo: {st.session_state.tactica_equipo}\nValor: {st.session_state.tactica_monto}")
-                            doc.add_heading("1. Análisis Estratégico", 1)
-                            doc.add_paragraph(st.session_state.tactica_analisis)
-                            doc.add_heading(f"2. Acción: {sub_opcion}", 1)
-                            doc.add_paragraph(st.session_state.tactica_mensaje)
-                            doc.add_heading("3. Manejo de Objeciones", 1)
-                            doc.add_paragraph(st.session_state.tactica_objeciones)
-                            doc.add_heading("4. Marketing ABM", 1)
-                            doc.add_paragraph(st.session_state.tactica_marketing)
-                            doc.add_heading("5. Registro CRM", 1)
-                            doc.add_paragraph(st.session_state.tactica_bitacora)
-                            buffer = io.BytesIO()
-                            doc.save(buffer)
-                            buffer.seek(0)
-                            return buffer
+                        st.markdown("#### 🧠 Análisis Estratégico (KAM / Empaquetado)")
+                        st.info(st.session_state.tactica_analisis)
+                        
+                        st.markdown(f"#### 💬 Acción Ejecutada: {sub_opcion}")
+                        st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_mensaje}</div>", unsafe_allow_html=True)
+                        
+                        st.markdown("#### 🛡️ Manejo de Objeciones")
+                        st.warning(st.session_state.tactica_objeciones)
+                        
+                        st.markdown("#### 🎯 Solicitud Marketing (ABM)")
+                        st.info(st.session_state.tactica_marketing)
+                        
+                        st.markdown("#### 📋 Bitácora CRM (SCOTT)")
+                        st.success(st.session_state.tactica_bitacora)
+                            
+                        if docx_disponible:
+                            st.divider()
+                            st.markdown("### 📤 Exportar Documento")
+                            def exportar_todo():
+                                doc = Document()
+                                doc.add_heading("ESTRATEGIA KAM | REVENUE OPERATIONS", 0)
+                                doc.add_paragraph(f"Cliente: {st.session_state.tactica_cliente}\nFolios Agrupados: {st.session_state.tactica_id}\nEquipos/Servicios: {st.session_state.tactica_equipo}\nValor Total: {st.session_state.tactica_monto}")
+                                doc.add_heading("1. Análisis Estratégico", 1)
+                                doc.add_paragraph(st.session_state.tactica_analisis)
+                                doc.add_heading(f"2. Acción: {sub_opcion}", 1)
+                                doc.add_paragraph(st.session_state.tactica_mensaje)
+                                doc.add_heading("3. Manejo de Objeciones", 1)
+                                doc.add_paragraph(st.session_state.tactica_objeciones)
+                                doc.add_heading("4. Marketing ABM", 1)
+                                doc.add_paragraph(st.session_state.tactica_marketing)
+                                doc.add_heading("5. Registro CRM", 1)
+                                doc.add_paragraph(st.session_state.tactica_bitacora)
+                                buffer = io.BytesIO()
+                                doc.save(buffer)
+                                buffer.seek(0)
+                                return buffer
 
-                        st.download_button("💾 Descargar Estrategia Completa (.docx)", data=exportar_todo(), file_name=f"Estrategia_{st.session_state.tactica_id}.docx", use_container_width=True)
+                            st.download_button("💾 Descargar Estrategia Completa (.docx)", data=exportar_todo(), file_name=f"EstrategiaKAM_{st.session_state.tactica_cliente.replace(' ','_')}.docx", use_container_width=True)
     except Exception as e:
         st.error(f"Error procesando CSV: {e}")
 else:
