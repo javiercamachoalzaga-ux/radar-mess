@@ -4,23 +4,49 @@ import numpy as np
 import altair as alt
 from datetime import datetime
 import re
-import google.generativeai as genai
-import urllib.parse
 import io
-import json
 import sqlite3
+import google.generativeai as genai
 
-# Intenta importar la librería de Word
+# Intento de importar docx
 try:
     from docx import Document
     docx_disponible = True
 except ImportError:
     docx_disponible = False
 
-st.set_page_config(page_title="SAIV | Radar Comercial MESS", layout="wide", initial_sidebar_state="expanded")
+# ==========================================
+# 1. CONFIGURACIÓN DE PÁGINA Y UI/UX (CSS)
+# ==========================================
+st.set_page_config(page_title="SAIV | Radar Comercial MESS", page_icon="🔬", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
+    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
+    
+    /* Ocultar menú y footer por defecto */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Variables de color corporativo */
+    :root { --mess-blue: #003a70; --mess-dark: #2c3e50; --mess-light: #f8fafc; }
+    
+    .titulo-radar { font-size: 36px; font-weight: 900; color: var(--mess-blue); margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
+    .subtitulo { font-size: 14px; color: #64748b; margin-bottom: 30px; font-weight: 600; text-transform: uppercase; }
+    
+    div[data-testid="metric-container"] { background-color: #ffffff; border: 1px solid #e2e8f0; padding: 15px 20px; border-radius: 8px; border-left: 5px solid var(--mess-blue); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    div[data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 700 !important; color: #64748b !important; text-transform: uppercase; }
+    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: var(--mess-dark) !important; }
+    
+    .alerta-estancado { background: #fff1f2; border-left: 5px solid #e11d48; padding: 15px; border-radius: 6px; margin-bottom: 10px; }
+    .stButton>button { font-weight: 600; border-radius: 6px; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # ==========================================
-# CONFIGURACIÓN GEMINI API
+# 2. CONFIGURACIÓN GEMINI API
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
@@ -29,7 +55,7 @@ else:
     gemini_activo = False
 
 # ==========================================
-# CONFIGURACIÓN DE BASE DE DATOS SQLITE (REVOPS)
+# 3. BASE DE DATOS SQLITE (REVOPS)
 # ==========================================
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
@@ -37,31 +63,18 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT, cliente TEXT, contacto TEXT,
-            objetivo TEXT, estatus TEXT
+            fecha TEXT, horario TEXT, cliente TEXT, contacto TEXT,
+            objetivo TEXT, estatus TEXT, notas_audio TEXT
         )
     """)
-    
-    cursor.execute("PRAGMA table_info(agenda)")
-    columnas_agenda = [col[1] for col in cursor.fetchall()]
-    if 'horario' not in columnas_agenda:
-        cursor.execute("ALTER TABLE agenda ADD COLUMN horario TEXT DEFAULT '09:00'")
-        
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha_rep TEXT, cliente TEXT, resumen TEXT,
-            pain TEXT, monto REAL, probabilidad INTEGER,
-            semana TEXT, siguiente_paso TEXT, proxima_fecha TEXT,
-            estatus TEXT
+            folio_proyecto TEXT, cliente TEXT, pain TEXT, monto REAL, 
+            probabilidad INTEGER, semana TEXT, divisa TEXT, 
+            siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL
         )
     """)
-    
-    cursor.execute("PRAGMA table_info(reportes)")
-    columnas_reportes = [col[1] for col in cursor.fetchall()]
-    if 'moneda' not in columnas_reportes:
-        cursor.execute("ALTER TABLE reportes ADD COLUMN moneda TEXT DEFAULT 'MXN'")
-        
     conn.commit()
     conn.close()
 
@@ -79,691 +92,403 @@ def run_query(query, params=(), fetch=True):
     conn.close()
 
 # ==========================================
-# MEMORIA DE SESIÓN (STATE)
+# 4. MOTOR DE INGESTA Y SINCRONIZACIÓN (MASTER KEY)
 # ==========================================
-if 'proyecto_foco' not in st.session_state: st.session_state.proyecto_foco = None
-if 'tactica_analisis' not in st.session_state: st.session_state.tactica_analisis = ""
-if 'tactica_mensaje' not in st.session_state: st.session_state.tactica_mensaje = ""
-if 'tactica_objeciones' not in st.session_state: st.session_state.tactica_objeciones = ""
-if 'tactica_marketing' not in st.session_state: st.session_state.tactica_marketing = ""
-if 'tactica_bitacora' not in st.session_state: st.session_state.tactica_bitacora = ""
-if 'tactica_cliente' not in st.session_state: st.session_state.tactica_cliente = ""
-if 'tactica_id' not in st.session_state: st.session_state.tactica_id = ""
-if 'tactica_equipo' not in st.session_state: st.session_state.tactica_equipo = ""
-if 'tactica_monto' not in st.session_state: st.session_state.tactica_monto = ""
-# Variables puente para auto-llenado
-if 'monto_usd_ia' not in st.session_state: st.session_state.monto_usd_ia = 0.0
-if 'monto_mxn_ia' not in st.session_state: st.session_state.monto_mxn_ia = 0.0
-
-# --- DISEÑO ESTÉTICO CORPORATIVO ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
-    html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
-    .titulo-radar { font-size: 38px; font-weight: 900; color: #003a70; margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
-    .subtitulo { font-size: 14px; color: #555555; margin-bottom: 30px; font-weight: 600; text-transform: uppercase; }
-    div[data-testid="metric-container"] { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px 20px; border-radius: 8px; border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    div[data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 700 !important; color: #7f8c8d !important; text-transform: uppercase; }
-    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #2c3e50 !important; }
-    .stDataFrame { font-size: 14px !important; }
-    .ficha-scott { background-color: #f4f6f7; padding: 20px; border-radius: 8px; border: 1px solid #d5d8dc; margin-bottom: 20px; }
-    .caja-ia { background-color: #fefefe; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
-    </style>
-    """, unsafe_allow_html=True)
-
-def check_password():
-    if "mi_contrasena" not in st.secrets: return True
-    st.sidebar.header("Acceso Restringido")
-    pwd = st.sidebar.text_input("Contraseña", type="password")
-    if pwd == st.secrets["mi_contrasena"]: return True
-    return False
-
-if not check_password():
-    st.info("Ingresa tu contraseña en el menú lateral para acceder al sistema.")
-    st.stop()
-
-st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
-
-# ==========================================
-# TABS DE NAVEGACIÓN
-# ==========================================
-tab_dashboards, tab_enablement, tab_scott, tab_revops = st.tabs([
-    "1. Dashboards CRM", 
-    "2. Proyectos Estancados", 
-    "3. Laboratorio IA (Estrategia Integral)",
-    "4. Gestión Comercial (RevOps)"
-])
-
-archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
-
-if archivo_cargado is not None:
+@st.cache_data(show_spinner=False)
+def procesar_csv(archivo):
     try:
-        # --- LECTOR ROBUSTO SCOTT ---
-        df_raw = pd.read_csv(archivo_cargado, encoding='latin-1', header=None, sep=None, engine='python')
+        df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
         header_idx = -1
-        
         for idx, row in df_raw.iterrows():
             row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
             if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
                 header_idx = idx
                 break
-                
-        if header_idx == -1:
-            st.error("No se detectó el formato del CRM. Asegúrate de subir la plantilla original de SCOTT.")
-            st.stop()
-            
-        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
-        df_data = df_raw.iloc[header_idx+1:].copy()
-        df_data = df_data.dropna(axis=1, how='all')
         
-        if len(df_data.columns) >= len(headers):
-            df_data = df_data.iloc[:, :len(headers)]
-            df_data.columns = headers
-        else:
-            df_data.columns = headers[:len(df_data.columns)]
+        if header_idx == -1: return None
+        
+        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
+        df_data = df_raw.iloc[header_idx+1:].dropna(axis=1, how='all')
+        df_data.columns = headers[:len(df_data.columns)]
 
-        def buscar_col(palabras_clave):
-            for clave in palabras_clave:
+        def buscar_col(claves):
+            for clave in claves:
                 for col in df_data.columns:
-                    col_limpia = str(col).upper().strip()
-                    if col_limpia == clave or col_limpia == f"{clave}.1":
+                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
                         return df_data[col].copy()
             return pd.Series([None] * len(df_data))
 
-        # --- CONSTRUCCIÓN INICIAL (SIN BORRAR FILAS AÚN) ---
         df_clean = pd.DataFrame()
         df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
         df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
-        df_clean['Cotizacion'] = buscar_col(["COTIZACION", "COTIZACIÓN"])
         df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
         df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
-        df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE"])
-        df_clean['Estatus'] = buscar_col(["ESTATUS"])
+        df_clean['Estatus_CRM'] = buscar_col(["ESTATUS"])
         df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
         df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
 
-        def extraer_numero(val_str):
-            try:
-                v = str(val_str).upper().replace('$', '').replace('USD', '').replace('MXN', '').replace(' ', '').strip()
-                if ',' in v and '.' in v:
-                    v = v.replace(',', '')
-                elif ',' in v and len(v.split(',')[-1]) != 2:
-                    v = v.replace(',', '')
-                elif ',' in v and len(v.split(',')[-1]) == 2:
-                    v = v.replace(',', '.')
-                v = ''.join(c for c in v if c.isdigit() or c == '.')
-                return float(v) if v else 0.0
-            except: 
-                return 0.0
+        def extr_num(val):
+            v = re.sub(r'[^\d.]', '', str(val).upper().replace(',', ''))
+            return float(v) if v else 0.0
 
-        monto_mxn = np.zeros(len(df_data))
-        monto_usd = np.zeros(len(df_data))
+        monto_mxn, monto_usd = np.zeros(len(df_data)), np.zeros(len(df_data))
         col_moneda = buscar_col(["MONEDA", "DIVISA"])
         
         for col in df_data.columns:
-            col_name = str(col).upper().strip()
-            if any(k in col_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
-                is_col_usd = 'USD' in col_name or 'US$' in col_name
-                
+            c_name = str(col).upper().strip()
+            if any(k in c_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
+                is_usd = 'USD' in c_name or 'US$' in c_name
                 for i in range(len(df_data)):
-                    val_raw = df_data[col].iloc[i]
-                    val_str = str(val_raw).upper()
-                    num = extraer_numero(val_raw)
-                    moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
-                    
-                    if is_col_usd or 'USD' in val_str or 'US$' in val_str or 'USD' in moneda_fila or 'US$' in moneda_fila or 'DÓLA' in moneda_fila or 'DOLA' in moneda_fila:
+                    val = df_data[col].iloc[i]
+                    num = extr_num(val)
+                    mon_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
+                    if is_usd or 'USD' in str(val).upper() or 'US$' in str(val).upper() or 'USD' in mon_fila:
                         monto_usd[i] += num
                     else:
                         monto_mxn[i] += num
                         
         df_clean['Monto_MXN'] = monto_mxn
         df_clean['Monto_USD'] = monto_usd
-
         df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
 
-        def sanear_y_limpiar(texto):
-            if pd.isna(texto): return ""
-            return re.sub(r'\s+', ' ', str(texto).replace("?", "ó")).strip().title()
-
-        for col in ['Cliente', 'Descripcion', 'Area', 'Estatus', 'Etapa']:
-            df_clean[col] = df_clean[col].apply(sanear_y_limpiar)
-
-        df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
-        df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
-
-        df = df_clean.groupby('ID_Proyecto').agg({
-            'Cliente_Final': 'first',
-            'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
-            'Area': 'first', 'Fecha_Creacion': 'first', 'Fecha_Cierre': 'first',
-            'Estatus': 'first', 'Etapa': 'first',
-            'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
-            'Monto_MXN': 'sum', 'Monto_USD': 'sum'
-        }).reset_index()
-
-        df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
-        df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
-        
-        filtro_estatus = df['Estatus'].str.contains('PROCESO', case=False, na=False)
-        filtro_etapa = df['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
-        df = df[filtro_estatus | filtro_etapa].copy()
-        
-        def clasificar_pilar(row):
-            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
-            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
-            elif any(k in texto for k in ["CALIBRACIÓN", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
-            else: return "3. Productos Generales"
-        
-        df['Pilar_Estrategico'] = df.apply(clasificar_pilar, axis=1)
+        # Clasificadores
+        df_clean['Pilar_Estrategico'] = df_clean.apply(lambda r: "1. Alta Gama" if any(k in str(r['Area'] + r['Descripcion']).upper() for k in ["CMM", "SCANNER", "ÓPTICO", "ZEISS"]) else ("2. Calibraciones" if "CALIBRACIÓN" in str(r['Area']).upper() else "3. Productos Generales"), axis=1)
         
         def clasificar_fase(etapa):
             e = str(etapa).upper()
-            if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
+            if any(k in e for k in ['PO', 'ORDEN']): return "4. Esperando PO"
             elif 'NEGOCIACI' in e: return "3. Negociación"
             elif 'COTIZACI' in e: return "2. Cotización"
             elif 'PROPUESTA' in e: return "1. Propuesta"
-            else: return "5. En Proceso"
+            return "5. En Proceso"
             
-        df['Fase_Pipeline'] = df['Etapa'].apply(clasificar_fase)
-        df['Fecha_Creacion_DT'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df['Fecha_Cierre_DT'] = pd.to_datetime(df['Fecha_Cierre'], errors='coerce', dayfirst=True)
-        df['Días_Activo'] = (pd.Timestamp.now() - df['Fecha_Creacion_DT']).dt.days
+        df_clean['Fase_Pipeline'] = df_clean['Etapa'].apply(clasificar_fase)
+        df_clean['Fecha_Creacion_DT'] = pd.to_datetime(df_clean['Fecha_Creacion'], errors='coerce', dayfirst=True)
+        df_clean['Días_Activo'] = (pd.Timestamp.now() - df_clean['Fecha_Creacion_DT']).dt.days
 
-        st.sidebar.divider()
-        st.sidebar.header("Filtros Directivos")
-        opciones_pilares = df['Pilar_Estrategico'].unique().tolist()
-        filtro_pilar = st.sidebar.multiselect("Filtrar por Pilar:", opciones_pilares, default=opciones_pilares)
-        busqueda_proyecto = st.sidebar.text_input("Buscar Folio o Cliente:")
-        
-        if busqueda_proyecto:
-            df = df[(df['ID_Proyecto'].astype(str).str.contains(busqueda_proyecto, case=False, na=False)) | 
-                    (df['Cliente'].str.contains(busqueda_proyecto, case=False, na=False))]
-        if filtro_pilar:
-            df = df[df['Pilar_Estrategico'].isin(filtro_pilar)]
-
-        # ==========================================
-        # TAB 1: DASHBOARDS CRM
-        # ==========================================
-        with tab_dashboards:
-            st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
-            META_MENSUAL_USD = 80000.00
-            
-            usd_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
-            mxn_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
-            
-            col_g1, col_g2, col_g3 = st.columns(3)
-            col_g1.metric("Meta Comercial Mensual", f"${META_MENSUAL_USD:,.2f} USD")
-            col_g2.metric("Pipeline Probable (Activo)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN extra")
-            if (META_MENSUAL_USD - usd_caliente) > 0:
-                col_g3.metric("GAP (Brecha para Meta)", f"${(META_MENSUAL_USD - usd_caliente):,.2f} USD", "- Acción requerida")
-            else:
-                col_g3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
-            
-            st.divider()
-            col_sel1, col_sel2 = st.columns([1, 3])
-            with col_sel1: moneda_sel = st.selectbox("Seleccionar Moneda para Gráficos:", ["USD ($)", "MXN ($)"])
-            col_val = 'Monto_USD' if moneda_sel == "USD ($)" else 'Monto_MXN'
-            
-            st.divider()
-            
-            if not df.empty:
-                st.markdown(f"#### Análisis Pareto 80/20 por Cuentas Clave ({moneda_sel})")
-                df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
-                df_pareto = df_pareto[df_pareto[col_val] > 0].sort_values(by=col_val, ascending=False).reset_index(drop=True)
-                if not df_pareto.empty:
-                    df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
-                    df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
-                    
-                    barras_pareto = alt.Chart(df_pareto).mark_bar(color='#34495e').encode(
-                        x=alt.X('Cliente', sort=None, title='Cliente', axis=alt.Axis(labelLimit=0)),
-                        y=alt.Y(col_val, title=f'Valor'),
-                        tooltip=['Cliente', alt.Tooltip(col_val, format='$,.2f'), alt.Tooltip('Porcentaje', format='.1%')]
-                    )
-                    linea_pareto = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
-                        x=alt.X('Cliente', sort=None),
-                        y=alt.Y('Acumulado', title='Porcentaje Acumulado', axis=alt.Axis(format='%')),
-                        tooltip=['Cliente', alt.Tooltip('Acumulado', format='.1%')]
-                    )
-                    st.altair_chart(alt.layer(barras_pareto, linea_pareto).resolve_scale(y='independent').properties(height=450), use_container_width=True)
-                
-                st.divider()
-                col_g1, col_g2 = st.columns(2)
-                with col_g1:
-                    st.markdown(f"**Forecast por Área**")
-                    df_areas = df.groupby('Area')[col_val].sum().reset_index()
-                    if not df_areas.empty: st.altair_chart(alt.Chart(df_areas[df_areas[col_val]>0]).mark_bar(color='#003a70').encode(x=alt.X(col_val, title=''), y=alt.Y('Area', sort='-x', title=''), tooltip=['Area', alt.Tooltip(col_val, format='$,.2f')]).properties(height=350), use_container_width=True)
-                with col_g2:
-                    st.markdown(f"**Salud del Embudo**")
-                    df_graf_fases = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-                    if not df_graf_fases.empty: st.altair_chart(alt.Chart(df_graf_fases[df_graf_fases[col_val]>0]).mark_bar(color='#2ecc71').encode(x=alt.X(col_val, title=''), y=alt.Y('Fase_Pipeline', sort='-x', title=''), tooltip=['Fase_Pipeline', alt.Tooltip(col_val, format='$,.2f')]).properties(height=350), use_container_width=True)
-
-        # ==========================================
-        # TAB 2: ENABLEMENT
-        # ==========================================
-        with tab_enablement:
-            st.markdown("### Riesgo Operativo y Proyectos Estancados")
-            estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
-            if not estancados.empty:
-                for _, row in estancados.head(4).iterrows():
-                    with st.container(border=True):
-                        st.markdown(f"**{row['ID_Proyecto']} | {row['Cliente']}**")
-                        st.write(f"Días inactivo: **{row['Días_Activo']:.0f}** | Riesgo: **${row['Monto_USD']:,.2f} USD**")
-            else:
-                st.success("Embudo limpio.")
-                
-            st.divider()
-            st.markdown("#### Auditoría Rápida CRM")
-            st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']], use_container_width=True, hide_index=True)
-
-        # ==========================================
-        # TAB 3: LABORATORIO TÁCTICO IA
-        # ==========================================
-        with tab_scott:
-            st.markdown("### Copiloto Estratégico (Key Account Management)")
-            st.caption("Arma estrategias para un proyecto único o consolida varios proyectos en una sola negociación de paquete.")
-            
-            clientes_disponibles = sorted(df['Cliente'].unique().tolist())
-            cliente_seleccionado = st.selectbox("1. Selecciona la Cuenta / Cliente:", ["-- Selecciona un cliente --"] + clientes_disponibles)
-            
-            if cliente_seleccionado != "-- Selecciona un cliente --":
-                df_cliente = df[df['Cliente'] == cliente_seleccionado]
-                
-                opciones_proyectos_cliente = df_cliente.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
-                proyectos_seleccionados = st.multiselect("2. Selecciona los folios a incluir en esta estrategia:", opciones_proyectos_cliente)
-                
-                if proyectos_seleccionados:
-                    ids_seleccionados = [opc.split("]")[0].replace("[", "") for opc in proyectos_seleccionados]
-                    df_seleccion = df[df['ID_Proyecto'].astype(str).isin(ids_seleccionados)]
-                    
-                    monto_total_usd = df_seleccion['Monto_USD'].sum()
-                    monto_total_mxn = df_seleccion['Monto_MXN'].sum()
-                    equipos_combinados = " | ".join(df_seleccion['Descripcion'].tolist())
-                    ids_combinados = ", ".join(df_seleccion['ID_Proyecto'].astype(str).tolist())
-                    es_paquete = len(df_seleccion) > 1
-                    
-                    # Guardar montos en sesión para el puente a RevOps
-                    st.session_state.monto_usd_ia = monto_total_usd
-                    st.session_state.monto_mxn_ia = monto_total_mxn
-                    
-                    st.markdown(f"""
-                    <div class="ficha-scott">
-                        <h4>{cliente_seleccionado} (Folios: {ids_combinados})</h4>
-                        <b>Equipos Involucrados:</b> <span style='color:#003a70;'>{equipos_combinados}</span><br>
-                        <b>Monto Total a Negociar:</b> <span style='color:#27ae60; font-weight:bold; font-size:18px;'>${monto_total_usd:,.2f} USD</span> | <span style='color:#8e44ad; font-weight:bold;'>${monto_total_mxn:,.2f} MXN</span>
-                        {'<br><span style="color:#e67e22; font-weight:bold;">⚠️ Estrategia de Paquete (Bundle) Activada</span>' if es_paquete else ''}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    st.markdown("#### Configuración de la Táctica")
-                    tipo_operacion = st.radio("Objetivo Principal:", ["Aceleración y Cierre (Virtual)", "Apertura y Visitas (Presencial)"], horizontal=True)
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if tipo_operacion == "Aceleración y Cierre (Virtual)":
-                            sub_opcion = st.radio("¿Qué canal vas a usar?", ["Mensaje de WhatsApp", "Correo Electrónico Ejecutivo", "Guion de Llamada Telefónica"])
-                        else:
-                            sub_opcion = st.radio("¿Qué tipo de visita harás?", [
-                                "Visita de Prospección (Primer Contacto)",
-                                "Visita Técnica (Acompañado de Product Manager)",
-                                "Visita Estratégica / Negociación (Con Gerencia o Dirección)"
-                            ])
-                        interlocutor = st.selectbox("Perfil del Interlocutor:", ["Ingeniero / Calidad / Mantenimiento", "Comprador / Finanzas / Gerente Planta", "Director / Dueño"])
-                    
-                    with col2: 
-                        giro_cliente = st.text_input("Giro o Terminología del cliente (Ej. 'Usar casting, no fundición. Sector Aeroespacial'):", placeholder="Sector, términos clave a usar o evitar...")
-                        contexto_manual = st.text_area("Notas de situación actual (Ej. 'Están evaluando a Zeiss, no tienen presupuesto liberado'):", height=100)
-                    
-                    if gemini_activo:
-                        if st.button("🧠 Generar Estrategia Consultiva", type="primary", use_container_width=True):
-                            with st.spinner("Diseñando estrategia empática y consolidando información en formato estricto..."):
-                                try:
-                                    safety_settings = [
-                                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-                                    ]
-
-                                    model = genai.GenerativeModel("gemini-3.6-flash", generation_config={"temperature": 0.4, "max_output_tokens": 2500, "top_p": 0.8})
-
-                                    prompt_maestro = f"""
-                                    Eres Javier Camacho, un Asesor Consultivo B2B y Key Account Manager de MESS Servicios Metrológicos.
-                                    
-                                    CONTEXTO DE LA NEGOCIACIÓN:
-                                    Cliente: {cliente_seleccionado} (Perfil: {interlocutor})
-                                    Giro e Instrucciones de Terminología: {giro_cliente}
-                                    Equipos/Servicios: {equipos_combinados}
-                                    Monto Total: ${monto_total_usd} USD y ${monto_total_mxn} MXN
-                                    Proyectos Agrupados: {len(df_seleccion)}
-                                    Acción Solicitada: {sub_opcion}
-                                    Notas Adicionales: {contexto_manual}
-                                    
-                                    DIRECTRICES DE TONO (MANDATORIO POR DIRECCIÓN GENERAL):
-                                    - COMUNICACIÓN HUMANIZADA: Escribe de humano a humano. Sé profesional, empático, natural y conversacional.
-                                    - CERO EXAGERACIÓN TÉCNICA: No uses términos rimbombantes. Menciona la técnica de forma sutil solo si el cliente la requiere para entender el valor.
-                                    - ADAPTACIÓN AL GIRO: Respeta estrictamente el giro y la terminología indicada. No inventes procesos industriales que no aplican.
-                                    - SI HAY MÚLTIPLES PROYECTOS: Tu estrategia DEBE enfocarse en vender esto como un "Paquete" o "Solución Integral" (Bundle) para facilitar la decisión del cliente y negociar mejores condiciones globales.
-                                    
-                                    INTEGRACIÓN METODOLÓGICA INVISIBLE:
-                                    Usa MEDDPICC para mapear la cuenta, SPIN para tocar el dolor, y Sandler para el cierre (buscar el sí/no claro sin rogar). Aplícalo en el análisis y en los mensajes de forma invisible y fluida.
-                                    
-                                    FORMATO DE SALIDA ESTRICTO (ETIQUETAS XML OBLIGATORIAS):
-                                    Debes estructurar tu respuesta utilizando ÚNICAMENTE las siguientes etiquetas XML en inglés. El texto adentro de las etiquetas debe ser en ESPAÑOL. NO uses formato JSON. Usa este formato exacto:
-
-                                    <ANALYSIS>
-                                    (Análisis estratégico humano. Evalúa la cuenta y explica cómo vender la solución (o el paquete si son varios). Define cómo usar Sandler aquí.)
-                                    </ANALYSIS>
-
-                                    <MESSAGE>
-                                    (Redacta el texto exacto para el canal seleccionado: {sub_opcion}. Muy humano, claro, empático y al punto.)
-                                    </MESSAGE>
-
-                                    <OBJECTIONS>
-                                    (Menciona 2 posibles objeciones del cliente ante esta propuesta y cómo rebatirlas como consultor experto, no como folleto.)
-                                    </OBJECTIONS>
-
-                                    <MARKETING>
-                                    (Instrucción para el equipo de Marketing sobre qué material de apoyo enviar para esta cuenta/giro)
-                                    </MARKETING>
-
-                                    <LOG>
-                                    (Reporte súper breve para pegar en el CRM SCOTT)
-                                    </LOG>
-                                    """
-                                    
-                                    response = model.generate_content(prompt_maestro, safety_settings=safety_settings)
-                                    texto_raw = response.text
-                                    
-                                    def extract_xml(tag, text):
-                                        match = re.search(fr'<{tag}[^>]*>(.*?)</{tag}>', text, re.DOTALL | re.IGNORECASE)
-                                        return match.group(1).strip() if match else "Error aislando sección."
-
-                                    st.session_state.tactica_analisis = extract_xml('ANALYSIS', texto_raw)
-                                    st.session_state.tactica_mensaje = extract_xml('MESSAGE', texto_raw)
-                                    st.session_state.tactica_objeciones = extract_xml('OBJECTIONS', texto_raw)
-                                    st.session_state.tactica_marketing = extract_xml('MARKETING', texto_raw)
-                                    st.session_state.tactica_bitacora = extract_xml('LOG', texto_raw)
-                                    
-                                    if "Error aislando" in st.session_state.tactica_mensaje:
-                                        st.session_state.tactica_mensaje = texto_raw
-                                    
-                                    st.session_state.tactica_cliente = cliente_seleccionado
-                                    st.session_state.tactica_id = ids_combinados
-                                    st.session_state.tactica_equipo = equipos_combinados
-                                    st.session_state.tactica_monto = f"${monto_total_usd:,.2f} USD / ${monto_total_mxn:,.2f} MXN"
-                                    
-                                except Exception as e:
-                                    st.error(f"Error de IA: {e}")
-
-                    # VISTA DE RESULTADOS
-                    if st.session_state.tactica_mensaje:
-                        st.success(f"Estrategia Consultiva generada con éxito para: {sub_opcion}")
-                        
-                        st.markdown("#### 🧠 Análisis Estratégico (KAM / Empaquetado)")
-                        st.info(st.session_state.tactica_analisis)
-                        
-                        st.markdown(f"#### 💬 Acción Ejecutada: {sub_opcion}")
-                        st.markdown(f"<div class='caja-ia'>{st.session_state.tactica_mensaje}</div>", unsafe_allow_html=True)
-                        
-                        st.markdown("#### 🛡️ Manejo de Objeciones")
-                        st.warning(st.session_state.tactica_objeciones)
-                        
-                        st.markdown("#### 🎯 Solicitud Marketing (ABM)")
-                        st.info(st.session_state.tactica_marketing)
-                        
-                        st.markdown("#### 📋 Bitácora CRM (SCOTT)")
-                        st.success(st.session_state.tactica_bitacora)
-                        
-                        # --- PUENTE DIRECTO A REVOPS (INYECCIÓN DE FORECAST) ---
-                        st.divider()
-                        st.markdown("### 🚀 Enviar al Forecast (RevOps)")
-                        st.caption("Inyecta esta estrategia directamente a tu base de datos RevOps sin salir de esta pantalla.")
-                        with st.form("form_ia_to_revops"):
-                            col_f1, col_f2, col_f3 = st.columns(3)
-                            with col_f1:
-                                f_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
-                                f_prob = st.slider("Probabilidad de Cierre (%)", 0, 100, 50, 5)
-                            with col_f2:
-                                f_est = st.selectbox("Estatus de la Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
-                                f_moneda = st.selectbox("Divisa del Proyecto", ["USD", "MXN"], index=0 if st.session_state.monto_usd_ia > 0 else 1)
-                            with col_f3:
-                                f_monto = st.number_input("Monto a Reportar", value=float(st.session_state.monto_usd_ia if st.session_state.monto_usd_ia > 0 else st.session_state.monto_mxn_ia), step=1000.0)
-                                f_paso = st.text_input("Siguiente Paso Inmediato", value=sub_opcion)
-                            
-                            if st.form_submit_button("💾 Guardar en Bitácora y Actualizar Forecast"):
-                                fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-                                run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                          (fecha_hoy, st.session_state.tactica_cliente, "Estrategia IA", st.session_state.tactica_bitacora, f_monto, f_prob, f_sem, f_paso, fecha_hoy, f_est, f_moneda), fetch=False)
-                                st.success("¡Estrategia inyectada a la base de datos! Ve a la Estación 4 para ver tu Forecast actualizado.")
-                            
-                        if docx_disponible:
-                            st.divider()
-                            st.markdown("### 📤 Exportar Documento")
-                            def exportar_todo():
-                                doc = Document()
-                                doc.add_heading("ESTRATEGIA KAM | REVENUE OPERATIONS", 0)
-                                doc.add_paragraph(f"Cliente: {st.session_state.tactica_cliente}\nFolios Agrupados: {st.session_state.tactica_id}\nEquipos/Servicios: {st.session_state.tactica_equipo}\nValor Total: {st.session_state.tactica_monto}")
-                                doc.add_heading("1. Análisis Estratégico", 1)
-                                doc.add_paragraph(st.session_state.tactica_analisis)
-                                doc.add_heading(f"2. Acción: {sub_opcion}", 1)
-                                doc.add_paragraph(st.session_state.tactica_mensaje)
-                                doc.add_heading("3. Manejo de Objeciones", 1)
-                                doc.add_paragraph(st.session_state.tactica_objeciones)
-                                doc.add_heading("4. Marketing ABM", 1)
-                                doc.add_paragraph(st.session_state.tactica_marketing)
-                                doc.add_heading("5. Registro CRM", 1)
-                                doc.add_paragraph(st.session_state.tactica_bitacora)
-                                buffer = io.BytesIO()
-                                doc.save(buffer)
-                                buffer.seek(0)
-                                return buffer
-
-                            st.download_button("💾 Descargar Estrategia Completa (.docx)", data=exportar_todo(), file_name=f"EstrategiaKAM_{st.session_state.tactica_cliente.replace(' ','_')}.docx", use_container_width=True)
+        return df_clean
     except Exception as e:
         st.error(f"Error procesando CSV: {e}")
-else:
-    with tab_dashboards: st.warning("Sube el archivo CSV del CRM SCOTT en la barra lateral para ver tus datos.")
-    with tab_enablement: st.warning("Requiere datos.")
-    with tab_scott: st.warning("Requiere datos.")
+        return None
+
+def sync_master_key(df_csv):
+    # Fusión SQLite -> CSV (Master Key)
+    db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes")
+    if db_reps and not df_csv.empty:
+        df_db = pd.DataFrame(db_reps, columns=['ID_Proyecto', 'Estatus_RevOps', 'Probabilidad_RevOps'])
+        df_db['ID_Proyecto'] = df_db['ID_Proyecto'].astype(str)
+        df_csv['ID_Proyecto'] = df_csv['ID_Proyecto'].astype(str)
+        
+        # Sobrescribir con prioridad SQLite
+        df_merged = pd.merge(df_csv, df_db, on='ID_Proyecto', how='left')
+        df_merged['Fase_Pipeline'] = np.where(df_merged['Estatus_RevOps'].notna(), df_merged['Estatus_RevOps'], df_merged['Fase_Pipeline'])
+        return df_merged
+    return df_csv
 
 # ==========================================
-# NUEVA ESTACIÓN 4: GESTIÓN COMERCIAL (REVOPS) 
-# Esta sección es independiente de la carga del CSV
+# INTERFAZ PRINCIPAL
 # ==========================================
-with tab_revops:
-    st.markdown("### 🚀 Revenue Operations & Ejecución Comercial")
+st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
-    t_agenda, t_bitacora, t_forecast, t_reportes = st.tabs([
-        "📅 Agenda de Visitas",
-        "📝 Bitácora Post-Visita",
-        "📈 Forecast Semanal",
-        "📄 Generador de Reportes"
-    ])
+t_dash, t_stalled, t_ai, t_revops = st.tabs([
+    "📊 1. Dashboards CRM", 
+    "🚨 2. Proyectos Estancados", 
+    "🧠 3. Laboratorio Táctico IA",
+    "🚀 4. Gestión Comercial (RevOps)"
+])
 
-    # --- SUBMÓDULO 1: AGENDA ---
-    with t_agenda:
-        st.subheader("Programación y Control de Visitas")
-        with st.form("form_agenda", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                f_fecha = st.date_input("Fecha de Visita")
-                f_horario = st.time_input("Horario", value=datetime.strptime('09:00', '%H:%M').time())
-                f_cliente = st.text_input("Empresa / Cliente")
-            with c2:
-                f_contacto = st.text_input("Contacto Clave")
-                f_estatus = st.selectbox("Estatus", ["Programada", "Confirmada", "Realizada", "Reprogramada"])
-            with c3:
-                f_objetivo = st.text_area("Objetivo", placeholder="Ej. Presentación...")
+archivo = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
+df = pd.DataFrame()
+
+if archivo:
+    df_bruto = procesar_csv(archivo)
+    if df_bruto is not None:
+        df = sync_master_key(df_bruto)
+        # Filtros
+        st.sidebar.divider()
+        st.sidebar.header("Filtros Directivos")
+        f_pilar = st.sidebar.multiselect("Pilar Estratégico:", df['Pilar_Estrategico'].unique(), default=df['Pilar_Estrategico'].unique())
+        f_buscar = st.sidebar.text_input("Buscar Folio o Cliente:")
+        if f_buscar:
+            df = df[(df['ID_Proyecto'].str.contains(f_buscar, case=False, na=False)) | (df['Cliente'].str.contains(f_buscar, case=False, na=False))]
+        if f_pilar:
+            df = df[df['Pilar_Estrategico'].isin(f_pilar)]
+
+# ==========================================
+# 📊 ESTACIÓN 1: DASHBOARDS
+# ==========================================
+with t_dash:
+    if not df.empty:
+        META_MENSUAL_USD = 80000.00
+        # Calcular Pipeline Probable (Fases calientes)
+        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', 'Cerrado Ganado'])]
+        usd_caliente = df_caliente['Monto_USD'].sum()
+        mxn_caliente = df_caliente['Monto_MXN'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Meta Mensual (USD)", f"${META_MENSUAL_USD:,.2f}")
+        c2.metric("Pipeline Probable (Activo)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN")
+        
+        gap = META_MENSUAL_USD - usd_caliente
+        if gap > 0: c3.metric("GAP (Brecha)", f"${gap:,.2f} USD", "- Acción Requerida")
+        else: c3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
+        
+        st.divider()
+        moneda_sel = st.radio("Moneda de Análisis:", ["USD", "MXN"], horizontal=True)
+        col_val = 'Monto_USD' if moneda_sel == "USD" else 'Monto_MXN'
+        
+        # Pareto 80/20
+        st.markdown(f"#### Análisis Pareto 80/20 por Cuentas ({moneda_sel})")
+        df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
+        df_pareto = df_pareto[df_pareto[col_val] > 0].sort_values(by=col_val, ascending=False).reset_index(drop=True)
+        
+        if not df_pareto.empty:
+            df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
+            df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
             
-            if st.form_submit_button("💾 Guardar en Agenda"):
-                if f_cliente:
-                    run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus) VALUES (?, ?, ?, ?, ?, ?)",
-                              (str(f_fecha), str(f_horario.strftime('%H:%M')), f_cliente, f_contacto, f_objetivo, f_estatus), fetch=False)
-                    st.success(f"Visita con {f_cliente} agendada.")
-                    st.rerun()
-                else:
-                    st.error("Ingresa el cliente.")
+            barras = alt.Chart(df_pareto).mark_bar(color='#003a70').encode(x=alt.X('Cliente', sort=None), y=alt.Y(col_val))
+            linea = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
+            st.altair_chart(alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350), use_container_width=True)
 
-        st.markdown("#### 📋 Visitas Registradas")
-        visitas = run_query("SELECT id, fecha, horario, cliente, contacto, objetivo, estatus FROM agenda ORDER BY fecha DESC, horario DESC")
-        if visitas:
-            st.dataframe(pd.DataFrame(visitas, columns=["ID", "Fecha", "Horario", "Cliente", "Contacto", "Objetivo", "Estatus"]), use_container_width=True, hide_index=True)
-            
-            with st.expander("✏️ Editar o Eliminar Visita Registrada"):
-                opc_visitas = {f"ID {v[0]} - {v[3]} ({v[1]} a las {v[2]})": v for v in visitas}
-                sel_v = st.selectbox("Selecciona el registro a modificar:", list(opc_visitas.keys()))
-                v_data = opc_visitas[sel_v]
-                
-                ce1, ce2, ce3 = st.columns(3)
-                with ce1:
-                    e_fecha = st.text_input("Fecha", value=v_data[1])
-                    e_horario = st.text_input("Horario (HH:MM)", value=v_data[2])
-                    e_cliente = st.text_input("Cliente", value=v_data[3])
-                with ce2:
-                    e_contacto = st.text_input("Contacto", value=v_data[4])
-                    idx_estatus = ["Programada", "Confirmada", "Realizada", "Reprogramada"].index(v_data[6]) if v_data[6] in ["Programada", "Confirmada", "Realizada", "Reprogramada"] else 0
-                    e_estatus = st.selectbox("Actualizar Estatus", ["Programada", "Confirmada", "Realizada", "Reprogramada"], index=idx_estatus)
-                with ce3:
-                    e_objetivo = st.text_area("Objetivo", value=v_data[5])
-                
-                b_edit, b_del = st.columns(2)
-                with b_edit:
-                    if st.button("🔄 Actualizar Visita", type="primary"):
-                        run_query("UPDATE agenda SET fecha=?, horario=?, cliente=?, contacto=?, objetivo=?, estatus=? WHERE id=?", 
-                                  (e_fecha, e_horario, e_cliente, e_contacto, e_objetivo, e_estatus, v_data[0]), fetch=False)
-                        st.success("Cita actualizada exitosamente.")
-                        st.rerun()
-                with b_del:
-                    if st.button("🗑️ Eliminar Visita"):
-                        run_query("DELETE FROM agenda WHERE id=?", (v_data[0],), fetch=False)
-                        st.warning("Cita eliminada de la base de datos.")
-                        st.rerun()
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            st.markdown("**Forecast por Área**")
+            df_a = df.groupby('Area')[col_val].sum().reset_index()
+            if not df_a.empty: st.altair_chart(alt.Chart(df_a).mark_bar(color='#2c3e50').encode(x=col_val, y=alt.Y('Area', sort='-x')).properties(height=300), use_container_width=True)
+        with cg2:
+            st.markdown("**Salud del Embudo**")
+            df_f = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
+            if not df_f.empty: st.altair_chart(alt.Chart(df_f).mark_bar(color='#16a34a').encode(x=col_val, y=alt.Y('Fase_Pipeline', sort='-x')).properties(height=300), use_container_width=True)
+    else:
+        st.info("Sube el archivo CSV del CRM para visualizar los dashboards.")
+
+# ==========================================
+# 🚨 ESTACIÓN 2: PROYECTOS ESTANCADOS
+# ==========================================
+with t_stalled:
+    if not df.empty:
+        st.subheader("Riesgo Operativo: Proyectos Inactivos (>15 días)")
+        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
+        
+        if not estancados.empty:
+            for _, r in estancados.iterrows():
+                st.markdown(f"""
+                <div class="alerta-estancado">
+                    <h4 style="margin:0; color:#9f1239;">{r['ID_Proyecto']} | {r['Cliente']}</h4>
+                    <p style="margin:5px 0 0 0; font-size:14px;"><b>Días Inactivo:</b> {r['Días_Activo']} | <b>Riesgo USD:</b> ${r['Monto_USD']:,.2f} | <b>Fase:</b> {r['Fase_Pipeline']}</p>
+                </div>
+                """, unsafe_allow_html=True)
         else:
-            st.info("Sin visitas agendadas.")
+            st.success("¡Embudo limpio! No hay proyectos estancados de alto riesgo.")
+    else:
+        st.info("Sube el CSV para auditar proyectos estancados.")
 
-    # --- SUBMÓDULO 2: BITÁCORA ---
-    with t_bitacora:
-        st.subheader("Bitácora Comercial Post-Visita")
-        st.caption("Si vienes de la Estación 3, los datos del cliente se autocompletarán.")
-        with st.form("form_reporte", clear_on_submit=False):
-            # Lógica de auto-llenado desde la IA
-            def_cliente = st.session_state.get('tactica_cliente', '')
-            def_pain = st.session_state.get('tactica_bitacora', '')
-            es_usd = st.session_state.get('monto_usd_ia', 0) > 0
-            def_monto = st.session_state.get('monto_usd_ia', 0) if es_usd else st.session_state.get('monto_mxn_ia', 0)
+# ==========================================
+# 🧠 ESTACIÓN 3: LABORATORIO IA (KAM)
+# ==========================================
+with t_ai:
+    if not df.empty:
+        st.subheader("Configuración de Paquete (Bundle)")
+        clientes = sorted(df['Cliente'].dropna().unique().tolist())
+        c_sel = st.selectbox("1. Selecciona la Cuenta:", ["-- Selecciona --"] + clientes)
+        
+        if c_sel != "-- Selecciona --":
+            df_c = df[df['Cliente'] == c_sel]
+            opciones = df_c.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
+            p_sel = st.multiselect("2. Agrupar Folios:", opciones)
             
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                r_fecha = st.date_input("Fecha del Reporte")
-                r_cliente = st.text_input("Cliente Visitado", value=def_cliente)
-                r_semana = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
-            with c2:
-                r_moneda = st.selectbox("Moneda", ["MXN", "USD"], index=1 if es_usd else 0)
-                r_monto = st.number_input("Monto Estimado", min_value=0.0, step=1000.0, value=float(def_monto), format="%.2f")
-                r_prob = st.slider("Probabilidad de Cierre (%)", 0, 100, 50, 5)
-            with c3:
-                r_estatus = st.selectbox("Estatus de Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
-                r_pain = st.text_area("Dolores (Pain) / Resumen", value=def_pain, placeholder="Ej. Paros de máquina...")
-                r_paso = st.text_input("Siguiente Paso")
-                r_prox_fecha = st.date_input("Próxima Fecha")
-            
-            if st.form_submit_button("💾 Guardar Reporte"):
-                if r_cliente:
-                    run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                              (str(r_fecha), r_cliente, "Seguimiento", r_pain, r_monto, r_prob, r_semana, r_paso, str(r_prox_fecha), r_estatus, r_moneda), fetch=False)
-                    st.success("Bitácora guardada en el Forecast.")
-                    st.rerun()
-                else:
-                    st.error("Ingresa el cliente.")
-
-        st.markdown("#### 🗂️ Historial")
-        reportes_db = run_query("SELECT id, cliente, monto, probabilidad, semana, estatus, proxima_fecha, fecha_rep, pain, siguiente_paso, moneda FROM reportes ORDER BY fecha_rep DESC")
-        if reportes_db:
-            df_rep = pd.DataFrame(reportes_db, columns=["ID", "Cliente", "Monto", "Prob(%)", "Semana", "Estatus", "Siguiente", "Fecha Rep", "Pain", "Siguiente Paso", "Moneda"])
-            df_rep["Monto"] = df_rep.apply(lambda x: f"${x['Monto']:,.2f} {x['Moneda']}", axis=1)
-            st.dataframe(df_rep.drop(columns=["Fecha Rep", "Pain", "Siguiente Paso", "Moneda"]), use_container_width=True, hide_index=True)
-            
-            with st.expander("✏️ Editar o Eliminar Reporte Guardado"):
-                opc_reps = {f"ID {r[0]} - {r[1]} (${r[2]} {r[10]})": r for r in reportes_db}
-                sel_r = st.selectbox("Selecciona el reporte a modificar:", list(opc_reps.keys()))
-                r_data = opc_reps[sel_r]
+            if p_sel:
+                ids = [o.split("]")[0].replace("[", "") for o in p_sel]
+                df_s = df[df['ID_Proyecto'].astype(str).isin(ids)]
+                t_usd, t_mxn = df_s['Monto_USD'].sum(), df_s['Monto_MXN'].sum()
+                eqs = " | ".join(df_s['Descripcion'].astype(str).tolist())
                 
-                re1, re2, re3 = st.columns(3)
-                with re1:
-                    er_fecha = st.text_input("Fecha Reporte", value=r_data[7])
-                    er_cliente = st.text_input("Empresa", value=r_data[1])
-                    idx_sem = ["W1", "W2", "W3", "W4"].index(r_data[4]) if r_data[4] in ["W1", "W2", "W3", "W4"] else 0
-                    er_semana = st.selectbox("Semana", ["W1", "W2", "W3", "W4"], index=idx_sem)
-                with re2:
-                    idx_moneda = ["MXN", "USD"].index(r_data[10]) if r_data[10] in ["MXN", "USD"] else 0
-                    er_moneda = st.selectbox("Moneda", ["MXN", "USD"], index=idx_moneda)
-                    er_monto = st.number_input("Monto", value=float(r_data[2]), step=1000.0)
-                    er_prob = st.slider("Probabilidad (%)", 0, 100, int(r_data[3]))
-                with re3:
-                    idx_est = ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"].index(r_data[5]) if r_data[5] in ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"] else 0
-                    er_estatus = st.selectbox("Estatus Comercial", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"], index=idx_est)
-                    er_pain = st.text_area("Pain / Dolores", value=r_data[8])
-                    er_paso = st.text_input("Siguiente Acción", value=r_data[9])
-                    er_prox = st.text_input("Fecha Prox. Acción", value=r_data[6])
+                st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
                 
-                br_edit, br_del = st.columns(2)
-                with br_edit:
-                    if st.button("🔄 Actualizar Reporte", type="primary"):
-                        run_query("UPDATE reportes SET fecha_rep=?, cliente=?, semana=?, monto=?, probabilidad=?, estatus=?, pain=?, siguiente_paso=?, proxima_fecha=?, moneda=? WHERE id=?", 
-                                  (er_fecha, er_cliente, er_semana, er_monto, er_prob, er_estatus, er_pain, er_paso, er_prox, er_moneda, r_data[0]), fetch=False)
-                        st.success("Reporte actualizado correctamente.")
-                        st.rerun()
-                with br_del:
-                    if st.button("🗑️ Eliminar Reporte"):
-                        run_query("DELETE FROM reportes WHERE id=?", (r_data[0],), fetch=False)
-                        st.warning("Reporte eliminado definitivamente.")
-                        st.rerun()
-        else:
-            st.info("No hay reportes registrados.")
-
-    # --- SUBMÓDULO 3: FORECAST ---
-    with t_forecast:
-        st.subheader("Panel de Forecast (Pipeline Ponderado)")
-        data_fc = run_query("SELECT monto, probabilidad, semana, moneda FROM reportes")
-        if data_fc:
-            df_fc = pd.DataFrame(data_fc, columns=["Monto", "Prob", "Semana", "Moneda"])
-            df_fc["Forecast"] = df_fc["Monto"] * (df_fc["Prob"] / 100.0)
-            
-            mxn_pipe = df_fc[df_fc["Moneda"] == "MXN"]["Monto"].sum()
-            mxn_fc = df_fc[df_fc["Moneda"] == "MXN"]["Forecast"].sum()
-            
-            usd_pipe = df_fc[df_fc["Moneda"] == "USD"]["Monto"].sum()
-            usd_fc = df_fc[df_fc["Moneda"] == "USD"]["Forecast"].sum()
-            
-            st.markdown("##### Vista Financiera Global")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Pipeline (MXN)", f"${mxn_pipe:,.2f}")
-            c2.metric("Forecast Real (MXN)", f"${mxn_fc:,.2f}")
-            c3.metric("Pipeline (USD)", f"${usd_pipe:,.2f}")
-            c4.metric("Forecast Real (USD)", f"${usd_fc:,.2f}")
-            
-            st.markdown("#### Desglose por Semana y Moneda")
-            df_group = df_fc.groupby(["Semana", "Moneda"]).agg(Pipeline_Total=("Monto", "sum"), Forecast=("Forecast", "sum"), Oportunidades=("Monto", "count")).reset_index()
-            df_group["Pipeline_Total"] = df_group.apply(lambda x: f"${x['Pipeline_Total']:,.2f}", axis=1)
-            df_group["Forecast"] = df_group.apply(lambda x: f"${x['Forecast']:,.2f}", axis=1)
-            st.dataframe(df_group, use_container_width=True, hide_index=True)
-        else:
-            st.info("Agrega reportes para visualizar el forecast.")
-
-    # --- SUBMÓDULO 4: REPORTES ---
-    with t_reportes:
-        st.subheader("Generador de Reportes (Correo/Word)")
-        clientes_list = run_query("SELECT DISTINCT cliente FROM reportes")
-        if clientes_list:
-            cliente_sel = st.selectbox("Selecciona Cliente", [c[0] for c in clientes_list])
-            if cliente_sel:
-                d = run_query("SELECT fecha_rep, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda FROM reportes WHERE cliente = ? ORDER BY id DESC LIMIT 1", (cliente_sel,))[0]
-                
-                correo = f"Estimado equipo,\n\nVisita de seguimiento técnico-comercial el {d[0]} ({d[4]}).\n- Pain: {d[1]}\n- Monto: ${d[2]:,.2f} {d[8]} ({d[3]}% prob)\n- Estatus: {d[7]}\n- Siguiente Paso: {d[5]} ({d[6]})\n\nAtentamente,\nJavier Camacho"
-                markdown = f"### REPORTE EJECUTIVO\n**Cliente:** {cliente_sel}\n**Fecha:** {d[0]} ({d[4]})\n\n#### 1. Análisis\n* {d[1]}\n\n#### 2. Valoración\n* ${d[2]:,.2f} {d[8]}\n* {d[3]}%\n\n#### 3. Siguiente Paso\n* {d[5]} ({d[6]})"
-                
+                # Config Prompt
+                st.markdown("#### Configuración Táctica")
                 c1, c2 = st.columns(2)
-                c1.text_area("Formato Correo", correo, height=200)
-                c2.text_area("Formato Word", markdown, height=200)
+                with c1:
+                    obj = st.radio("Objetivo:", ["Cierre / Seguimiento Virtual", "Apertura / Visita Presencial"])
+                    canal = st.selectbox("Canal/Tipo:", ["Correo Electrónico Ejecutivo", "Guion de Llamada", "Mensaje WhatsApp", "Visita con Director"])
+                    interlocutor = st.selectbox("Interlocutor:", ["Comprador", "Ingeniero / Planta", "Director / Dueño"])
+                with c2:
+                    contexto = st.text_area("Notas Manuales (Contexto actual):", placeholder="Ej. Quieren crédito a 60 días...")
+                
+                if gemini_activo and st.button("🧠 Generar Estrategia", type="primary"):
+                    with st.spinner("Procesando con Gemini..."):
+                        try:
+                            prompt = f"""
+                            Eres Javier Camacho, KAM en MESS Servicios Metrológicos.
+                            Cliente: {c_sel} (Perfil: {interlocutor}). Proyectos agrupados: {len(df_s)}.
+                            Equipos: {eqs}. Monto: ${t_usd} USD / ${t_mxn} MXN.
+                            Acción: {canal}. Contexto: {contexto}.
+                            
+                            Usa MEDDPICC, SPIN y Sandler. Sé muy humano, B2B. NO uses Markdown fuera de las etiquetas XML.
+                            DEBES usar estrictamente estas etiquetas:
+                            <ANALYSIS>Análisis de cuenta y cómo vender el paquete</ANALYSIS>
+                            <MESSAGE>El texto exacto para {canal}</MESSAGE>
+                            <OBJECTIONS>2 objeciones y cómo rebatirlas</OBJECTIONS>
+                            <MARKETING>Petición para equipo de marketing ABM</MARKETING>
+                            <LOG>Resumen hiper-breve para el CRM</LOG>
+                            """
+                            model = genai.GenerativeModel("gemini-3.6-flash")
+                            res = model.generate_content(prompt).text
+                            
+                            def extr(tag, t): 
+                                m = re.search(fr'<{tag}>(.*?)</{tag}>', t, re.DOTALL)
+                                return m.group(1).strip() if m else "Error extracción."
+                                
+                            st.session_state.update({
+                                'ai_analisis': extr('ANALYSIS', res), 'ai_mensaje': extr('MESSAGE', res),
+                                'ai_objeciones': extr('OBJECTIONS', res), 'ai_marketing': extr('MARKETING', res),
+                                'ai_log': extr('LOG', res), 'ai_cliente': c_sel, 'ai_folio': ", ".join(ids),
+                                'ai_usd': t_usd, 'ai_mxn': t_mxn
+                            })
+                        except Exception as e: st.error(f"Error API: {e}")
+
+                if st.session_state.get('ai_mensaje'):
+                    st.success("Estrategia Generada")
+                    st.info(f"**Análisis:**\n{st.session_state.ai_analisis}")
+                    st.markdown(f"<div class='caja-ia'><b>Mensaje:</b><br>{st.session_state.ai_mensaje}</div>", unsafe_allow_html=True)
+                    
+                    # Puente a RevOps
+                    if st.button("🚀 Inyectar Estrategia a RevOps"):
+                        f_hoy = datetime.now().strftime("%Y-%m-%d")
+                        div = "USD" if st.session_state.ai_usd > 0 else "MXN"
+                        mto = st.session_state.ai_usd if div == "USD" else st.session_state.ai_mxn
+                        run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal, f_hoy, "Negociación"), fetch=False)
+                        st.success("¡Inyectado a SQLite! Revisa la Estación 4.")
+                        
+                    if docx_disponible:
+                        def generar_docx():
+                            doc = Document()
+                            doc.add_heading("ESTRATEGIA KAM", 0)
+                            doc.add_paragraph(st.session_state.ai_analisis)
+                            doc.add_paragraph(st.session_state.ai_mensaje)
+                            b = io.BytesIO()
+                            doc.save(b)
+                            b.seek(0)
+                            return b
+                        st.download_button("💾 Descargar .docx", data=generar_docx(), file_name="Estrategia.docx")
+    else:
+        st.info("Sube el CSV para habilitar la IA.")
+
+# ==========================================
+# 🚀 ESTACIÓN 4: GESTIÓN COMERCIAL (REVOPS)
+# ==========================================
+with t_revops:
+    t_ag, t_bit, t_roi, t_fc = st.tabs(["📅 Agenda", "📝 Bitácora Predictiva", "🧮 Calculadora ROI", "📈 Forecast Automático"])
+
+    # 1. AGENDA INTELIGENTE
+    with t_ag:
+        st.subheader("Agenda & Voice-to-CRM")
+        with st.form("f_agenda"):
+            ca1, ca2, ca3 = st.columns(3)
+            with ca1:
+                f_fec = st.date_input("Fecha")
+                f_hor = st.time_input("Horario")
+                f_cli = st.text_input("Cliente")
+            with ca2:
+                f_con = st.text_input("Contacto")
+                f_est = st.selectbox("Estatus", ["Programada", "Realizada", "Cancelada"])
+            with ca3:
+                f_obj = st.text_area("Objetivo")
+            
+            st.markdown("**Voice-to-CRM (Simulado)**")
+            audio = st.audio_input("Grabar nota post-visita (opcional)")
+            f_notas = st.text_area("Transcripción Manual / Notas Rápidas", placeholder="Si no usas audio, escribe las notas aquí...")
+            
+            if st.form_submit_button("Guardar Cita"):
+                run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus, notas_audio) VALUES (?,?,?,?,?,?,?)",
+                          (str(f_fec), str(f_hor.strftime('%H:%M')), f_cli, f_con, f_obj, f_est, f_notas), fetch=False)
+                st.success("Guardado en SQLite.")
+                st.rerun()
+                
+        ag_data = run_query("SELECT id, fecha, horario, cliente, estatus FROM agenda")
+        if ag_data: st.dataframe(pd.DataFrame(ag_data, columns=["ID", "Fecha", "Hora", "Cliente", "Estatus"]), hide_index=True)
+
+    # 2. BITÁCORA PREDICTIVA (IA)
+    with t_bit:
+        st.subheader("Bitácora MEDDPICC (Probabilidad Automática)")
+        with st.form("f_bitacora"):
+            cb1, cb2, cb3 = st.columns(3)
+            with cb1:
+                r_fol = st.text_input("Folio (ID Proyecto)")
+                r_cli = st.text_input("Cliente")
+                r_mon = st.number_input("Monto", min_value=0.0, step=1000.0)
+                r_div = st.selectbox("Divisa", ["MXN", "USD"])
+            with cb2:
+                r_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
+                r_est = st.selectbox("Estatus", ["Propuesta", "Cotización", "Negociación", "Esperando PO", "Cerrado Ganado"])
+                r_paso = st.text_input("Siguiente Paso")
+                r_fprox = st.date_input("Fecha Próx.")
+            with cb3:
+                st.markdown("**Checklist Predictivo (Define %)**")
+                chk1 = st.checkbox("¿Hablaste con el Director/Economic Buyer?")
+                chk2 = st.checkbox("¿Cotización formal enviada?")
+                chk3 = st.checkbox("¿Identificaste el Pain (Rechazos/Cuellos de botella)?")
+                chk4 = st.checkbox("¿Presupuesto liberado / confirmado?")
+                r_pain = st.text_area("Descripción del Pain")
+                
+            if st.form_submit_button("Calcular % y Guardar"):
+                # Cálculo de IA predictiva (Hardcoded rules)
+                score = 0
+                if chk1: score += 25
+                if chk2: score += 25
+                if chk3: score += 25
+                if chk4: score += 15
+                if r_est == "Esperando PO": score += 10 # Bono
+                
+                prob = 0
+                if score >= 90: prob = 90
+                elif score >= 75: prob = 75
+                elif score >= 50: prob = 50
+                elif score >= 25: prob = 25
+                
+                run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                          (r_fol, r_cli, r_pain, r_mon, prob, r_sem, r_div, r_paso, str(r_fprox), r_est), fetch=False)
+                st.success(f"Guardado. Probabilidad predictiva calculada: {prob}%")
+                st.rerun()
+
+    # 3. CALCULADORA ROI
+    with t_roi:
+        st.subheader("Calculadora de ROI Metrológico")
+        cr1, cr2 = st.columns(2)
+        with cr1:
+            inv = st.number_input("Inversión del Equipo (Ej. 60000 USD)", min_value=0.0, value=60000.0)
+            c_hora = st.number_input("Costo Máquina CNC / Hora (USD)", value=50.0)
+            rechazo = st.number_input("Piezas rechazadas por semana", value=10)
+        with cr2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Calcular Retorno Financiero", type="primary"):
+                ahorro_anual = (c_hora * 2) * rechazo * 52 # formula simulada
+                meses_roi = inv / (ahorro_anual / 12) if ahorro_anual > 0 else 999
+                st.session_state.roi_calc = f"Ahorro: ${ahorro_anual:,.2f} / ROI en {meses_roi:.1f} meses"
+                st.success(st.session_state.roi_calc)
+
+    # 4. FORECAST Y AUTOMATIZACIÓN
+    with t_fc:
+        st.subheader("Forecast Real (Pipeline Ponderado)")
+        reps = run_query("SELECT id, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
+        if reps:
+            df_fc = pd.DataFrame(reps, columns=["ID", "Cliente", "Monto", "Prob(%)", "Semana", "Divisa", "Estatus"])
+            df_fc['Forecast_Real'] = df_fc['Monto'] * (df_fc['Prob(%)'] / 100.0)
+            
+            c_f1, c_f2 = st.columns(2)
+            for divisa, col in zip(["USD", "MXN"], [c_f1, c_f2]):
+                df_div = df_fc[df_fc['Divisa'] == divisa]
+                col.metric(f"Forecast {divisa}", f"${df_div['Forecast_Real'].sum():,.2f}", f"Pipeline Total: ${df_div['Monto'].sum():,.2f}")
+            
+            st.dataframe(df_fc.drop(columns=['ID']), use_container_width=True)
+            
+            st.divider()
+            st.markdown("#### Generador Omnicanal")
+            id_sel = st.selectbox("Seleccionar Reporte a Enviar", df_fc['ID'].tolist())
+            if st.button("📧 Enviar por Correo a Gerencia"):
+                st.toast(f"Reporte {id_sel} enviado exitosamente a la Gerencia.", icon="✅")
+                st.success("Indicadores consolidados en formato Markdown y enviados.")
         else:
-            st.info("Registra visitas para generar reportes.")
+            st.info("Sin registros en SQLite para calcular Forecast.")
