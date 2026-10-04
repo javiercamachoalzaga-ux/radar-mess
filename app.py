@@ -42,6 +42,13 @@ def init_db():
             objetivo TEXT, estatus TEXT
         )
     """)
+    
+    # Migración Agenda (Horario)
+    cursor.execute("PRAGMA table_info(agenda)")
+    columnas_agenda = [col[1] for col in cursor.fetchall()]
+    if 'horario' not in columnas_agenda:
+        cursor.execute("ALTER TABLE agenda ADD COLUMN horario TEXT DEFAULT '09:00'")
+        
     # Tabla Reportes (Bitácora Post-Visita)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reportes (
@@ -52,6 +59,13 @@ def init_db():
             estatus TEXT
         )
     """)
+    
+    # Migración Reportes (Moneda)
+    cursor.execute("PRAGMA table_info(reportes)")
+    columnas_reportes = [col[1] for col in cursor.fetchall()]
+    if 'moneda' not in columnas_reportes:
+        cursor.execute("ALTER TABLE reportes ADD COLUMN moneda TEXT DEFAULT 'MXN'")
+        
     conn.commit()
     conn.close()
 
@@ -113,7 +127,7 @@ st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingenierí
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
 # ==========================================
-# TABS DE NAVEGACIÓN (Se agrega la Estación 4)
+# TABS DE NAVEGACIÓN
 # ==========================================
 tab_dashboards, tab_enablement, tab_scott, tab_revops = st.tabs([
     "1. Dashboards CRM", 
@@ -280,7 +294,6 @@ if archivo_cargado is not None:
             st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
             META_MENSUAL_USD = 80000.00
             
-            # --- CORRECCIÓN: SUMAMOS TODO EL PIPELINE CALIENTE SIN IMPORTAR LA FECHA ---
             usd_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_USD'].sum()
             mxn_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO'])]['Monto_MXN'].sum()
             
@@ -554,6 +567,7 @@ with tab_revops:
             c1, c2, c3 = st.columns(3)
             with c1:
                 f_fecha = st.date_input("Fecha de Visita")
+                f_horario = st.time_input("Horario", value=datetime.strptime('09:00', '%H:%M').time())
                 f_cliente = st.text_input("Empresa / Cliente")
             with c2:
                 f_contacto = st.text_input("Contacto Clave")
@@ -563,17 +577,48 @@ with tab_revops:
             
             if st.form_submit_button("💾 Guardar en Agenda"):
                 if f_cliente:
-                    run_query("INSERT INTO agenda (fecha, cliente, contacto, objetivo, estatus) VALUES (?, ?, ?, ?, ?)",
-                              (str(f_fecha), f_cliente, f_contacto, f_objetivo, f_estatus), fetch=False)
+                    run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus) VALUES (?, ?, ?, ?, ?, ?)",
+                              (str(f_fecha), str(f_horario.strftime('%H:%M')), f_cliente, f_contacto, f_objetivo, f_estatus), fetch=False)
                     st.success(f"Visita con {f_cliente} agendada.")
                     st.rerun()
                 else:
                     st.error("Ingresa el cliente.")
 
         st.markdown("#### 📋 Visitas Registradas")
-        visitas = run_query("SELECT id, fecha, cliente, contacto, objetivo, estatus FROM agenda ORDER BY fecha DESC")
+        visitas = run_query("SELECT id, fecha, horario, cliente, contacto, objetivo, estatus FROM agenda ORDER BY fecha DESC, horario DESC")
         if visitas:
-            st.dataframe(pd.DataFrame(visitas, columns=["ID", "Fecha", "Cliente", "Contacto", "Objetivo", "Estatus"]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(visitas, columns=["ID", "Fecha", "Horario", "Cliente", "Contacto", "Objetivo", "Estatus"]), use_container_width=True, hide_index=True)
+            
+            # --- PANEL DE EDICIÓN / ELIMINACIÓN (AGENDA) ---
+            with st.expander("✏️ Editar o Eliminar Visita Registrada"):
+                opc_visitas = {f"ID {v[0]} - {v[3]} ({v[1]} a las {v[2]})": v for v in visitas}
+                sel_v = st.selectbox("Selecciona el registro a modificar:", list(opc_visitas.keys()))
+                v_data = opc_visitas[sel_v]
+                
+                ce1, ce2, ce3 = st.columns(3)
+                with ce1:
+                    e_fecha = st.text_input("Fecha", value=v_data[1])
+                    e_horario = st.text_input("Horario (HH:MM)", value=v_data[2])
+                    e_cliente = st.text_input("Cliente", value=v_data[3])
+                with ce2:
+                    e_contacto = st.text_input("Contacto", value=v_data[4])
+                    idx_estatus = ["Programada", "Confirmada", "Realizada", "Reprogramada"].index(v_data[6]) if v_data[6] in ["Programada", "Confirmada", "Realizada", "Reprogramada"] else 0
+                    e_estatus = st.selectbox("Actualizar Estatus", ["Programada", "Confirmada", "Realizada", "Reprogramada"], index=idx_estatus)
+                with ce3:
+                    e_objetivo = st.text_area("Objetivo", value=v_data[5])
+                
+                b_edit, b_del = st.columns(2)
+                with b_edit:
+                    if st.button("🔄 Actualizar Visita", type="primary"):
+                        run_query("UPDATE agenda SET fecha=?, horario=?, cliente=?, contacto=?, objetivo=?, estatus=? WHERE id=?", 
+                                  (e_fecha, e_horario, e_cliente, e_contacto, e_objetivo, e_estatus, v_data[0]), fetch=False)
+                        st.success("Cita actualizada exitosamente.")
+                        st.rerun()
+                with b_del:
+                    if st.button("🗑️ Eliminar Visita"):
+                        run_query("DELETE FROM agenda WHERE id=?", (v_data[0],), fetch=False)
+                        st.warning("Cita eliminada de la base de datos.")
+                        st.rerun()
         else:
             st.info("Sin visitas agendadas.")
 
@@ -587,42 +632,99 @@ with tab_revops:
                 r_cliente = st.text_input("Cliente Visitado")
                 r_semana = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
             with c2:
-                r_monto = st.number_input("Monto Estimado ($ MXN)", min_value=0.0, step=1000.0, format="%.2f")
+                r_moneda = st.selectbox("Moneda", ["MXN", "USD"])
+                r_monto = st.number_input("Monto Estimado", min_value=0.0, step=1000.0, format="%.2f")
                 r_prob = st.slider("Probabilidad de Cierre (%)", 0, 100, 50, 5)
-                r_estatus = st.selectbox("Estatus de Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
             with c3:
-                r_pain = st.text_area("Dolores (Pain)", placeholder="Ej. Paros de máquina...")
+                r_estatus = st.selectbox("Estatus de Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
+                r_pain = st.text_input("Dolores (Pain)", placeholder="Ej. Paros de máquina...")
                 r_paso = st.text_input("Siguiente Paso")
                 r_prox_fecha = st.date_input("Próxima Fecha")
             
             if st.form_submit_button("💾 Guardar Reporte"):
                 if r_cliente:
-                    run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                              (str(r_fecha), r_cliente, "Seguimiento", r_pain, r_monto, r_prob, r_semana, r_paso, str(r_prox_fecha), r_estatus), fetch=False)
+                    run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              (str(r_fecha), r_cliente, "Seguimiento", r_pain, r_monto, r_prob, r_semana, r_paso, str(r_prox_fecha), r_estatus, r_moneda), fetch=False)
                     st.success("Bitácora guardada.")
                     st.rerun()
                 else:
                     st.error("Ingresa el cliente.")
 
         st.markdown("#### 🗂️ Historial")
-        reportes = run_query("SELECT cliente, monto, probabilidad, semana, estatus, proxima_fecha FROM reportes ORDER BY fecha_rep DESC")
-        if reportes:
-            st.dataframe(pd.DataFrame(reportes, columns=["Cliente", "Monto", "Prob(%)", "Semana", "Estatus", "Siguiente"]), use_container_width=True, hide_index=True)
+        reportes_db = run_query("SELECT id, cliente, monto, probabilidad, semana, estatus, proxima_fecha, fecha_rep, pain, siguiente_paso, moneda FROM reportes ORDER BY fecha_rep DESC")
+        if reportes_db:
+            df_rep = pd.DataFrame(reportes_db, columns=["ID", "Cliente", "Monto", "Prob(%)", "Semana", "Estatus", "Siguiente", "Fecha Rep", "Pain", "Siguiente Paso", "Moneda"])
+            # Formatear la columna de monto para que se vea limpio con su divisa
+            df_rep["Monto"] = df_rep.apply(lambda x: f"${x['Monto']:,.2f} {x['Moneda']}", axis=1)
+            # Quitar columnas extra para la vista rápida
+            st.dataframe(df_rep.drop(columns=["Fecha Rep", "Pain", "Siguiente Paso", "Moneda"]), use_container_width=True, hide_index=True)
+            
+            # --- PANEL DE EDICIÓN / ELIMINACIÓN (BITÁCORA) ---
+            with st.expander("✏️ Editar o Eliminar Reporte Guardado"):
+                opc_reps = {f"ID {r[0]} - {r[1]} (${r[2]} {r[10]})": r for r in reportes_db}
+                sel_r = st.selectbox("Selecciona el reporte a modificar:", list(opc_reps.keys()))
+                r_data = opc_reps[sel_r]
+                
+                re1, re2, re3 = st.columns(3)
+                with re1:
+                    er_fecha = st.text_input("Fecha Reporte", value=r_data[7])
+                    er_cliente = st.text_input("Empresa", value=r_data[1])
+                    idx_sem = ["W1", "W2", "W3", "W4"].index(r_data[4]) if r_data[4] in ["W1", "W2", "W3", "W4"] else 0
+                    er_semana = st.selectbox("Semana", ["W1", "W2", "W3", "W4"], index=idx_sem)
+                with re2:
+                    idx_moneda = ["MXN", "USD"].index(r_data[10]) if r_data[10] in ["MXN", "USD"] else 0
+                    er_moneda = st.selectbox("Moneda", ["MXN", "USD"], index=idx_moneda)
+                    er_monto = st.number_input("Monto", value=float(r_data[2]), step=1000.0)
+                    er_prob = st.slider("Probabilidad (%)", 0, 100, int(r_data[3]))
+                with re3:
+                    idx_est = ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"].index(r_data[5]) if r_data[5] in ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"] else 0
+                    er_estatus = st.selectbox("Estatus Comercial", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"], index=idx_est)
+                    er_pain = st.text_area("Pain / Dolores", value=r_data[8])
+                    er_paso = st.text_input("Siguiente Acción", value=r_data[9])
+                    er_prox = st.text_input("Fecha Prox. Acción", value=r_data[6])
+                
+                br_edit, br_del = st.columns(2)
+                with br_edit:
+                    if st.button("🔄 Actualizar Reporte", type="primary"):
+                        run_query("UPDATE reportes SET fecha_rep=?, cliente=?, semana=?, monto=?, probabilidad=?, estatus=?, pain=?, siguiente_paso=?, proxima_fecha=?, moneda=? WHERE id=?", 
+                                  (er_fecha, er_cliente, er_semana, er_monto, er_prob, er_estatus, er_pain, er_paso, er_prox, er_moneda, r_data[0]), fetch=False)
+                        st.success("Reporte actualizado correctamente.")
+                        st.rerun()
+                with br_del:
+                    if st.button("🗑️ Eliminar Reporte"):
+                        run_query("DELETE FROM reportes WHERE id=?", (r_data[0],), fetch=False)
+                        st.warning("Reporte eliminado definitivamente.")
+                        st.rerun()
+        else:
+            st.info("No hay reportes registrados.")
 
     # --- SUBMÓDULO 3: FORECAST ---
     with t_forecast:
-        st.subheader("Panel de Forecast")
-        data_fc = run_query("SELECT monto, probabilidad, semana FROM reportes")
+        st.subheader("Panel de Forecast (Pipeline Ponderado)")
+        data_fc = run_query("SELECT monto, probabilidad, semana, moneda FROM reportes")
         if data_fc:
-            df_fc = pd.DataFrame(data_fc, columns=["Monto", "Prob", "Semana"])
+            df_fc = pd.DataFrame(data_fc, columns=["Monto", "Prob", "Semana", "Moneda"])
             df_fc["Forecast"] = df_fc["Monto"] * (df_fc["Prob"] / 100.0)
             
-            c1, c2 = st.columns(2)
-            c1.metric("Pipeline Total Registrado", f"${df_fc['Monto'].sum():,.2f} MXN")
-            c2.metric("Forecast Ponderado Total", f"${df_fc['Forecast'].sum():,.2f} MXN")
+            mxn_pipe = df_fc[df_fc["Moneda"] == "MXN"]["Monto"].sum()
+            mxn_fc = df_fc[df_fc["Moneda"] == "MXN"]["Forecast"].sum()
             
-            st.markdown("#### Desglose por Semana")
-            st.dataframe(df_fc.groupby("Semana").agg(Pipeline_Total=("Monto", "sum"), Forecast=("Forecast", "sum"), Oportunidades=("Monto", "count")).reset_index(), use_container_width=True, hide_index=True)
+            usd_pipe = df_fc[df_fc["Moneda"] == "USD"]["Monto"].sum()
+            usd_fc = df_fc[df_fc["Moneda"] == "USD"]["Forecast"].sum()
+            
+            st.markdown("##### Vista Financiera Global")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Pipeline (MXN)", f"${mxn_pipe:,.2f}")
+            c2.metric("Forecast Real (MXN)", f"${mxn_fc:,.2f}")
+            c3.metric("Pipeline (USD)", f"${usd_pipe:,.2f}")
+            c4.metric("Forecast Real (USD)", f"${usd_fc:,.2f}")
+            
+            st.markdown("#### Desglose por Semana y Moneda")
+            df_group = df_fc.groupby(["Semana", "Moneda"]).agg(Pipeline_Total=("Monto", "sum"), Forecast=("Forecast", "sum"), Oportunidades=("Monto", "count")).reset_index()
+            # Formatear el DataFrame visualmente
+            df_group["Pipeline_Total"] = df_group.apply(lambda x: f"${x['Pipeline_Total']:,.2f}", axis=1)
+            df_group["Forecast"] = df_group.apply(lambda x: f"${x['Forecast']:,.2f}", axis=1)
+            st.dataframe(df_group, use_container_width=True, hide_index=True)
         else:
             st.info("Agrega reportes para visualizar el forecast.")
 
@@ -633,10 +735,10 @@ with tab_revops:
         if clientes_list:
             cliente_sel = st.selectbox("Selecciona Cliente", [c[0] for c in clientes_list])
             if cliente_sel:
-                d = run_query("SELECT fecha_rep, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus FROM reportes WHERE cliente = ? ORDER BY id DESC LIMIT 1", (cliente_sel,))[0]
+                d = run_query("SELECT fecha_rep, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda FROM reportes WHERE cliente = ? ORDER BY id DESC LIMIT 1", (cliente_sel,))[0]
                 
-                correo = f"Estimado equipo,\n\nVisita de seguimiento técnico-comercial el {d[0]} ({d[4]}).\n- Pain: {d[1]}\n- Monto: ${d[2]:,.2f} MXN ({d[3]}% prob)\n- Estatus: {d[7]}\n- Siguiente Paso: {d[5]} ({d[6]})\n\nAtentamente,\nJavier Camacho"
-                markdown = f"### REPORTE EJECUTIVO\n**Cliente:** {cliente_sel}\n**Fecha:** {d[0]} ({d[4]})\n\n#### 1. Análisis\n* {d[1]}\n\n#### 2. Valoración\n* ${d[2]:,.2f} MXN\n* {d[3]}%\n\n#### 3. Siguiente Paso\n* {d[5]} ({d[6]})"
+                correo = f"Estimado equipo,\n\nVisita de seguimiento técnico-comercial el {d[0]} ({d[4]}).\n- Pain: {d[1]}\n- Monto: ${d[2]:,.2f} {d[8]} ({d[3]}% prob)\n- Estatus: {d[7]}\n- Siguiente Paso: {d[5]} ({d[6]})\n\nAtentamente,\nJavier Camacho"
+                markdown = f"### REPORTE EJECUTIVO\n**Cliente:** {cliente_sel}\n**Fecha:** {d[0]} ({d[4]})\n\n#### 1. Análisis\n* {d[1]}\n\n#### 2. Valoración\n* ${d[2]:,.2f} {d[8]}\n* {d[3]}%\n\n#### 3. Siguiente Paso\n* {d[5]} ({d[6]})"
                 
                 c1, c2 = st.columns(2)
                 c1.text_area("Formato Correo", correo, height=200)
