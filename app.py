@@ -42,11 +42,27 @@ st.markdown("""
     
     .alerta-estancado { background: #fff1f2; border-left: 5px solid #e11d48; padding: 15px; border-radius: 6px; margin-bottom: 10px; }
     .stButton>button { font-weight: 600; border-radius: 6px; }
+    .ficha-scott { background-color: #f4f6f7; padding: 20px; border-radius: 8px; border: 1px solid #d5d8dc; margin-bottom: 20px; }
+    .caja-ia { background-color: #fefefe; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CONFIGURACIÓN GEMINI API
+# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA
+# ==========================================
+def check_password():
+    if "mi_contrasena" not in st.secrets: return True
+    st.sidebar.header("🔒 Acceso Restringido")
+    pwd = st.sidebar.text_input("Contraseña", type="password")
+    if pwd == st.secrets["mi_contrasena"]: return True
+    return False
+
+if not check_password():
+    st.info("Ingresa tu contraseña corporativa en el menú lateral para acceder al SAIV.")
+    st.stop()
+
+# ==========================================
+# 3. CONFIGURACIÓN GEMINI API
 # ==========================================
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
@@ -55,7 +71,7 @@ else:
     gemini_activo = False
 
 # ==========================================
-# 3. BASE DE DATOS SQLITE (REVOPS)
+# 4. BASE DE DATOS SQLITE (MIGRACIÓN AUTOMÁTICA)
 # ==========================================
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
@@ -75,6 +91,21 @@ def init_db():
             siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL
         )
     """)
+    
+    # Migración automática para evitar el sqlite3.OperationalError
+    cursor.execute("PRAGMA table_info(reportes)")
+    columnas_reportes = [col[1] for col in cursor.fetchall()]
+    
+    if 'folio_proyecto' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN folio_proyecto TEXT")
+    if 'divisa' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN divisa TEXT DEFAULT 'MXN'")
+    if 'fecha_prox' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN fecha_prox TEXT")
+    if 'roi_calculado' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN roi_calculado REAL")
+    
+    cursor.execute("PRAGMA table_info(agenda)")
+    columnas_agenda = [col[1] for col in cursor.fetchall()]
+    if 'horario' not in columnas_agenda: cursor.execute("ALTER TABLE agenda ADD COLUMN horario TEXT DEFAULT '09:00'")
+    if 'notas_audio' not in columnas_agenda: cursor.execute("ALTER TABLE agenda ADD COLUMN notas_audio TEXT")
+
     conn.commit()
     conn.close()
 
@@ -92,7 +123,21 @@ def run_query(query, params=(), fetch=True):
     conn.close()
 
 # ==========================================
-# 4. MOTOR DE INGESTA Y SINCRONIZACIÓN (MASTER KEY)
+# 5. MEMORIA DE SESIÓN (STATE)
+# ==========================================
+if 'ai_analisis' not in st.session_state: st.session_state.ai_analisis = ""
+if 'ai_mensaje' not in st.session_state: st.session_state.ai_mensaje = ""
+if 'ai_objeciones' not in st.session_state: st.session_state.ai_objeciones = ""
+if 'ai_marketing' not in st.session_state: st.session_state.ai_marketing = ""
+if 'ai_log' not in st.session_state: st.session_state.ai_log = ""
+if 'ai_cliente' not in st.session_state: st.session_state.ai_cliente = ""
+if 'ai_folio' not in st.session_state: st.session_state.ai_folio = ""
+if 'ai_usd' not in st.session_state: st.session_state.ai_usd = 0.0
+if 'ai_mxn' not in st.session_state: st.session_state.ai_mxn = 0.0
+if 'roi_calc' not in st.session_state: st.session_state.roi_calc = ""
+
+# ==========================================
+# 6. MOTOR DE INGESTA Y SINCRONIZACIÓN (MASTER KEY)
 # ==========================================
 @st.cache_data(show_spinner=False)
 def procesar_csv(archivo):
@@ -151,8 +196,22 @@ def procesar_csv(archivo):
         df_clean['Monto_USD'] = monto_usd
         df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
 
-        # Clasificadores
-        df_clean['Pilar_Estrategico'] = df_clean.apply(lambda r: "1. Alta Gama" if any(k in str(r['Area'] + r['Descripcion']).upper() for k in ["CMM", "SCANNER", "ÓPTICO", "ZEISS"]) else ("2. Calibraciones" if "CALIBRACIÓN" in str(r['Area']).upper() else "3. Productos Generales"), axis=1)
+        df_clean['Cliente'] = df_clean['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace("?", "ó")).strip().title() if pd.notna(x) else "")
+        df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
+        df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
+
+        df_agrupado = df_clean.groupby('ID_Proyecto').agg({
+            'Cliente_Final': 'first',
+            'Area': 'first', 'Fecha_Creacion': 'first',
+            'Estatus_CRM': 'first', 'Etapa': 'first',
+            'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
+            'Monto_MXN': 'sum', 'Monto_USD': 'sum'
+        }).reset_index()
+
+        df_agrupado.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
+        df_agrupado = df_agrupado[(df_agrupado['Monto_MXN'] > 0) | (df_agrupado['Monto_USD'] > 0)]
+
+        df_agrupado['Pilar_Estrategico'] = df_agrupado.apply(lambda r: "1. Alta Gama" if any(k in str(r['Area'] + r['Descripcion']).upper() for k in ["CMM", "SCANNER", "ÓPTICO", "ZEISS"]) else ("2. Calibraciones" if "CALIBRACIÓN" in str(r['Area']).upper() else "3. Productos Generales"), axis=1)
         
         def clasificar_fase(etapa):
             e = str(etapa).upper()
@@ -162,31 +221,30 @@ def procesar_csv(archivo):
             elif 'PROPUESTA' in e: return "1. Propuesta"
             return "5. En Proceso"
             
-        df_clean['Fase_Pipeline'] = df_clean['Etapa'].apply(clasificar_fase)
-        df_clean['Fecha_Creacion_DT'] = pd.to_datetime(df_clean['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df_clean['Días_Activo'] = (pd.Timestamp.now() - df_clean['Fecha_Creacion_DT']).dt.days
+        df_agrupado['Fase_Pipeline'] = df_agrupado['Etapa'].apply(clasificar_fase)
+        df_agrupado['Fecha_Creacion_DT'] = pd.to_datetime(df_agrupado['Fecha_Creacion'], errors='coerce', dayfirst=True)
+        df_agrupado['Días_Activo'] = (pd.Timestamp.now() - df_agrupado['Fecha_Creacion_DT']).dt.days
 
-        return df_clean
+        return df_agrupado
     except Exception as e:
         st.error(f"Error procesando CSV: {e}")
         return None
 
 def sync_master_key(df_csv):
-    # Fusión SQLite -> CSV (Master Key)
-    db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes")
+    # Fusión SQLite -> CSV (Master Key) para actualizar dashboards
+    db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes WHERE folio_proyecto IS NOT NULL")
     if db_reps and not df_csv.empty:
         df_db = pd.DataFrame(db_reps, columns=['ID_Proyecto', 'Estatus_RevOps', 'Probabilidad_RevOps'])
         df_db['ID_Proyecto'] = df_db['ID_Proyecto'].astype(str)
         df_csv['ID_Proyecto'] = df_csv['ID_Proyecto'].astype(str)
         
-        # Sobrescribir con prioridad SQLite
         df_merged = pd.merge(df_csv, df_db, on='ID_Proyecto', how='left')
         df_merged['Fase_Pipeline'] = np.where(df_merged['Estatus_RevOps'].notna(), df_merged['Estatus_RevOps'], df_merged['Fase_Pipeline'])
         return df_merged
     return df_csv
 
 # ==========================================
-# INTERFAZ PRINCIPAL
+# INTERFAZ PRINCIPAL Y TABS
 # ==========================================
 st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
@@ -221,8 +279,8 @@ if archivo:
 with t_dash:
     if not df.empty:
         META_MENSUAL_USD = 80000.00
-        # Calcular Pipeline Probable (Fases calientes)
-        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', 'Cerrado Ganado'])]
+        # Pipeline Probable
+        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', 'Cerrado Ganado', 'Negociación'])]
         usd_caliente = df_caliente['Monto_USD'].sum()
         mxn_caliente = df_caliente['Monto_MXN'].sum()
         
@@ -238,7 +296,6 @@ with t_dash:
         moneda_sel = st.radio("Moneda de Análisis:", ["USD", "MXN"], horizontal=True)
         col_val = 'Monto_USD' if moneda_sel == "USD" else 'Monto_MXN'
         
-        # Pareto 80/20
         st.markdown(f"#### Análisis Pareto 80/20 por Cuentas ({moneda_sel})")
         df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
         df_pareto = df_pareto[df_pareto[col_val] > 0].sort_values(by=col_val, ascending=False).reset_index(drop=True)
@@ -269,7 +326,7 @@ with t_dash:
 with t_stalled:
     if not df.empty:
         st.subheader("Riesgo Operativo: Proyectos Inactivos (>15 días)")
-        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
+        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización', 'Propuesta', 'Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
         
         if not estancados.empty:
             for _, r in estancados.iterrows():
@@ -306,7 +363,6 @@ with t_ai:
                 
                 st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
                 
-                # Config Prompt
                 st.markdown("#### Configuración Táctica")
                 c1, c2 = st.columns(2)
                 with c1:
@@ -352,8 +408,8 @@ with t_ai:
                     st.success("Estrategia Generada")
                     st.info(f"**Análisis:**\n{st.session_state.ai_analisis}")
                     st.markdown(f"<div class='caja-ia'><b>Mensaje:</b><br>{st.session_state.ai_mensaje}</div>", unsafe_allow_html=True)
+                    st.warning(f"**Objeciones:**\n{st.session_state.ai_objeciones}")
                     
-                    # Puente a RevOps
                     if st.button("🚀 Inyectar Estrategia a RevOps"):
                         f_hoy = datetime.now().strftime("%Y-%m-%d")
                         div = "USD" if st.session_state.ai_usd > 0 else "MXN"
@@ -366,13 +422,16 @@ with t_ai:
                         def generar_docx():
                             doc = Document()
                             doc.add_heading("ESTRATEGIA KAM", 0)
+                            doc.add_paragraph(f"Cliente: {st.session_state.ai_cliente} | Folios: {st.session_state.ai_folio}")
+                            doc.add_heading("1. Análisis", 1)
                             doc.add_paragraph(st.session_state.ai_analisis)
+                            doc.add_heading("2. Mensaje / Guion", 1)
                             doc.add_paragraph(st.session_state.ai_mensaje)
                             b = io.BytesIO()
                             doc.save(b)
                             b.seek(0)
                             return b
-                        st.download_button("💾 Descargar .docx", data=generar_docx(), file_name="Estrategia.docx")
+                        st.download_button("💾 Descargar Documento .docx", data=generar_docx(), file_name=f"Estrategia_{st.session_state.ai_cliente.replace(' ','_')}.docx")
     else:
         st.info("Sube el CSV para habilitar la IA.")
 
@@ -389,7 +448,7 @@ with t_revops:
             ca1, ca2, ca3 = st.columns(3)
             with ca1:
                 f_fec = st.date_input("Fecha")
-                f_hor = st.time_input("Horario")
+                f_hor = st.time_input("Horario", value=datetime.strptime('09:00', '%H:%M').time())
                 f_cli = st.text_input("Cliente")
             with ca2:
                 f_con = st.text_input("Contacto")
@@ -402,15 +461,18 @@ with t_revops:
             f_notas = st.text_area("Transcripción Manual / Notas Rápidas", placeholder="Si no usas audio, escribe las notas aquí...")
             
             if st.form_submit_button("Guardar Cita"):
-                run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus, notas_audio) VALUES (?,?,?,?,?,?,?)",
-                          (str(f_fec), str(f_hor.strftime('%H:%M')), f_cli, f_con, f_obj, f_est, f_notas), fetch=False)
-                st.success("Guardado en SQLite.")
-                st.rerun()
+                if f_cli:
+                    run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus, notas_audio) VALUES (?,?,?,?,?,?,?)",
+                              (str(f_fec), str(f_hor.strftime('%H:%M')), f_cli, f_con, f_obj, f_est, f_notas), fetch=False)
+                    st.success("Guardado en SQLite.")
+                    st.rerun()
+                else:
+                    st.error("Ingresa el nombre del cliente.")
                 
-        ag_data = run_query("SELECT id, fecha, horario, cliente, estatus FROM agenda")
+        ag_data = run_query("SELECT id, fecha, horario, cliente, estatus FROM agenda ORDER BY fecha DESC, horario DESC")
         if ag_data: st.dataframe(pd.DataFrame(ag_data, columns=["ID", "Fecha", "Hora", "Cliente", "Estatus"]), hide_index=True)
 
-    # 2. BITÁCORA PREDICTIVA (IA)
+    # 2. BITÁCORA PREDICTIVA
     with t_bit:
         st.subheader("Bitácora MEDDPICC (Probabilidad Automática)")
         with st.form("f_bitacora"):
@@ -419,7 +481,7 @@ with t_revops:
                 r_fol = st.text_input("Folio (ID Proyecto)")
                 r_cli = st.text_input("Cliente")
                 r_mon = st.number_input("Monto", min_value=0.0, step=1000.0)
-                r_div = st.selectbox("Divisa", ["MXN", "USD"])
+                r_div = st.selectbox("Divisa", ["USD", "MXN"])
             with cb2:
                 r_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
                 r_est = st.selectbox("Estatus", ["Propuesta", "Cotización", "Negociación", "Esperando PO", "Cerrado Ganado"])
@@ -434,24 +496,26 @@ with t_revops:
                 r_pain = st.text_area("Descripción del Pain")
                 
             if st.form_submit_button("Calcular % y Guardar"):
-                # Cálculo de IA predictiva (Hardcoded rules)
-                score = 0
-                if chk1: score += 25
-                if chk2: score += 25
-                if chk3: score += 25
-                if chk4: score += 15
-                if r_est == "Esperando PO": score += 10 # Bono
-                
-                prob = 0
-                if score >= 90: prob = 90
-                elif score >= 75: prob = 75
-                elif score >= 50: prob = 50
-                elif score >= 25: prob = 25
-                
-                run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                          (r_fol, r_cli, r_pain, r_mon, prob, r_sem, r_div, r_paso, str(r_fprox), r_est), fetch=False)
-                st.success(f"Guardado. Probabilidad predictiva calculada: {prob}%")
-                st.rerun()
+                if r_fol and r_cli:
+                    score = 0
+                    if chk1: score += 25
+                    if chk2: score += 25
+                    if chk3: score += 25
+                    if chk4: score += 15
+                    if r_est in ["Esperando PO", "Cerrado Ganado"]: score += 10
+                    
+                    prob = 0
+                    if score >= 90: prob = 90
+                    elif score >= 75: prob = 75
+                    elif score >= 50: prob = 50
+                    elif score >= 25: prob = 25
+                    
+                    run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                              (r_fol, r_cli, r_pain, r_mon, prob, r_sem, r_div, r_paso, str(r_fprox), r_est), fetch=False)
+                    st.success(f"Guardado. Probabilidad predictiva: {prob}%")
+                    st.rerun()
+                else:
+                    st.error("Ingresa el Folio y el Cliente.")
 
     # 3. CALCULADORA ROI
     with t_roi:
@@ -464,17 +528,17 @@ with t_revops:
         with cr2:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Calcular Retorno Financiero", type="primary"):
-                ahorro_anual = (c_hora * 2) * rechazo * 52 # formula simulada
+                ahorro_anual = (c_hora * 2) * rechazo * 52
                 meses_roi = inv / (ahorro_anual / 12) if ahorro_anual > 0 else 999
-                st.session_state.roi_calc = f"Ahorro: ${ahorro_anual:,.2f} / ROI en {meses_roi:.1f} meses"
+                st.session_state.roi_calc = f"Ahorro anual: ${ahorro_anual:,.2f} USD | Recuperación en {meses_roi:.1f} meses"
                 st.success(st.session_state.roi_calc)
 
     # 4. FORECAST Y AUTOMATIZACIÓN
     with t_fc:
         st.subheader("Forecast Real (Pipeline Ponderado)")
-        reps = run_query("SELECT id, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
+        reps = run_query("SELECT id, folio_proyecto, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
         if reps:
-            df_fc = pd.DataFrame(reps, columns=["ID", "Cliente", "Monto", "Prob(%)", "Semana", "Divisa", "Estatus"])
+            df_fc = pd.DataFrame(reps, columns=["ID", "Folio", "Cliente", "Monto", "Prob(%)", "Semana", "Divisa", "Estatus"])
             df_fc['Forecast_Real'] = df_fc['Monto'] * (df_fc['Prob(%)'] / 100.0)
             
             c_f1, c_f2 = st.columns(2)
@@ -486,9 +550,9 @@ with t_revops:
             
             st.divider()
             st.markdown("#### Generador Omnicanal")
-            id_sel = st.selectbox("Seleccionar Reporte a Enviar", df_fc['ID'].tolist())
+            id_sel = st.selectbox("Seleccionar Reporte a Enviar", df_fc['Folio'].astype(str) + " - " + df_fc['Cliente'])
             if st.button("📧 Enviar por Correo a Gerencia"):
-                st.toast(f"Reporte {id_sel} enviado exitosamente a la Gerencia.", icon="✅")
+                st.toast(f"Reporte enviado exitosamente a la Gerencia.", icon="✅")
                 st.success("Indicadores consolidados en formato Markdown y enviados.")
         else:
             st.info("Sin registros en SQLite para calcular Forecast.")
