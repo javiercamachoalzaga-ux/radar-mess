@@ -34,7 +34,6 @@ else:
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
     cursor = conn.cursor()
-    # Tabla Agenda
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agenda (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,13 +42,11 @@ def init_db():
         )
     """)
     
-    # Migración Agenda (Horario)
     cursor.execute("PRAGMA table_info(agenda)")
     columnas_agenda = [col[1] for col in cursor.fetchall()]
     if 'horario' not in columnas_agenda:
         cursor.execute("ALTER TABLE agenda ADD COLUMN horario TEXT DEFAULT '09:00'")
         
-    # Tabla Reportes (Bitácora Post-Visita)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +57,6 @@ def init_db():
         )
     """)
     
-    # Migración Reportes (Moneda)
     cursor.execute("PRAGMA table_info(reportes)")
     columnas_reportes = [col[1] for col in cursor.fetchall()]
     if 'moneda' not in columnas_reportes:
@@ -95,6 +91,9 @@ if 'tactica_cliente' not in st.session_state: st.session_state.tactica_cliente =
 if 'tactica_id' not in st.session_state: st.session_state.tactica_id = ""
 if 'tactica_equipo' not in st.session_state: st.session_state.tactica_equipo = ""
 if 'tactica_monto' not in st.session_state: st.session_state.tactica_monto = ""
+# Variables puente para auto-llenado
+if 'monto_usd_ia' not in st.session_state: st.session_state.monto_usd_ia = 0.0
+if 'monto_mxn_ia' not in st.session_state: st.session_state.monto_mxn_ia = 0.0
 
 # --- DISEÑO ESTÉTICO CORPORATIVO ---
 st.markdown("""
@@ -198,7 +197,6 @@ if archivo_cargado is not None:
             except: 
                 return 0.0
 
-        # --- MOTOR EXTRACCIÓN DE MONEDAS ---
         monto_mxn = np.zeros(len(df_data))
         monto_usd = np.zeros(len(df_data))
         col_moneda = buscar_col(["MONEDA", "DIVISA"])
@@ -212,7 +210,6 @@ if archivo_cargado is not None:
                     val_raw = df_data[col].iloc[i]
                     val_str = str(val_raw).upper()
                     num = extraer_numero(val_raw)
-                    
                     moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
                     
                     if is_col_usd or 'USD' in val_str or 'US$' in val_str or 'USD' in moneda_fila or 'US$' in moneda_fila or 'DÓLA' in moneda_fila or 'DOLA' in moneda_fila:
@@ -223,7 +220,6 @@ if archivo_cargado is not None:
         df_clean['Monto_MXN'] = monto_mxn
         df_clean['Monto_USD'] = monto_usd
 
-        # --- AHORA SÍ, FILTRAMOS LAS FILAS VACÍAS ---
         df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
 
         def sanear_y_limpiar(texto):
@@ -236,7 +232,6 @@ if archivo_cargado is not None:
         df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
         df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
 
-        # AGRUPACIÓN POR PROYECTO
         df = df_clean.groupby('ID_Proyecto').agg({
             'Cliente_Final': 'first',
             'Cotizacion': lambda x: ' / '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
@@ -247,7 +242,6 @@ if archivo_cargado is not None:
         }).reset_index()
 
         df.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
-        # Filtramos para mostrar solo proyectos con valor monetario
         df = df[(df['Monto_MXN'] > 0) | (df['Monto_USD'] > 0)]
         
         filtro_estatus = df['Estatus'].str.contains('PROCESO', case=False, na=False)
@@ -387,6 +381,10 @@ if archivo_cargado is not None:
                     ids_combinados = ", ".join(df_seleccion['ID_Proyecto'].astype(str).tolist())
                     es_paquete = len(df_seleccion) > 1
                     
+                    # Guardar montos en sesión para el puente a RevOps
+                    st.session_state.monto_usd_ia = monto_total_usd
+                    st.session_state.monto_mxn_ia = monto_total_mxn
+                    
                     st.markdown(f"""
                     <div class="ficha-scott">
                         <h4>{cliente_seleccionado} (Folios: {ids_combinados})</h4>
@@ -515,6 +513,28 @@ if archivo_cargado is not None:
                         
                         st.markdown("#### 📋 Bitácora CRM (SCOTT)")
                         st.success(st.session_state.tactica_bitacora)
+                        
+                        # --- PUENTE DIRECTO A REVOPS (INYECCIÓN DE FORECAST) ---
+                        st.divider()
+                        st.markdown("### 🚀 Enviar al Forecast (RevOps)")
+                        st.caption("Inyecta esta estrategia directamente a tu base de datos RevOps sin salir de esta pantalla.")
+                        with st.form("form_ia_to_revops"):
+                            col_f1, col_f2, col_f3 = st.columns(3)
+                            with col_f1:
+                                f_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
+                                f_prob = st.slider("Probabilidad de Cierre (%)", 0, 100, 50, 5)
+                            with col_f2:
+                                f_est = st.selectbox("Estatus de la Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
+                                f_moneda = st.selectbox("Divisa del Proyecto", ["USD", "MXN"], index=0 if st.session_state.monto_usd_ia > 0 else 1)
+                            with col_f3:
+                                f_monto = st.number_input("Monto a Reportar", value=float(st.session_state.monto_usd_ia if st.session_state.monto_usd_ia > 0 else st.session_state.monto_mxn_ia), step=1000.0)
+                                f_paso = st.text_input("Siguiente Paso Inmediato", value=sub_opcion)
+                            
+                            if st.form_submit_button("💾 Guardar en Bitácora y Actualizar Forecast"):
+                                fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+                                run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                          (fecha_hoy, st.session_state.tactica_cliente, "Estrategia IA", st.session_state.tactica_bitacora, f_monto, f_prob, f_sem, f_paso, fecha_hoy, f_est, f_moneda), fetch=False)
+                                st.success("¡Estrategia inyectada a la base de datos! Ve a la Estación 4 para ver tu Forecast actualizado.")
                             
                         if docx_disponible:
                             st.divider()
@@ -589,7 +609,6 @@ with tab_revops:
         if visitas:
             st.dataframe(pd.DataFrame(visitas, columns=["ID", "Fecha", "Horario", "Cliente", "Contacto", "Objetivo", "Estatus"]), use_container_width=True, hide_index=True)
             
-            # --- PANEL DE EDICIÓN / ELIMINACIÓN (AGENDA) ---
             with st.expander("✏️ Editar o Eliminar Visita Registrada"):
                 opc_visitas = {f"ID {v[0]} - {v[3]} ({v[1]} a las {v[2]})": v for v in visitas}
                 sel_v = st.selectbox("Selecciona el registro a modificar:", list(opc_visitas.keys()))
@@ -625,19 +644,26 @@ with tab_revops:
     # --- SUBMÓDULO 2: BITÁCORA ---
     with t_bitacora:
         st.subheader("Bitácora Comercial Post-Visita")
-        with st.form("form_reporte", clear_on_submit=True):
+        st.caption("Si vienes de la Estación 3, los datos del cliente se autocompletarán.")
+        with st.form("form_reporte", clear_on_submit=False):
+            # Lógica de auto-llenado desde la IA
+            def_cliente = st.session_state.get('tactica_cliente', '')
+            def_pain = st.session_state.get('tactica_bitacora', '')
+            es_usd = st.session_state.get('monto_usd_ia', 0) > 0
+            def_monto = st.session_state.get('monto_usd_ia', 0) if es_usd else st.session_state.get('monto_mxn_ia', 0)
+            
             c1, c2, c3 = st.columns(3)
             with c1:
                 r_fecha = st.date_input("Fecha del Reporte")
-                r_cliente = st.text_input("Cliente Visitado")
+                r_cliente = st.text_input("Cliente Visitado", value=def_cliente)
                 r_semana = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
             with c2:
-                r_moneda = st.selectbox("Moneda", ["MXN", "USD"])
-                r_monto = st.number_input("Monto Estimado", min_value=0.0, step=1000.0, format="%.2f")
+                r_moneda = st.selectbox("Moneda", ["MXN", "USD"], index=1 if es_usd else 0)
+                r_monto = st.number_input("Monto Estimado", min_value=0.0, step=1000.0, value=float(def_monto), format="%.2f")
                 r_prob = st.slider("Probabilidad de Cierre (%)", 0, 100, 50, 5)
             with c3:
                 r_estatus = st.selectbox("Estatus de Oportunidad", ["Prospecto", "Cotizado", "Negociación", "Cerrado Ganado"])
-                r_pain = st.text_input("Dolores (Pain)", placeholder="Ej. Paros de máquina...")
+                r_pain = st.text_area("Dolores (Pain) / Resumen", value=def_pain, placeholder="Ej. Paros de máquina...")
                 r_paso = st.text_input("Siguiente Paso")
                 r_prox_fecha = st.date_input("Próxima Fecha")
             
@@ -645,7 +671,7 @@ with tab_revops:
                 if r_cliente:
                     run_query("INSERT INTO reportes (fecha_rep, cliente, resumen, pain, monto, probabilidad, semana, siguiente_paso, proxima_fecha, estatus, moneda) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                               (str(r_fecha), r_cliente, "Seguimiento", r_pain, r_monto, r_prob, r_semana, r_paso, str(r_prox_fecha), r_estatus, r_moneda), fetch=False)
-                    st.success("Bitácora guardada.")
+                    st.success("Bitácora guardada en el Forecast.")
                     st.rerun()
                 else:
                     st.error("Ingresa el cliente.")
@@ -654,12 +680,9 @@ with tab_revops:
         reportes_db = run_query("SELECT id, cliente, monto, probabilidad, semana, estatus, proxima_fecha, fecha_rep, pain, siguiente_paso, moneda FROM reportes ORDER BY fecha_rep DESC")
         if reportes_db:
             df_rep = pd.DataFrame(reportes_db, columns=["ID", "Cliente", "Monto", "Prob(%)", "Semana", "Estatus", "Siguiente", "Fecha Rep", "Pain", "Siguiente Paso", "Moneda"])
-            # Formatear la columna de monto para que se vea limpio con su divisa
             df_rep["Monto"] = df_rep.apply(lambda x: f"${x['Monto']:,.2f} {x['Moneda']}", axis=1)
-            # Quitar columnas extra para la vista rápida
             st.dataframe(df_rep.drop(columns=["Fecha Rep", "Pain", "Siguiente Paso", "Moneda"]), use_container_width=True, hide_index=True)
             
-            # --- PANEL DE EDICIÓN / ELIMINACIÓN (BITÁCORA) ---
             with st.expander("✏️ Editar o Eliminar Reporte Guardado"):
                 opc_reps = {f"ID {r[0]} - {r[1]} (${r[2]} {r[10]})": r for r in reportes_db}
                 sel_r = st.selectbox("Selecciona el reporte a modificar:", list(opc_reps.keys()))
@@ -721,7 +744,6 @@ with tab_revops:
             
             st.markdown("#### Desglose por Semana y Moneda")
             df_group = df_fc.groupby(["Semana", "Moneda"]).agg(Pipeline_Total=("Monto", "sum"), Forecast=("Forecast", "sum"), Oportunidades=("Monto", "count")).reset_index()
-            # Formatear el DataFrame visualmente
             df_group["Pipeline_Total"] = df_group.apply(lambda x: f"${x['Pipeline_Total']:,.2f}", axis=1)
             df_group["Forecast"] = df_group.apply(lambda x: f"${x['Forecast']:,.2f}", axis=1)
             st.dataframe(df_group, use_container_width=True, hide_index=True)
