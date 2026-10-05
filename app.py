@@ -25,12 +25,10 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
     html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
     
-    /* Ocultar menú y footer por defecto */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Variables de color corporativo */
     :root { --mess-blue: #003a70; --mess-dark: #2c3e50; --mess-light: #f8fafc; }
     
     .titulo-radar { font-size: 36px; font-weight: 900; color: var(--mess-blue); margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
@@ -53,7 +51,7 @@ st.markdown("""
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("🔒 Acceso Restringido")
-    pwd = st.sidebar.text_input("Contraseña", type="password")
+    pwd = st.sidebar.text_input("Contraseña corporativa", type="password")
     if pwd == st.secrets["mi_contrasena"]: return True
     return False
 
@@ -92,7 +90,6 @@ def init_db():
         )
     """)
     
-    # Migración automática para evitar el sqlite3.OperationalError
     cursor.execute("PRAGMA table_info(reportes)")
     columnas_reportes = [col[1] for col in cursor.fetchall()]
     
@@ -137,9 +134,8 @@ if 'ai_mxn' not in st.session_state: st.session_state.ai_mxn = 0.0
 if 'roi_calc' not in st.session_state: st.session_state.roi_calc = ""
 
 # ==========================================
-# 6. MOTOR DE INGESTA Y SINCRONIZACIÓN (MASTER KEY)
+# 6. MOTOR DE INGESTA (SIN CACHÉ PARA EVITAR BLOQUEOS)
 # ==========================================
-@st.cache_data(show_spinner=False)
 def procesar_csv(archivo):
     try:
         df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
@@ -211,15 +207,29 @@ def procesar_csv(archivo):
         df_agrupado.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         df_agrupado = df_agrupado[(df_agrupado['Monto_MXN'] > 0) | (df_agrupado['Monto_USD'] > 0)]
 
-        df_agrupado['Pilar_Estrategico'] = df_agrupado.apply(lambda r: "1. Alta Gama" if any(k in str(r['Area'] + r['Descripcion']).upper() for k in ["CMM", "SCANNER", "ÓPTICO", "ZEISS"]) else ("2. Calibraciones" if "CALIBRACIÓN" in str(r['Area']).upper() else "3. Productos Generales"), axis=1)
+        # Filtramos para descartar basura que no nos interesa
+        filtro_estatus = df_agrupado['Estatus_CRM'].str.contains('PROCESO', case=False, na=False)
+        filtro_etapa = df_agrupado['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
+        df_agrupado = df_agrupado[filtro_estatus | filtro_etapa].copy()
+
+        # CLASIFICACIÓN DE PILARES (Corregida la falta de acento en Calibración)
+        def clasificar_pilar(row):
+            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
+            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "OPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
+            elif any(k in texto for k in ["CALIBRACIÓN", "CALIBRACION", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
+            else: return "3. Productos Generales"
+            
+        df_agrupado['Pilar_Estrategico'] = df_agrupado.apply(clasificar_pilar, axis=1)
         
+        # CLASIFICACIÓN DE FASES HOMOLOGADA A REVOPS
         def clasificar_fase(etapa):
             e = str(etapa).upper()
-            if any(k in e for k in ['PO', 'ORDEN']): return "4. Esperando PO"
+            if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
             elif 'NEGOCIACI' in e: return "3. Negociación"
             elif 'COTIZACI' in e: return "2. Cotización"
             elif 'PROPUESTA' in e: return "1. Propuesta"
-            return "5. En Proceso"
+            elif 'GANAD' in e or 'CERRAD' in e: return "5. Cerrado Ganado"
+            else: return "1. Propuesta"
             
         df_agrupado['Fase_Pipeline'] = df_agrupado['Etapa'].apply(clasificar_fase)
         df_agrupado['Fecha_Creacion_DT'] = pd.to_datetime(df_agrupado['Fecha_Creacion'], errors='coerce', dayfirst=True)
@@ -231,10 +241,11 @@ def procesar_csv(archivo):
         return None
 
 def sync_master_key(df_csv):
-    # Fusión SQLite -> CSV (Master Key) para actualizar dashboards
+    # Fusión SQLite -> CSV (Master Key). Elimina duplicados para evitar multiplicar filas
     db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes WHERE folio_proyecto IS NOT NULL")
     if db_reps and not df_csv.empty:
         df_db = pd.DataFrame(db_reps, columns=['ID_Proyecto', 'Estatus_RevOps', 'Probabilidad_RevOps'])
+        df_db = df_db.drop_duplicates(subset=['ID_Proyecto'], keep='last') # Solo tomamos el estatus más reciente
         df_db['ID_Proyecto'] = df_db['ID_Proyecto'].astype(str)
         df_csv['ID_Proyecto'] = df_csv['ID_Proyecto'].astype(str)
         
@@ -261,12 +272,12 @@ df = pd.DataFrame()
 
 if archivo:
     df_bruto = procesar_csv(archivo)
-    if df_bruto is not None:
+    if df_bruto is not None and not df_bruto.empty:
         df = sync_master_key(df_bruto)
         # Filtros
         st.sidebar.divider()
         st.sidebar.header("Filtros Directivos")
-        f_pilar = st.sidebar.multiselect("Pilar Estratégico:", df['Pilar_Estrategico'].unique(), default=df['Pilar_Estrategico'].unique())
+        f_pilar = st.sidebar.multiselect("Pilar Estratégico:", sorted(df['Pilar_Estrategico'].unique()), default=sorted(df['Pilar_Estrategico'].unique()))
         f_buscar = st.sidebar.text_input("Buscar Folio o Cliente:")
         if f_buscar:
             df = df[(df['ID_Proyecto'].str.contains(f_buscar, case=False, na=False)) | (df['Cliente'].str.contains(f_buscar, case=False, na=False))]
@@ -279,8 +290,8 @@ if archivo:
 with t_dash:
     if not df.empty:
         META_MENSUAL_USD = 80000.00
-        # Pipeline Probable
-        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', 'Cerrado Ganado', 'Negociación'])]
+        
+        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', '5. Cerrado Ganado'])]
         usd_caliente = df_caliente['Monto_USD'].sum()
         mxn_caliente = df_caliente['Monto_MXN'].sum()
         
@@ -326,7 +337,7 @@ with t_dash:
 with t_stalled:
     if not df.empty:
         st.subheader("Riesgo Operativo: Proyectos Inactivos (>15 días)")
-        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización', 'Propuesta', 'Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
+        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Días_Activo', ascending=False)
         
         if not estancados.empty:
             for _, r in estancados.iterrows():
@@ -415,7 +426,7 @@ with t_ai:
                         div = "USD" if st.session_state.ai_usd > 0 else "MXN"
                         mto = st.session_state.ai_usd if div == "USD" else st.session_state.ai_mxn
                         run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                  (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal, f_hoy, "Negociación"), fetch=False)
+                                  (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal, f_hoy, "3. Negociación"), fetch=False)
                         st.success("¡Inyectado a SQLite! Revisa la Estación 4.")
                         
                     if docx_disponible:
@@ -458,7 +469,7 @@ with t_revops:
             
             st.markdown("**Voice-to-CRM (Simulado)**")
             audio = st.audio_input("Grabar nota post-visita (opcional)")
-            f_notas = st.text_area("Transcripción Manual / Notas Rápidas", placeholder="Si no usas audio, escribe las notas aquí...")
+            f_notas = st.text_area("Transcripción Manual / Notas Rápidas", placeholder="Escribe las notas aquí...")
             
             if st.form_submit_button("Guardar Cita"):
                 if f_cli:
@@ -484,7 +495,8 @@ with t_revops:
                 r_div = st.selectbox("Divisa", ["USD", "MXN"])
             with cb2:
                 r_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
-                r_est = st.selectbox("Estatus", ["Propuesta", "Cotización", "Negociación", "Esperando PO", "Cerrado Ganado"])
+                # Homologado para que empate con Fase_Pipeline
+                r_est = st.selectbox("Estatus", ["1. Propuesta", "2. Cotización", "3. Negociación", "4. Esperando PO", "5. Cerrado Ganado"])
                 r_paso = st.text_input("Siguiente Paso")
                 r_fprox = st.date_input("Fecha Próx.")
             with cb3:
@@ -502,7 +514,7 @@ with t_revops:
                     if chk2: score += 25
                     if chk3: score += 25
                     if chk4: score += 15
-                    if r_est in ["Esperando PO", "Cerrado Ganado"]: score += 10
+                    if r_est in ["4. Esperando PO", "5. Cerrado Ganado"]: score += 10
                     
                     prob = 0
                     if score >= 90: prob = 90
