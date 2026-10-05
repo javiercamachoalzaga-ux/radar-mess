@@ -18,7 +18,6 @@ except ImportError:
 # ==========================================
 # 1. CONFIGURACIÓN DE PÁGINA Y UI/UX (CSS)
 # ==========================================
-# Se actualiza el page_icon al logo circular que ya tienes
 st.set_page_config(page_title="SAIV | Radar Comercial MESS", page_icon="logo mess 1.jpg", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -48,17 +47,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 1.1 Logo en la barra lateral superior
 st.sidebar.image("logo mess 2.jpg", use_container_width=True)
 
 # ==========================================
-# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA (CON BOTÓN)
+# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA
 # ==========================================
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("🔒 Acceso Restringido")
     
-    # Agregamos un formulario con un botón explícito para no depender del Enter
     with st.sidebar.form("login_form"):
         pwd = st.text_input("Contraseña corporativa", type="password")
         btn_acceder = st.form_submit_button("Acceder al SAIV")
@@ -148,7 +145,7 @@ if 'ai_mxn' not in st.session_state: st.session_state.ai_mxn = 0.0
 if 'roi_calc' not in st.session_state: st.session_state.roi_calc = ""
 
 # ==========================================
-# 6. MOTOR DE INGESTA (SIN CACHÉ PARA EVITAR BLOQUEOS)
+# 6. MOTOR DE INGESTA
 # ==========================================
 def procesar_csv(archivo):
     try:
@@ -221,22 +218,6 @@ def procesar_csv(archivo):
         df_agrupado.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         df_agrupado = df_agrupado[(df_agrupado['Monto_MXN'] > 0) | (df_agrupado['Monto_USD'] > 0)]
 
-        # Filtramos para descartar basura
         filtro_estatus = df_agrupado['Estatus_CRM'].str.contains('PROCESO', case=False, na=False)
         filtro_etapa = df_agrupado['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
-        df_agrupado = df_agrupado[filtro_estatus | filtro_etapa].copy()
-
-        # Clasificación
-        def clasificar_pilar(row):
-            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
-            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "OPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
-            elif any(k in texto for k in ["CALIBRACIÓN", "CALIBRACION", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
-            else: return "3. Productos Generales"
-            
-        df_agrupado['Pilar_Estrategico'] = df_agrupado.apply(clasificar_pilar, axis=1)
-        
-        def clasificar_fase(etapa):
-            e = str(etapa).upper()
-            if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
-            elif 'NEGOCIACI' in e: return "3. Negociación"
-            elif 'COTIZACI' in e: return "2. Cotización"
+        df_
