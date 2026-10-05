@@ -48,21 +48,29 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 1.1 Logo en la barra lateral superior (USANDO LOGO MESS 2.JPG)
+# 1.1 Logo en la barra lateral superior
 st.sidebar.image("logo mess 2.jpg", use_container_width=True)
 
 # ==========================================
-# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA
+# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA (CON BOTÓN)
 # ==========================================
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("🔒 Acceso Restringido")
-    pwd = st.sidebar.text_input("Contraseña corporativa", type="password")
-    if pwd == st.secrets["mi_contrasena"]: return True
+    
+    # Agregamos un formulario con un botón explícito para no depender del Enter
+    with st.sidebar.form("login_form"):
+        pwd = st.text_input("Contraseña corporativa", type="password")
+        btn_acceder = st.form_submit_button("Acceder al SAIV")
+        
+    if pwd == st.secrets["mi_contrasena"]: 
+        return True
+    elif btn_acceder and pwd != st.secrets["mi_contrasena"]:
+        st.sidebar.error("Contraseña incorrecta. Intenta de nuevo.")
+        
     return False
 
 if not check_password():
-    st.info("Ingresa tu contraseña corporativa en el menú lateral para acceder al SAIV.")
     st.stop()
 
 # ==========================================
@@ -126,4 +134,109 @@ def run_query(query, params=(), fetch=True):
     conn.close()
 
 # ==========================================
-# 5.
+# 5. MEMORIA DE SESIÓN (STATE)
+# ==========================================
+if 'ai_analisis' not in st.session_state: st.session_state.ai_analisis = ""
+if 'ai_mensaje' not in st.session_state: st.session_state.ai_mensaje = ""
+if 'ai_objeciones' not in st.session_state: st.session_state.ai_objeciones = ""
+if 'ai_marketing' not in st.session_state: st.session_state.ai_marketing = ""
+if 'ai_log' not in st.session_state: st.session_state.ai_log = ""
+if 'ai_cliente' not in st.session_state: st.session_state.ai_cliente = ""
+if 'ai_folio' not in st.session_state: st.session_state.ai_folio = ""
+if 'ai_usd' not in st.session_state: st.session_state.ai_usd = 0.0
+if 'ai_mxn' not in st.session_state: st.session_state.ai_mxn = 0.0
+if 'roi_calc' not in st.session_state: st.session_state.roi_calc = ""
+
+# ==========================================
+# 6. MOTOR DE INGESTA (SIN CACHÉ PARA EVITAR BLOQUEOS)
+# ==========================================
+def procesar_csv(archivo):
+    try:
+        df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
+        header_idx = -1
+        for idx, row in df_raw.iterrows():
+            row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
+            if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
+                header_idx = idx
+                break
+        
+        if header_idx == -1: return None
+        
+        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
+        df_data = df_raw.iloc[header_idx+1:].dropna(axis=1, how='all')
+        df_data.columns = headers[:len(df_data.columns)]
+
+        def buscar_col(claves):
+            for clave in claves:
+                for col in df_data.columns:
+                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
+                        return df_data[col].copy()
+            return pd.Series([None] * len(df_data))
+
+        df_clean = pd.DataFrame()
+        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
+        df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
+        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
+        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
+        df_clean['Estatus_CRM'] = buscar_col(["ESTATUS"])
+        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
+        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+
+        def extr_num(val):
+            v = re.sub(r'[^\d.]', '', str(val).upper().replace(',', ''))
+            return float(v) if v else 0.0
+
+        monto_mxn, monto_usd = np.zeros(len(df_data)), np.zeros(len(df_data))
+        col_moneda = buscar_col(["MONEDA", "DIVISA"])
+        
+        for col in df_data.columns:
+            c_name = str(col).upper().strip()
+            if any(k in c_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
+                is_usd = 'USD' in c_name or 'US$' in c_name
+                for i in range(len(df_data)):
+                    val = df_data[col].iloc[i]
+                    num = extr_num(val)
+                    mon_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
+                    if is_usd or 'USD' in str(val).upper() or 'US$' in str(val).upper() or 'USD' in mon_fila:
+                        monto_usd[i] += num
+                    else:
+                        monto_mxn[i] += num
+                        
+        df_clean['Monto_MXN'] = monto_mxn
+        df_clean['Monto_USD'] = monto_usd
+        df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
+
+        df_clean['Cliente'] = df_clean['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace("?", "ó")).strip().title() if pd.notna(x) else "")
+        df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
+        df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
+
+        df_agrupado = df_clean.groupby('ID_Proyecto').agg({
+            'Cliente_Final': 'first',
+            'Area': 'first', 'Fecha_Creacion': 'first',
+            'Estatus_CRM': 'first', 'Etapa': 'first',
+            'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
+            'Monto_MXN': 'sum', 'Monto_USD': 'sum'
+        }).reset_index()
+
+        df_agrupado.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
+        df_agrupado = df_agrupado[(df_agrupado['Monto_MXN'] > 0) | (df_agrupado['Monto_USD'] > 0)]
+
+        # Filtramos para descartar basura
+        filtro_estatus = df_agrupado['Estatus_CRM'].str.contains('PROCESO', case=False, na=False)
+        filtro_etapa = df_agrupado['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
+        df_agrupado = df_agrupado[filtro_estatus | filtro_etapa].copy()
+
+        # Clasificación
+        def clasificar_pilar(row):
+            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
+            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "OPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
+            elif any(k in texto for k in ["CALIBRACIÓN", "CALIBRACION", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
+            else: return "3. Productos Generales"
+            
+        df_agrupado['Pilar_Estrategico'] = df_agrupado.apply(clasificar_pilar, axis=1)
+        
+        def clasificar_fase(etapa):
+            e = str(etapa).upper()
+            if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
+            elif 'NEGOCIACI' in e: return "3. Negociación"
+            elif 'COTIZACI' in e: return "2. Cotización"
