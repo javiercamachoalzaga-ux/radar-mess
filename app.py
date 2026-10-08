@@ -7,6 +7,7 @@ import re
 import io
 import sqlite3
 import google.generativeai as genai
+import urllib.parse
 
 # Intento de importar docx
 try:
@@ -18,7 +19,6 @@ except ImportError:
 # ==========================================
 # 1. CONFIGURACIÓN DE PÁGINA Y UI/UX (CSS)
 # ==========================================
-# Se actualiza el page_icon al logo circular que ya tienes
 st.set_page_config(page_title="SAIV | Radar Comercial MESS", page_icon="logo mess 1.jpg", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -26,12 +26,10 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
     html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
     
-    /* Ocultar menú y footer por defecto */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Variables de color corporativo */
     :root { --mess-blue: #003a70; --mess-dark: #2c3e50; --mess-light: #f8fafc; }
     
     .titulo-radar { font-size: 36px; font-weight: 900; color: var(--mess-blue); margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
@@ -43,22 +41,23 @@ st.markdown("""
     
     .alerta-estancado { background: #fff1f2; border-left: 5px solid #e11d48; padding: 15px; border-radius: 6px; margin-bottom: 10px; }
     .stButton>button { font-weight: 600; border-radius: 6px; }
-    .ficha-scott { background-color: #f4f6f7; padding: 20px; border-radius: 8px; border: 1px solid #d5d8dc; margin-bottom: 20px; }
     .caja-ia { background-color: #fefefe; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
+    
+    /* Estilo para botón de Google Calendar */
+    .btn-google { background-color: #4285F4; color: white !important; text-decoration: none; padding: 10px 15px; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 10px; text-align: center; }
+    .btn-google:hover { background-color: #357ae8; }
     </style>
     """, unsafe_allow_html=True)
 
-# 1.1 Logo en la barra lateral superior
 st.sidebar.image("logo mess 2.jpg", use_container_width=True)
 
 # ==========================================
-# 2. SEGURIDAD: VERIFICACIÓN DE CONTRASEÑA (CON BOTÓN)
+# 2. SEGURIDAD Y RESCATE MÓVIL
 # ==========================================
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     st.sidebar.header("🔒 Acceso Restringido")
     
-    # Agregamos un formulario con un botón explícito para no depender del Enter
     with st.sidebar.form("login_form"):
         pwd = st.text_input("Contraseña corporativa", type="password")
         btn_acceder = st.form_submit_button("Acceder al SAIV")
@@ -71,6 +70,8 @@ def check_password():
     return False
 
 if not check_password():
+    # Mensaje salvavidas para usuarios de celular
+    st.info("👈 **ATENCIÓN MÓVIL:** Toca la flecha o el menú en la esquina superior izquierda de tu pantalla para ingresar la contraseña.")
     st.stop()
 
 # ==========================================
@@ -83,18 +84,11 @@ else:
     gemini_activo = False
 
 # ==========================================
-# 4. BASE DE DATOS SQLITE (MIGRACIÓN AUTOMÁTICA)
+# 4. BASE DE DATOS SQLITE (SOLO REPORTES)
 # ==========================================
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS agenda (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT, horario TEXT, cliente TEXT, contacto TEXT,
-            objetivo TEXT, estatus TEXT, notas_audio TEXT
-        )
-    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +97,6 @@ def init_db():
             siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL
         )
     """)
-    
     cursor.execute("PRAGMA table_info(reportes)")
     columnas_reportes = [col[1] for col in cursor.fetchall()]
     
@@ -111,11 +104,6 @@ def init_db():
     if 'divisa' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN divisa TEXT DEFAULT 'MXN'")
     if 'fecha_prox' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN fecha_prox TEXT")
     if 'roi_calculado' not in columnas_reportes: cursor.execute("ALTER TABLE reportes ADD COLUMN roi_calculado REAL")
-    
-    cursor.execute("PRAGMA table_info(agenda)")
-    columnas_agenda = [col[1] for col in cursor.fetchall()]
-    if 'horario' not in columnas_agenda: cursor.execute("ALTER TABLE agenda ADD COLUMN horario TEXT DEFAULT '09:00'")
-    if 'notas_audio' not in columnas_agenda: cursor.execute("ALTER TABLE agenda ADD COLUMN notas_audio TEXT")
 
     conn.commit()
     conn.close()
@@ -148,7 +136,7 @@ if 'ai_mxn' not in st.session_state: st.session_state.ai_mxn = 0.0
 if 'roi_calc' not in st.session_state: st.session_state.roi_calc = ""
 
 # ==========================================
-# 6. MOTOR DE INGESTA (SIN CACHÉ PARA EVITAR BLOQUEOS)
+# 6. MOTOR DE INGESTA
 # ==========================================
 def procesar_csv(archivo):
     try:
@@ -221,12 +209,10 @@ def procesar_csv(archivo):
         df_agrupado.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         df_agrupado = df_agrupado[(df_agrupado['Monto_MXN'] > 0) | (df_agrupado['Monto_USD'] > 0)]
 
-        # Filtramos para descartar basura
         filtro_estatus = df_agrupado['Estatus_CRM'].str.contains('PROCESO', case=False, na=False)
         filtro_etapa = df_agrupado['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
         df_agrupado = df_agrupado[filtro_estatus | filtro_etapa].copy()
 
-        # Clasificación
         def clasificar_pilar(row):
             texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
             if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "OPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
@@ -269,11 +255,9 @@ def sync_master_key(df_csv):
 # ==========================================
 # INTERFAZ PRINCIPAL Y TABS
 # ==========================================
-# Encabezado corporativo (Logo + Títulos)
 col_logo, col_titulos = st.columns([1, 10])
 
 with col_logo:
-    # Usamos el isotipo que SÍ tienes en GitHub (logo mess 1.jpg)
     st.image("logo mess 1.jpg", width=80) 
 
 with col_titulos:
@@ -294,7 +278,6 @@ if archivo:
     df_bruto = procesar_csv(archivo)
     if df_bruto is not None and not df_bruto.empty:
         df = sync_master_key(df_bruto)
-        # Filtros
         st.sidebar.divider()
         st.sidebar.header("Filtros Directivos")
         f_pilar = st.sidebar.multiselect("Pilar Estratégico:", sorted(df['Pilar_Estrategico'].unique()), default=sorted(df['Pilar_Estrategico'].unique()))
@@ -441,28 +424,47 @@ with t_ai:
                     st.markdown(f"<div class='caja-ia'><b>Mensaje:</b><br>{st.session_state.ai_mensaje}</div>", unsafe_allow_html=True)
                     st.warning(f"**Objeciones:**\n{st.session_state.ai_objeciones}")
                     
-                    if st.button("🚀 Inyectar Estrategia a RevOps"):
+                    st.divider()
+                    st.markdown("### 📋 Módulo de Ejecución Operativa")
+                    c_op1, c_op2 = st.columns(2)
+                    
+                    with c_op1:
+                        # Botón Dinámico de Google Calendar
+                        titulo_cita = urllib.parse.quote(f"Visita / Llamada - {st.session_state.ai_cliente}")
+                        detalles_cita = urllib.parse.quote(f"Proyectos: {st.session_state.ai_folio}\n\nContexto IA:\n{st.session_state.ai_log}")
+                        url_gcal = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={titulo_cita}&details={detalles_cita}"
+                        
+                        st.markdown(f'<a href="{url_gcal}" target="_blank" class="btn-google">📅 Agendar Cita en Google Calendar</a>', unsafe_allow_html=True)
+                        st.caption("Abre una pestaña nueva con el evento pre-llenado.")
+
+                    with c_op2:
+                        # Generador de Documento
+                        if docx_disponible:
+                            def generar_docx():
+                                doc = Document()
+                                doc.add_heading("ESTRATEGIA KAM", 0)
+                                doc.add_paragraph(f"Cliente: {st.session_state.ai_cliente} | Folios: {st.session_state.ai_folio}")
+                                doc.add_heading("1. Análisis", 1)
+                                doc.add_paragraph(st.session_state.ai_analisis)
+                                doc.add_heading("2. Mensaje / Guion", 1)
+                                doc.add_paragraph(st.session_state.ai_mensaje)
+                                b = io.BytesIO()
+                                doc.save(b)
+                                b.seek(0)
+                                return b
+                            st.download_button("💾 Descargar Documento .docx", data=generar_docx(), file_name=f"Estrategia_{st.session_state.ai_cliente.replace(' ','_')}.docx")
+
+                    # Caja de texto para copiar el reporte a SCOTT CRM
+                    st.markdown("**Reporte de actividades (SCOTT CRM):**")
+                    st.text_area("Copia y pega este texto directamente en tu CRM SCOTT:", value=st.session_state.ai_log, height=120)
+                    
+                    if st.button("🚀 Inyectar Estrategia al Forecast del SAIV"):
                         f_hoy = datetime.now().strftime("%Y-%m-%d")
                         div = "USD" if st.session_state.ai_usd > 0 else "MXN"
                         mto = st.session_state.ai_usd if div == "USD" else st.session_state.ai_mxn
                         run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                   (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal, f_hoy, "3. Negociación"), fetch=False)
-                        st.success("¡Inyectado a SQLite! Revisa la Estación 4.")
-                        
-                    if docx_disponible:
-                        def generar_docx():
-                            doc = Document()
-                            doc.add_heading("ESTRATEGIA KAM", 0)
-                            doc.add_paragraph(f"Cliente: {st.session_state.ai_cliente} | Folios: {st.session_state.ai_folio}")
-                            doc.add_heading("1. Análisis", 1)
-                            doc.add_paragraph(st.session_state.ai_analisis)
-                            doc.add_heading("2. Mensaje / Guion", 1)
-                            doc.add_paragraph(st.session_state.ai_mensaje)
-                            b = io.BytesIO()
-                            doc.save(b)
-                            b.seek(0)
-                            return b
-                        st.download_button("💾 Descargar Documento .docx", data=generar_docx(), file_name=f"Estrategia_{st.session_state.ai_cliente.replace(' ','_')}.docx")
+                        st.success("¡Inyectado a la Base de Datos! Revisa el módulo de Forecast.")
     else:
         st.info("Sube el CSV para habilitar la IA.")
 
@@ -470,85 +472,9 @@ with t_ai:
 # 🚀 ESTACIÓN 4: GESTIÓN COMERCIAL (REVOPS)
 # ==========================================
 with t_revops:
-    t_ag, t_bit, t_roi, t_fc = st.tabs(["📅 Agenda", "📝 Bitácora Predictiva", "🧮 Calculadora ROI", "📈 Forecast Automático"])
+    t_roi, t_fc = st.tabs(["🧮 Calculadora ROI", "📈 Forecast Automático"])
 
-    # 1. AGENDA INTELIGENTE
-    with t_ag:
-        st.subheader("Agenda & Voice-to-CRM")
-        with st.form("f_agenda"):
-            ca1, ca2, ca3 = st.columns(3)
-            with ca1:
-                f_fec = st.date_input("Fecha")
-                f_hor = st.time_input("Horario", value=datetime.strptime('09:00', '%H:%M').time())
-                f_cli = st.text_input("Cliente")
-            with ca2:
-                f_con = st.text_input("Contacto")
-                f_est = st.selectbox("Estatus", ["Programada", "Realizada", "Cancelada"])
-            with ca3:
-                f_obj = st.text_area("Objetivo")
-            
-            st.markdown("**Voice-to-CRM (Simulado)**")
-            audio = st.audio_input("Grabar nota post-visita (opcional)")
-            f_notas = st.text_area("Transcripción Manual / Notas Rápidas", placeholder="Escribe las notas aquí...")
-            
-            if st.form_submit_button("Guardar Cita"):
-                if f_cli:
-                    run_query("INSERT INTO agenda (fecha, horario, cliente, contacto, objetivo, estatus, notas_audio) VALUES (?,?,?,?,?,?,?)",
-                              (str(f_fec), str(f_hor.strftime('%H:%M')), f_cli, f_con, f_obj, f_est, f_notas), fetch=False)
-                    st.success("Guardado en SQLite.")
-                    st.rerun()
-                else:
-                    st.error("Ingresa el nombre del cliente.")
-                
-        ag_data = run_query("SELECT id, fecha, horario, cliente, estatus FROM agenda ORDER BY fecha DESC, horario DESC")
-        if ag_data: st.dataframe(pd.DataFrame(ag_data, columns=["ID", "Fecha", "Hora", "Cliente", "Estatus"]), hide_index=True)
-
-    # 2. BITÁCORA PREDICTIVA
-    with t_bit:
-        st.subheader("Bitácora MEDDPICC (Probabilidad Automática)")
-        with st.form("f_bitacora"):
-            cb1, cb2, cb3 = st.columns(3)
-            with cb1:
-                r_fol = st.text_input("Folio (ID Proyecto)")
-                r_cli = st.text_input("Cliente")
-                r_mon = st.number_input("Monto", min_value=0.0, step=1000.0)
-                r_div = st.selectbox("Divisa", ["USD", "MXN"])
-            with cb2:
-                r_sem = st.selectbox("Semana Comercial", ["W1", "W2", "W3", "W4"])
-                r_est = st.selectbox("Estatus", ["1. Propuesta", "2. Cotización", "3. Negociación", "4. Esperando PO", "5. Cerrado Ganado"])
-                r_paso = st.text_input("Siguiente Paso")
-                r_fprox = st.date_input("Fecha Próx.")
-            with cb3:
-                st.markdown("**Checklist Predictivo (Define %)**")
-                chk1 = st.checkbox("¿Hablaste con el Director/Economic Buyer?")
-                chk2 = st.checkbox("¿Cotización formal enviada?")
-                chk3 = st.checkbox("¿Identificaste el Pain (Rechazos/Cuellos de botella)?")
-                chk4 = st.checkbox("¿Presupuesto liberado / confirmado?")
-                r_pain = st.text_area("Descripción del Pain")
-                
-            if st.form_submit_button("Calcular % y Guardar"):
-                if r_fol and r_cli:
-                    score = 0
-                    if chk1: score += 25
-                    if chk2: score += 25
-                    if chk3: score += 25
-                    if chk4: score += 15
-                    if r_est in ["4. Esperando PO", "5. Cerrado Ganado"]: score += 10
-                    
-                    prob = 0
-                    if score >= 90: prob = 90
-                    elif score >= 75: prob = 75
-                    elif score >= 50: prob = 50
-                    elif score >= 25: prob = 25
-                    
-                    run_query("INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                              (r_fol, r_cli, r_pain, r_mon, prob, r_sem, r_div, r_paso, str(r_fprox), r_est), fetch=False)
-                    st.success(f"Guardado. Probabilidad predictiva: {prob}%")
-                    st.rerun()
-                else:
-                    st.error("Ingresa el Folio y el Cliente.")
-
-    # 3. CALCULADORA ROI
+    # 1. CALCULADORA ROI
     with t_roi:
         st.subheader("Calculadora de ROI Metrológico")
         cr1, cr2 = st.columns(2)
@@ -564,7 +490,7 @@ with t_revops:
                 st.session_state.roi_calc = f"Ahorro anual: ${ahorro_anual:,.2f} USD | Recuperación en {meses_roi:.1f} meses"
                 st.success(st.session_state.roi_calc)
 
-    # 4. FORECAST Y AUTOMATIZACIÓN
+    # 2. FORECAST Y AUTOMATIZACIÓN
     with t_fc:
         st.subheader("Forecast Real (Pipeline Ponderado)")
         reps = run_query("SELECT id, folio_proyecto, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
@@ -586,4 +512,4 @@ with t_revops:
                 st.toast(f"Reporte enviado exitosamente a la Gerencia.", icon="✅")
                 st.success("Indicadores consolidados en formato Markdown y enviados.")
         else:
-            st.info("Sin registros en SQLite para calcular Forecast.")
+            st.info("Sin registros en SQLite para calcular Forecast. Genera e inyecta una estrategia desde el Laboratorio IA.")
