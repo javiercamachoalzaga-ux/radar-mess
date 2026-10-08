@@ -19,7 +19,12 @@ except ImportError:
 # ==========================================
 # 1. CONFIGURACIÓN DE PÁGINA Y UI/UX (CSS)
 # ==========================================
-st.set_page_config(page_title="SAIV | Radar Comercial MESS", page_icon="logo mess 1.jpg", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="SAIV | Radar Comercial MESS", 
+    page_icon="logo mess 1.jpg", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
     <style>
@@ -28,7 +33,6 @@ st.markdown("""
     
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    /* LÍNEA DE HEADER ELIMINADA PARA MOSTRAR MENÚ MÓVIL */
     
     :root { --mess-blue: #003a70; --mess-dark: #2c3e50; --mess-light: #f8fafc; }
     
@@ -43,7 +47,6 @@ st.markdown("""
     .stButton>button { font-weight: 600; border-radius: 6px; }
     .caja-ia { background-color: #fefefe; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
     
-    /* Estilo para botón de Google Calendar */
     .btn-google { background-color: #4285F4; color: white !important; text-decoration: none; padding: 10px 15px; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 10px; text-align: center; }
     .btn-google:hover { background-color: #357ae8; }
     </style>
@@ -70,7 +73,6 @@ def check_password():
     return False
 
 if not check_password():
-    # Mensaje salvavidas para usuarios de celular
     st.info("👈 **ATENCIÓN MÓVIL:** Toca el menú (rayitas) en la esquina superior izquierda de tu pantalla para ingresar la contraseña.")
     st.stop()
 
@@ -230,36 +232,4 @@ def procesar_csv(archivo):
             elif 'GANAD' in e or 'CERRAD' in e: return "5. Cerrado Ganado"
             else: return "1. Propuesta"
             
-        df_agrupado['Fase_Pipeline'] = df_agrupado['Etapa'].apply(clasificar_fase)
-        df_agrupado['Fecha_Creacion_DT'] = pd.to_datetime(df_agrupado['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df_agrupado['Días_Activo'] = (pd.Timestamp.now() - df_agrupado['Fecha_Creacion_DT']).dt.days
-
-        return df_agrupado
-    except Exception as e:
-        st.error(f"Error procesando CSV: {e}")
-        return None
-
-def sync_master_key(df_csv):
-    db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes WHERE folio_proyecto IS NOT NULL")
-    if db_reps and not df_csv.empty:
-        df_db = pd.DataFrame(db_reps, columns=['ID_Proyecto', 'Estatus_RevOps', 'Probabilidad_RevOps'])
-        df_db = df_db.drop_duplicates(subset=['ID_Proyecto'], keep='last')
-        df_db['ID_Proyecto'] = df_db['ID_Proyecto'].astype(str)
-        df_csv['ID_Proyecto'] = df_csv['ID_Proyecto'].astype(str)
-        
-        df_merged = pd.merge(df_csv, df_db, on='ID_Proyecto', how='left')
-        df_merged['Fase_Pipeline'] = np.where(df_merged['Estatus_RevOps'].notna(), df_merged['Estatus_RevOps'], df_merged['Fase_Pipeline'])
-        return df_merged
-    return df_csv
-
-# ==========================================
-# INTERFAZ PRINCIPAL Y TABS
-# ==========================================
-col_logo, col_titulos = st.columns([1, 10])
-
-with col_logo:
-    st.image("logo mess 1.jpg", width=80) 
-
-with col_titulos:
-    st.markdown('<div class="titulo-radar" style="margin-top: -10px;">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>
+        df_agrupado['Fase_Pipeline'] = df
