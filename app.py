@@ -128,7 +128,7 @@ def ejecutar_ia(cliente, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico,
         f"<MARKETING>Solicitud concreta de Account-Based Marketing (ABM) para esta cuenta</MARKETING> "
         f"<LOG>Bitácora hiper-resumida de 2 líneas para el CRM SCOTT</LOG>"
     )
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
     res = model.generate_content(prompt).text
     def extr(tag, t): 
         m = re.search(fr'<{tag}>(.*?)</{tag}>', t, re.DOTALL)
@@ -375,34 +375,12 @@ with t_dash:
             st.markdown("**Salud del Embudo**")
             df_f = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
             if not df_f.empty: st.altair_chart(alt.Chart(df_f).mark_bar(color='#16a34a').encode(x=col_val, y=alt.Y('Fase_Pipeline', sort='-x')).properties(height=300), use_container_width=True)
-            
-        st.divider()
-        st.subheader("Detector de Venta Cruzada (Cross-Selling)")
-        st.caption("Cuentas activas en Calibraciones o Productos Generales que tienen $0 cotizado en equipos de Alta Gama.")
-        
-        piv_cs = df_completo.groupby(['Cliente', 'Pilar_Estrategico']).size().unstack(fill_value=0)
-        for col_p in ["1. Alta Gama", "2. Calibraciones", "3. Productos Generales"]:
-            if col_p not in piv_cs.columns: piv_cs[col_p] = 0
-            
-        clientes_cs = piv_cs[(piv_cs["2. Calibraciones"] > 0) & (piv_cs["1. Alta Gama"] == 0)].index.tolist()
-        if clientes_cs:
-            df_cs = df_completo[df_completo['Cliente'].isin(clientes_cs)].groupby('Cliente').agg(
-                Folios_Calibracion=('ID_Proyecto', 'count'),
-                Monto_Cal_MXN=('Monto_MXN', 'sum'),
-                Monto_Cal_USD=('Monto_USD', 'sum'),
-                Servicios_Actuales=('Descripcion', lambda x: ' | '.join(list(x)[:2]))
-            ).reset_index()
-            df_cs['Acción Recomendada'] = "Ofrecer Demo Equipos (Buehler / Wilson / Kreon / Baty)"
-            st.dataframe(df_cs.sort_values(by='Monto_Cal_MXN', ascending=False), use_container_width=True, hide_index=True)
-        else:
-            st.success("Todas tus cuentas de calibración ya tienen cotizaciones de Alta Gama activas.")
     else:
-        st.info("Sube el archivo CSV en el menú lateral para visualizar los dashboards, o ve directo al **Laboratorio Táctico IA** para usar el Modo Showroom sin CSV.")
+        st.info("Sube el archivo CSV del CRM para visualizar los dashboards.")
 
 with t_stalled:
     if not df.empty:
         st.subheader("Riesgo Operativo: Proyectos Inactivos (>15 días)")
-        st.caption("Presiona el botón de rescate en cualquier folio para generar su guion Sandler de desbloqueo al instante.")
         estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Días_Activo', ascending=False)
         
         if not estancados.empty:
@@ -439,97 +417,71 @@ with t_stalled:
 
 with t_ai:
     st.subheader("Configuración de Paquete (Bundle) y Estrategia")
-    modo_op = st.radio("Origen de Datos:", ["Agrupar Folios del CRM (Con CSV)", "Prospecto Rápido / Showroom (Sin CSV)"], horizontal=True)
-    
-    c_sel = ""
-    ids = []
-    t_usd, t_mxn = 0.0, 0.0
-    eqs = ""
-    num_proy = 1
+    if not df.empty:
+        clientes = sorted(df['Cliente'].dropna().unique().tolist())
+        c_sel_box = st.selectbox("1. Selecciona la Cuenta:", ["-- Selecciona --"] + clientes)
+        if c_sel_box != "-- Selecciona --":
+            c_sel = c_sel_box
+            df_c = df[df['Cliente'] == c_sel]
+            opciones = df_c.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
+            p_sel = st.multiselect("2. Agrupar Folios:", opciones)
+            if p_sel:
+                ids = [o.split("]")[0].replace("[", "") for o in p_sel]
+                df_s = df[df['ID_Proyecto'].astype(str).isin(ids)]
+                t_usd, t_mxn = df_s['Monto_USD'].sum(), df_s['Monto_MXN'].sum()
+                eqs = " | ".join(df_s['Descripcion'].astype(str).tolist())
+                num_proy = len(df_s)
+                st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
+                
+                st.markdown("#### Configuración Táctica (Motor de Estrategia)")
+                c1, c2 = st.columns(2)
+                with c1:
+                    obj_tactico = st.radio(
+                        "Objetivo de la Estrategia:", 
+                        [
+                            "Cierre / Negociación / Seguimiento Virtual", 
+                            "Apertura / Visita Presencial", 
+                            "Visita con Acompañamiento (Gerencia / Dirección)"
+                        ]
+                    )
+                    canal = st.selectbox(
+                        "Canal / Tipo de Acción:", 
+                        [
+                            "Visita con Director / Acompañamiento",
+                            "Cierre / Negociación de Propuesta",
+                            "Correo Electrónico Ejecutivo", 
+                            "Guion de Llamada", 
+                            "Mensaje WhatsApp"
+                        ]
+                    )
+                    interlocutor = st.selectbox(
+                        "Interlocutor:", 
+                        [
+                            "Comprador", 
+                            "Ingeniero / Planta", 
+                            "Gerente de Calidad / Operaciones",
+                            "Director / Dueño"
+                        ]
+                    )
+                with c2:
+                    contexto = st.text_area(
+                        "Notas Manuales (Contexto actual):", 
+                        placeholder="Ej. Visita a planta con gerencia para destrabar PO, o condiciones de crédito...",
+                        height=180
+                    )
+                    
+                if gemini_activo and st.button("Generar Estrategia", type="primary"):
+                    with st.spinner("Procesando estrategia con Gemini..."):
+                        try:
+                            datos_ia = ejecutar_ia(c_sel, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico, canal, contexto)
+                            st.session_state.update(datos_ia)
+                            st.session_state.update({'ai_cliente': c_sel, 'ai_folio': ", ".join(ids), 'ai_usd': t_usd, 'ai_mxn': t_mxn})
+                        except Exception as e:
+                            st.error(f"Error API: {e}")
 
-    if modo_op == "Agrupar Folios del CRM (Con CSV)":
-        if not df.empty:
-            clientes = sorted(df['Cliente'].dropna().unique().tolist())
-            c_sel_box = st.selectbox("1. Selecciona la Cuenta:", ["-- Selecciona --"] + clientes)
-            if c_sel_box != "-- Selecciona --":
-                c_sel = c_sel_box
-                df_c = df[df['Cliente'] == c_sel]
-                opciones = df_c.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
-                p_sel = st.multiselect("2. Agrupar Folios:", opciones)
-                if p_sel:
-                    ids = [o.split("]")[0].replace("[", "") for o in p_sel]
-                    df_s = df[df['ID_Proyecto'].astype(str).isin(ids)]
-                    t_usd, t_mxn = df_s['Monto_USD'].sum(), df_s['Monto_MXN'].sum()
-                    eqs = " | ".join(df_s['Descripcion'].astype(str).tolist())
-                    num_proy = len(df_s)
-                    st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
-        else:
-            st.info("Sube el CSV en el menú lateral para ver tus cuentas, o cambia arriba a 'Prospecto Rápido / Showroom'.")
+        mostrar_resultados_ia(canal_actual="Laboratorio_IA")
     else:
-        cs1, cs2 = st.columns(2)
-        with cs1:
-            c_sel = st.text_input("Nombre de la Empresa / Prospecto:", placeholder="Ej. Fulltech Casting / ITP Aero...")
-            eq_lista = st.multiselect("Equipos o Servicios de Interés:", [
-                "Brazo Articulado Kreon", "Escáner 3D Scantech", "Durómetro Wilson", 
-                "Metalografía Buehler", "Comparador Óptico Baty", "Medición Óptica Vicivision",
-                "CMM Zeiss", "Perfilómetro / Rugosímetro Taylor Hobson", "Máquina Universal Galdabini",
-                "Póliza de Calibración Dimensional / Acreditada"
-            ])
-        with cs2:
-            giro_ind = st.selectbox("Giro Industrial:", ["Manufactura Metálica / Fundición", "Automotriz / Autopartes", "Aeroespacial", "Plásticos y Moldes", "Industria General"])
-            t_usd = st.number_input("Monto Estimado (USD):", min_value=0.0, step=1000.0, value=15000.0)
-            
-        ids = ["SHOWROOM-2026"]
-        eqs = (", ".join(eq_lista) if eq_lista else "Soluciones Metrológicas MESS") + f" (Giro: {giro_ind})"
-
-    if c_sel and ids:
-        st.markdown("#### Configuración Táctica (Motor de Estrategia)")
-        c1, c2 = st.columns(2)
-        with c1:
-            obj_tactico = st.radio(
-                "Objetivo de la Estrategia:", 
-                [
-                    "Cierre / Negociación / Seguimiento Virtual", 
-                    "Apertura / Visita Presencial", 
-                    "Visita con Acompañamiento (Gerencia / Dirección)"
-                ]
-            )
-            canal = st.selectbox(
-                "Canal / Tipo de Acción:", 
-                [
-                    "Visita con Director / Acompañamiento",
-                    "Cierre / Negociación de Propuesta",
-                    "Correo Electrónico Ejecutivo", 
-                    "Guion de Llamada", 
-                    "Mensaje WhatsApp"
-                ]
-            )
-            interlocutor = st.selectbox(
-                "Interlocutor:", 
-                [
-                    "Comprador", 
-                    "Ingeniero / Planta", 
-                    "Gerente de Calidad / Operaciones",
-                    "Director / Dueño"
-                ]
-            )
-        with c2:
-            contexto = st.text_area(
-                "Notas Manuales (Contexto actual):", 
-                placeholder="Ej. Visita a planta con gerencia para destrabar PO, o condiciones de crédito...",
-                height=180
-            )
-            
-        if gemini_activo and st.button("Generar Estrategia", type="primary"):
-            with st.spinner("Procesando estrategia con Gemini..."):
-                try:
-                    datos_ia = ejecutar_ia(c_sel, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico, canal, contexto)
-                    st.session_state.update(datos_ia)
-                    st.session_state.update({'ai_cliente': c_sel, 'ai_folio': ", ".join(ids), 'ai_usd': t_usd, 'ai_mxn': t_mxn})
-                except Exception as e:
-                    st.error(f"Error API: {e}")
-
-    mostrar_resultados_ia(canal_actual="Laboratorio_IA")
+        st.info("Sube el archivo CSV del CRM en el menú lateral para habilitar el Laboratorio Táctico.")
 
 with t_revops:
     t_roi, t_fc = st.tabs(["Calculadora ROI", "Forecast Automático"])
