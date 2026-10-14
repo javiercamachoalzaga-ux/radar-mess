@@ -202,7 +202,7 @@ def mostrar_resultados_ia(canal_actual="Seguimiento"):
             q_ins = "INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             run_query(q_ins, (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal_actual, f_hoy, "3. Negociación"), fetch=False)
             st.success("¡Proyecto registrado en el Forecast!")
-            def procesar_csv(archivo):
+def procesar_csv(archivo):
     try:
         df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
         header_idx = -1
