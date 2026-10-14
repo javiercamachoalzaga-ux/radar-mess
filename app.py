@@ -47,17 +47,15 @@ col_logo, col_titulos = st.columns([1, 10])
 with col_logo:
     st.image("logo mess 1.jpg", width=80) 
 with col_titulos:
-    t_ppal = '<div class="titulo-radar" style="margin-top: -10px;">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>'
-    st.markdown(t_ppal, unsafe_allow_html=True)
-    t_sub = '<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>'
-    st.markdown(t_sub, unsafe_allow_html=True)
+    st.markdown('<div class="titulo-radar" style="margin-top: -10px;">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
 def check_password():
     if "mi_contrasena" not in st.secrets: return True
     if st.session_state.get("autenticado", False): return True
     
     st.markdown("---")
-    st.markdown("### 🔒 Acceso Restringido")
+    st.markdown("### Acceso Restringido")
     with st.form("login_form"):
         pwd = st.text_input("Ingresa tu contraseña corporativa", type="password")
         btn_acceder = st.form_submit_button("Acceder al SAIV")
@@ -90,8 +88,7 @@ for nv in ['ai_usd', 'ai_mxn']:
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
     cursor = conn.cursor()
-    q_create = "CREATE TABLE IF NOT EXISTS reportes (id INTEGER PRIMARY KEY AUTOINCREMENT, folio_proyecto TEXT, cliente TEXT, pain TEXT, monto REAL, probabilidad INTEGER, semana TEXT, divisa TEXT, siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL)"
-    cursor.execute(q_create)
+    cursor.execute("CREATE TABLE IF NOT EXISTS reportes (id INTEGER PRIMARY KEY AUTOINCREMENT, folio_proyecto TEXT, cliente TEXT, pain TEXT, monto REAL, probabilidad INTEGER, semana TEXT, divisa TEXT, siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL)")
     cursor.execute("PRAGMA table_info(reportes)")
     columnas = [col[1] for col in cursor.fetchall()]
     if 'folio_proyecto' not in columnas: cursor.execute("ALTER TABLE reportes ADD COLUMN folio_proyecto TEXT")
@@ -146,7 +143,7 @@ def ejecutar_ia(cliente, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico,
 
 def mostrar_resultados_ia(canal_actual="Seguimiento"):
     if st.session_state.get('ai_mensaje'):
-        st.success(f"✅ Estrategia Generada para: **{st.session_state.ai_cliente}** (Folios: {st.session_state.ai_folio})")
+        st.success(f"Estrategia Generada para: {st.session_state.ai_cliente} (Folios: {st.session_state.ai_folio})")
         st.info(f"**1. Análisis Estratégico (Bundle):**\n\n{st.session_state.ai_analisis}")
         
         msj_html = f"<div class='caja-ia'><b>2. Mensaje / Guion de Contacto:</b><br><br>{st.session_state.ai_mensaje}</div>"
@@ -154,24 +151,24 @@ def mostrar_resultados_ia(canal_actual="Seguimiento"):
         
         st.warning(f"**3. Manejo de Objeciones:**\n\n{st.session_state.ai_objeciones}")
         
-        abm_html = f"<div class='caja-abm'><b>🎯 4. Solicitud Account-Based Marketing (ABM):</b><br><br>{st.session_state.ai_marketing}</div>"
+        abm_html = f"<div class='caja-abm'><b>4. Solicitud Account-Based Marketing (ABM):</b><br><br>{st.session_state.ai_marketing}</div>"
         st.markdown(abm_html, unsafe_allow_html=True)
         
         st.divider()
-        st.markdown("### 📋 Módulo de Ejecución Rápida")
+        st.markdown("### Módulo de Ejecución Rápida")
         c_op1, c_op2, c_op3 = st.columns(3)
         
         with c_op1:
             txt_wa = urllib.parse.quote(st.session_state.ai_mensaje)
             url_wa = f"https://wa.me/?text={txt_wa}"
-            st.markdown(f'<a href="{url_wa}" target="_blank" class="btn-wa">💬 1. Enviar por WhatsApp</a>', unsafe_allow_html=True)
+            st.markdown(f'<a href="{url_wa}" target="_blank" class="btn-wa">Enviar por WhatsApp</a>', unsafe_allow_html=True)
             st.caption("Abre WhatsApp con el mensaje listo.")
             
         with c_op2:
             titulo_cita = urllib.parse.quote(f"Visita / Seguimiento MESS - {st.session_state.ai_cliente}")
             detalles_cita = urllib.parse.quote(f"Folios: {st.session_state.ai_folio}\n\nBitácora:\n{st.session_state.ai_log}")
             url_gcal = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={titulo_cita}&details={detalles_cita}"
-            st.markdown(f'<a href="{url_gcal}" target="_blank" class="btn-google">📅 2. Agendar en Calendar</a>', unsafe_allow_html=True)
+            st.markdown(f'<a href="{url_gcal}" target="_blank" class="btn-google">Agendar en Calendar</a>', unsafe_allow_html=True)
             st.caption("Crea el recordatorio en tu calendario.")
 
         with c_op3:
@@ -192,18 +189,18 @@ def mostrar_resultados_ia(canal_actual="Seguimiento"):
                     doc.save(b)
                     b.seek(0)
                     return b
-                st.download_button("💾 3. Descargar Ficha .docx", data=generar_docx(), file_name=f"Plan_{st.session_state.ai_cliente.replace(' ','_')}.docx", use_container_width=True)
+                st.download_button("Descargar Ficha .docx", data=generar_docx(), file_name=f"Plan_{st.session_state.ai_cliente.replace(' ','_')}.docx", use_container_width=True)
 
         st.markdown("**5. Bitácora Hiper-Resumida (Copia y pega en SCOTT CRM):**")
         st.text_area("Reporte listo para SCOTT:", value=st.session_state.ai_log, height=90, key=f"scott_{canal_actual}")
         
-        if st.button("🚀 Inyectar al Forecast del SAIV", key=f"iny_{canal_actual}"):
+        if st.button("Inyectar al Forecast del SAIV", key=f"iny_{canal_actual}"):
             f_hoy = datetime.now().strftime("%Y-%m-%d")
             div = "USD" if st.session_state.ai_usd > 0 else "MXN"
             mto = st.session_state.ai_usd if div == "USD" else st.session_state.ai_mxn
             q_ins = "INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, semana, divisa, siguiente_paso, fecha_prox, estatus) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             run_query(q_ins, (st.session_state.ai_folio, st.session_state.ai_cliente, st.session_state.ai_log, mto, 50, "W1", div, canal_actual, f_hoy, "3. Negociación"), fetch=False)
-            st.success("¡Proyecto registrado en el Forecast!")
+            st.success("Proyecto registrado en el Forecast.")
 def procesar_csv(archivo):
     try:
         df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
@@ -317,10 +314,10 @@ def sync_master_key(df_csv):
     return df_csv
 
 t_dash, t_stalled, t_ai, t_revops = st.tabs([
-    "📊 1. Dashboards CRM", 
-    "🚨 2. Proyectos Estancados", 
-    "🧠 3. Laboratorio Táctico IA", 
-    "🚀 4. Gestión Comercial (RevOps)"
+    "1. Dashboards CRM", 
+    "2. Proyectos Estancados", 
+    "3. Laboratorio Táctico IA", 
+    "4. Gestión Comercial (RevOps)"
 ])
 
 archivo = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
@@ -380,7 +377,7 @@ with t_dash:
             if not df_f.empty: st.altair_chart(alt.Chart(df_f).mark_bar(color='#16a34a').encode(x=col_val, y=alt.Y('Fase_Pipeline', sort='-x')).properties(height=300), use_container_width=True)
             
         st.divider()
-        st.subheader("🎯 Detector de Venta Cruzada (Cross-Selling)")
+        st.subheader("Detector de Venta Cruzada (Cross-Selling)")
         st.caption("Cuentas activas en Calibraciones o Productos Generales que tienen $0 cotizado en equipos de Alta Gama.")
         
         piv_cs = df_completo.groupby(['Cliente', 'Pilar_Estrategico']).size().unstack(fill_value=0)
@@ -400,7 +397,7 @@ with t_dash:
         else:
             st.success("Todas tus cuentas de calibración ya tienen cotizaciones de Alta Gama activas.")
     else:
-        st.info("👈 Sube el archivo CSV en el menú lateral para visualizar los dashboards, o ve directo a la **Estación 3** para usar el Modo Showroom sin CSV.")
+        st.info("Sube el archivo CSV en el menú lateral para visualizar los dashboards, o ve directo al **Laboratorio Táctico IA** para usar el Modo Showroom sin CSV.")
 
 with t_stalled:
     if not df.empty:
@@ -422,7 +419,7 @@ with t_stalled:
                     st.markdown(alerta_txt, unsafe_allow_html=True)
                 with c_al2:
                     st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
-                    if st.button("⚡ Generar Rescate", key=f"resc_{r['ID_Proyecto']}_{idx_st}", use_container_width=True):
+                    if st.button("Generar Rescate", key=f"resc_{r['ID_Proyecto']}_{idx_st}", use_container_width=True):
                         if gemini_activo:
                             with st.spinner(f"Creando rescate Sandler para {r['Cliente']}..."):
                                 ctx_resc = f"Proyecto estancado hace {r['Días_Activo']} días en etapa {r['Fase_Pipeline']}. Aplica técnica de desarme de Sandler (cierre negativo suave) para que el cliente revele si el proyecto sigue vivo o si hay un bloqueo oculto."
@@ -436,13 +433,13 @@ with t_stalled:
                 st.divider()
                 mostrar_resultados_ia(canal_actual="Rescate_Estancado")
         else:
-            st.success("¡Embudo limpio! No hay proyectos estancados mayores a 15 días.")
+            st.success("Embudo limpio. No hay proyectos estancados mayores a 15 días.")
     else:
         st.info("Sube el CSV para auditar proyectos estancados.")
 
 with t_ai:
     st.subheader("Configuración de Paquete (Bundle) y Estrategia")
-    modo_op = st.radio("Origen de Datos:", ["📂 Agrupar Folios del CRM (Con CSV)", "⚡ Prospecto Rápido / Showroom (Sin CSV)"], horizontal=True)
+    modo_op = st.radio("Origen de Datos:", ["Agrupar Folios del CRM (Con CSV)", "Prospecto Rápido / Showroom (Sin CSV)"], horizontal=True)
     
     c_sel = ""
     ids = []
@@ -450,7 +447,7 @@ with t_ai:
     eqs = ""
     num_proy = 1
 
-    if modo_op == "📂 Agrupar Folios del CRM (Con CSV)":
+    if modo_op == "Agrupar Folios del CRM (Con CSV)":
         if not df.empty:
             clientes = sorted(df['Cliente'].dropna().unique().tolist())
             c_sel_box = st.selectbox("1. Selecciona la Cuenta:", ["-- Selecciona --"] + clientes)
@@ -463,5 +460,106 @@ with t_ai:
                     ids = [o.split("]")[0].replace("[", "") for o in p_sel]
                     df_s = df[df['ID_Proyecto'].astype(str).isin(ids)]
                     t_usd, t_mxn = df_s['Monto_USD'].sum(), df_s['Monto_MXN'].sum()
+                    eqs = " | ".join(df_s['Descripcion'].astype(str).tolist())
+                    num_proy = len(df_s)
+                    st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
+        else:
+            st.info("Sube el CSV en el menú lateral para ver tus cuentas, o cambia arriba a 'Prospecto Rápido / Showroom'.")
+    else:
+        cs1, cs2 = st.columns(2)
+        with cs1:
+            c_sel = st.text_input("Nombre de la Empresa / Prospecto:", placeholder="Ej. Fulltech Casting / ITP Aero...")
+            eq_lista = st.multiselect("Equipos o Servicios de Interés:", [
+                "Brazo Articulado Kreon", "Escáner 3D Scantech", "Durómetro Wilson", 
+                "Metalografía Buehler", "Comparador Óptico Baty", "Medición Óptica Vicivision",
+                "CMM Zeiss", "Perfilómetro / Rugosímetro Taylor Hobson", "Máquina Universal Galdabini",
+                "Póliza de Calibración Dimensional / Acreditada"
+            ])
+        with cs2:
+            giro_ind = st.selectbox("Giro Industrial:", ["Manufactura Metálica / Fundición", "Automotriz / Autopartes", "Aeroespacial", "Plásticos y Moldes", "Industria General"])
+            t_usd = st.number_input("Monto Estimado (USD):", min_value=0.0, step=1000.0, value=15000.0)
+            
+        ids = ["SHOWROOM-2026"]
+        eqs = (", ".join(eq_lista) if eq_lista else "Soluciones Metrológicas MESS") + f" (Giro: {giro_ind})"
 
-# === FIN PARTE 1 (Pega la Parte 2 en la línea de abajo sin espacios al inicio) ===
+    if c_sel and ids:
+        st.markdown("#### Configuración Táctica (Motor de Estrategia)")
+        c1, c2 = st.columns(2)
+        with c1:
+            obj_tactico = st.radio(
+                "Objetivo de la Estrategia:", 
+                [
+                    "Cierre / Negociación / Seguimiento Virtual", 
+                    "Apertura / Visita Presencial", 
+                    "Visita con Acompañamiento (Gerencia / Dirección)"
+                ]
+            )
+            canal = st.selectbox(
+                "Canal / Tipo de Acción:", 
+                [
+                    "Visita con Director / Acompañamiento",
+                    "Cierre / Negociación de Propuesta",
+                    "Correo Electrónico Ejecutivo", 
+                    "Guion de Llamada", 
+                    "Mensaje WhatsApp"
+                ]
+            )
+            interlocutor = st.selectbox(
+                "Interlocutor:", 
+                [
+                    "Comprador", 
+                    "Ingeniero / Planta", 
+                    "Gerente de Calidad / Operaciones",
+                    "Director / Dueño"
+                ]
+            )
+        with c2:
+            contexto = st.text_area(
+                "Notas Manuales (Contexto actual):", 
+                placeholder="Ej. Visita a planta con gerencia para destrabar PO, o condiciones de crédito...",
+                height=180
+            )
+            
+        if gemini_activo and st.button("Generar Estrategia", type="primary"):
+            with st.spinner("Procesando estrategia con Gemini..."):
+                try:
+                    datos_ia = ejecutar_ia(c_sel, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico, canal, contexto)
+                    st.session_state.update(datos_ia)
+                    st.session_state.update({'ai_cliente': c_sel, 'ai_folio': ", ".join(ids), 'ai_usd': t_usd, 'ai_mxn': t_mxn})
+                except Exception as e:
+                    st.error(f"Error API: {e}")
+
+    mostrar_resultados_ia(canal_actual="Laboratorio_IA")
+
+with t_revops:
+    t_roi, t_fc = st.tabs(["Calculadora ROI", "Forecast Automático"])
+    with t_roi:
+        st.subheader("Calculadora de ROI Metrológico")
+        cr1, cr2 = st.columns(2)
+        with cr1:
+            inv = st.number_input("Inversión del Equipo (Ej. 60000 USD)", min_value=0.0, value=60000.0)
+            c_hora = st.number_input("Costo Máquina CNC / Hora (USD)", value=50.0)
+            rechazo = st.number_input("Piezas rechazadas o retrabajadas por semana", value=10)
+        with cr2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Calcular Retorno Financiero", type="primary"):
+                ahorro_anual = (c_hora * 2) * rechazo * 52
+                meses_roi = inv / (ahorro_anual / 12) if ahorro_anual > 0 else 999
+                st.session_state.roi_calc = f"Ahorro anual estimado: ${ahorro_anual:,.2f} USD | Retorno de inversión en {meses_roi:.1f} meses"
+                st.success(st.session_state.roi_calc)
+
+    with t_fc:
+        st.subheader("Forecast Real (Pipeline Ponderado)")
+        reps = run_query("SELECT id, folio_proyecto, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
+        if reps:
+            df_fc = pd.DataFrame(reps, columns=["ID", "Folio", "Cliente", "Monto", "Prob(%)", "Semana", "Divisa", "Estatus"])
+            df_fc['Forecast_Real'] = df_fc['Monto'] * (df_fc['Prob(%)'] / 100.0)
+            
+            c_f1, c_f2 = st.columns(2)
+            for divisa, col in zip(["USD", "MXN"], [c_f1, c_f2]):
+                df_div = df_fc[df_fc['Divisa'] == divisa]
+                col.metric(f"Forecast {divisa}", f"${df_div['Forecast_Real'].sum():,.2f}", f"Pipeline Total: ${df_div['Monto'].sum():,.2f}")
+            
+            st.dataframe(df_fc.drop(columns=['ID']), use_container_width=True)
+        else:
+            st.info("Sin registros en SQLite para calcular Forecast. Genera e inyecta una estrategia desde el Laboratorio Táctico IA.")
