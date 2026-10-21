@@ -128,11 +128,27 @@ def ejecutar_ia(cliente, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico,
         f"<MARKETING>Solicitud concreta de Account-Based Marketing (ABM) para esta cuenta</MARKETING> "
         f"<LOG>Bitácora hiper-resumida de 2 líneas para el CRM SCOTT</LOG>"
     )
-    model = genai.GenerativeModel("gemini-1.5-pro")
+    
+    # Auto-detección dinámica para evitar el Error 404
+    modelo_seleccionado = "gemini-1.5-pro" 
+    try:
+        modelos_disponibles = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        for modelo_ideal in ['models/gemini-1.5-pro', 'models/gemini-1.5-pro-latest', 'models/gemini-1.0-pro', 'models/gemini-pro']:
+            if modelo_ideal in modelos_disponibles:
+                modelo_seleccionado = modelo_ideal
+                break
+        if modelo_seleccionado == "gemini-1.5-pro" and modelos_disponibles and 'models/gemini-1.5-pro' not in modelos_disponibles:
+            modelo_seleccionado = modelos_disponibles[0]
+    except Exception:
+        pass
+        
+    model = genai.GenerativeModel(modelo_seleccionado)
     res = model.generate_content(prompt).text
+    
     def extr(tag, t): 
         m = re.search(fr'<{tag}>(.*?)</{tag}>', t, re.DOTALL)
         return m.group(1).strip() if m else "Sin datos."
+        
     return {
         'ai_analisis': extr('ANALYSIS', res),
         'ai_mensaje': extr('MESSAGE', res),
@@ -273,8 +289,7 @@ def procesar_csv(archivo):
         df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
         
         def limpiar_cliente(x):
-            if pd.isna(x):
-                return ""
+            if pd.isna(x): return ""
             texto = str(x).replace("?", "ó")
             texto = re.sub(r'\s+', ' ', texto)
             return texto.strip().title()
@@ -317,302 +332,4 @@ def procesar_csv(archivo):
             elif 'NEGOCIACI' in e: return "3. Negociación"
             elif 'COTIZACI' in e: return "2. Cotización"
             elif 'PROPUESTA' in e: return "1. Propuesta"
-            elif 'GANAD' in e or 'CERRAD' in e: return "5. Cerrado Ganado"
-            else: return "1. Propuesta"
-            
-        df_agrupado['Fase_Pipeline'] = df_agrupado['Etapa'].apply(clasificar_fase)
-        df_agrupado['Fecha_Creacion_DT'] = pd.to_datetime(df_agrupado['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df_agrupado['Días_Activo'] = (pd.Timestamp.now() - df_agrupado['Fecha_Creacion_DT']).dt.days
-
-        return df_agrupado
-    except Exception as e:
-        st.error(f"Error procesando CSV: {e}")
-        return None
-
-def sync_master_key(df_csv):
-    db_reps = run_query("SELECT folio_proyecto, estatus, probabilidad FROM reportes WHERE folio_proyecto IS NOT NULL")
-    if db_reps and not df_csv.empty:
-        df_db = pd.DataFrame(db_reps, columns=['ID_Proyecto', 'Estatus_RevOps', 'Probabilidad_RevOps'])
-        df_db = df_db.drop_duplicates(subset=['ID_Proyecto'], keep='last')
-        df_db['ID_Proyecto'] = df_db['ID_Proyecto'].astype(str)
-        df_csv['ID_Proyecto'] = df_csv['ID_Proyecto'].astype(str)
-        df_merged = pd.merge(df_csv, df_db, on='ID_Proyecto', how='left')
-        df_merged['Fase_Pipeline'] = np.where(df_merged['Estatus_RevOps'].notna(), df_merged['Estatus_RevOps'], df_merged['Fase_Pipeline'])
-        return df_merged
-    return df_csv
-
-t_dash, t_stalled, t_ai, t_revops = st.tabs([
-    "1. Dashboards CRM", 
-    "2. Proyectos Estancados", 
-    "3. Laboratorio Táctico IA", 
-    "4. Gestión Comercial (RevOps)"
-])
-
-archivo = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
-df = pd.DataFrame()
-df_completo = pd.DataFrame()
-
-if archivo:
-    df_bruto = procesar_csv(archivo)
-    if df_bruto is not None and not df_bruto.empty:
-        df_completo = sync_master_key(df_bruto)
-        df = df_completo.copy()
-        st.sidebar.divider()
-        st.sidebar.header("Filtros Directivos")
-        f_pilar = st.sidebar.multiselect("Pilar Estratégico:", sorted(df['Pilar_Estrategico'].unique()), default=sorted(df['Pilar_Estrategico'].unique()))
-        f_buscar = st.sidebar.text_input("Buscar Folio o Cliente:")
-        if f_buscar:
-            filtro_id = df['ID_Proyecto'].str.contains(f_buscar, case=False, na=False)
-            filtro_cli = df['Cliente'].str.contains(f_buscar, case=False, na=False)
-            df = df[filtro_id | filtro_cli]
-        if f_pilar:
-            df = df[df['Pilar_Estrategico'].isin(f_pilar)]
-
-with t_dash:
-    if not df.empty:
-        META_MENSUAL_USD = 80000.00
-        df_caliente = df[df['Fase_Pipeline'].isin(['3. Negociación', '4. Esperando PO', '5. Cerrado Ganado'])]
-        usd_caliente = df_caliente['Monto_USD'].sum()
-        mxn_caliente = df_caliente['Monto_MXN'].sum()
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Meta Mensual (USD)", f"${META_MENSUAL_USD:,.2f}")
-        c2.metric("Pipeline Probable (Activo)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN")
-        
-        gap = META_MENSUAL_USD - usd_caliente
-        if gap > 0: 
-            c3.metric("GAP (Brecha)", f"${gap:,.2f} USD", "- Acción Requerida")
-        else: 
-            c3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
-        
-        st.divider()
-        moneda_sel = st.radio("Moneda de Análisis:", ["USD", "MXN"], horizontal=True)
-        col_val = 'Monto_USD' if moneda_sel == "USD" else 'Monto_MXN'
-        
-        st.markdown(f"#### Análisis Pareto 80/20 por Cuentas ({moneda_sel})")
-        df_pareto = df.groupby('Cliente')[col_val].sum().reset_index()
-        df_pareto = df_pareto[df_pareto[col_val] > 0].sort_values(by=col_val, ascending=False).reset_index(drop=True)
-        if not df_pareto.empty:
-            df_pareto['Porcentaje'] = df_pareto[col_val] / df_pareto[col_val].sum()
-            df_pareto['Acumulado'] = df_pareto['Porcentaje'].cumsum()
-            
-            barras = alt.Chart(df_pareto).mark_bar(color='#003a70').encode(
-                x=alt.X('Cliente', sort=None), 
-                y=alt.Y(col_val)
-            )
-            linea = alt.Chart(df_pareto).mark_line(color='#e74c3c', point=True).encode(
-                x=alt.X('Cliente', sort=None), 
-                y=alt.Y('Acumulado', axis=alt.Axis(format='%'))
-            )
-            
-            graf_final = alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350)
-            st.altair_chart(graf_final, use_container_width=True)
-
-        cg1, cg2 = st.columns(2)
-        with cg1:
-            st.markdown("**Forecast por Área**")
-            df_a = df.groupby('Area')[col_val].sum().reset_index()
-            if not df_a.empty: 
-                graf_area = alt.Chart(df_a).mark_bar(color='#2c3e50').encode(
-                    x=col_val, 
-                    y=alt.Y('Area', sort='-x')
-                ).properties(height=300)
-                st.altair_chart(graf_area, use_container_width=True)
-                
-        with cg2:
-            st.markdown("**Salud del Embudo**")
-            df_f = df.groupby('Fase_Pipeline')[col_val].sum().reset_index()
-            if not df_f.empty: 
-                graf_fase = alt.Chart(df_f).mark_bar(color='#16a34a').encode(
-                    x=col_val, 
-                    y=alt.Y('Fase_Pipeline', sort='-x')
-                ).properties(height=300)
-                st.altair_chart(graf_fase, use_container_width=True)
-            
-        st.divider()
-        st.subheader("Detector de Venta Cruzada (Cross-Selling)")
-        
-        piv_cs = df_completo.groupby(['Cliente', 'Pilar_Estrategico']).size().unstack(fill_value=0)
-        for col_p in ["1. Alta Gama", "2. Calibraciones", "3. Productos Generales"]:
-            if col_p not in piv_cs.columns: piv_cs[col_p] = 0
-            
-        clientes_cs = piv_cs[(piv_cs["2. Calibraciones"] > 0) & (piv_cs["1. Alta Gama"] == 0)].index.tolist()
-        if clientes_cs:
-            df_cs = df_completo[df_completo['Cliente'].isin(clientes_cs)].groupby('Cliente').agg(
-                Folios_Calibracion=('ID_Proyecto', 'count'),
-                Monto_Cal_MXN=('Monto_MXN', 'sum'),
-                Monto_Cal_USD=('Monto_USD', 'sum'),
-                Servicios_Actuales=('Descripcion', lambda x: ' | '.join(list(x)[:2]))
-            ).reset_index()
-            df_cs['Acción Recomendada'] = "Ofrecer Demo Equipos (Buehler / Wilson / Kreon / Baty)"
-            st.dataframe(df_cs.sort_values(by='Monto_Cal_MXN', ascending=False), use_container_width=True, hide_index=True)
-        else:
-            st.success("Todas tus cuentas de calibración ya tienen cotizaciones de Alta Gama activas.")
-    else:
-        st.info("Sube el archivo CSV en el menú lateral para visualizar los dashboards.")
-
-with t_stalled:
-    if not df.empty:
-        st.subheader("Riesgo Operativo: Proyectos Inactivos (>15 días)")
-        filtro_inactivos = df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])
-        estancados = df[filtro_inactivos & (df['Días_Activo'] > 15)].sort_values(by='Días_Activo', ascending=False)
-        
-        if not estancados.empty:
-            for idx_st, r in estancados.iterrows():
-                c_al1, c_al2 = st.columns([4, 1])
-                with c_al1:
-                    alerta_txt = (
-                        f'<div class="alerta-estancado">'
-                        f'<h4 style="margin:0; color:#9f1239;">Folio: {r["ID_Proyecto"]} | {r["Cliente"]}</h4>'
-                        f'<p style="margin:5px 0 0 0; font-size:13px;"><b>Días Inactivo:</b> {r["Días_Activo"]} días | '
-                        f'<b>Monto:</b> ${r["Monto_USD"]:,.2f} USD / ${r["Monto_MXN"]:,.2f} MXN | <b>Alcance:</b> {str(r["Descripcion"])[:90]}...</p>'
-                        f'</div>'
-                    )
-                    st.markdown(alerta_txt, unsafe_allow_html=True)
-                with c_al2:
-                    st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
-                    if st.button("Generar Rescate", key=f"resc_{r['ID_Proyecto']}_{idx_st}", use_container_width=True):
-                        if gemini_activo:
-                            with st.spinner("Creando rescate Sandler..."):
-                                ctx_resc = f"Proyecto estancado hace {r['Días_Activo']} días. Aplica técnica de desarme de Sandler (cierre negativo)."
-                                datos_ia = ejecutar_ia(r['Cliente'], "Comprador / Ingeniero", 1, r['Descripcion'], r['Monto_USD'], r['Monto_MXN'], "Rescate de Negociación", "Mensaje WhatsApp", ctx_resc)
-                                st.session_state.update(datos_ia)
-                                st.session_state.update({'ai_cliente': r['Cliente'], 'ai_folio': str(r['ID_Proyecto']), 'ai_usd': r['Monto_USD'], 'ai_mxn': r['Monto_MXN']})
-                        else:
-                            st.error("Configura tu API Key de Gemini en Secrets.")
-            
-            if st.session_state.get('ai_mensaje'):
-                st.divider()
-                mostrar_resultados_ia(canal_actual="Rescate_Estancado")
-        else:
-            st.success("Embudo limpio. No hay proyectos estancados mayores a 15 días.")
-    else:
-        st.info("Sube el CSV para auditar proyectos estancados.")
-
-with t_ai:
-    st.subheader("Configuración de Paquete (Bundle) y Estrategia")
-    modo_op = st.radio("Origen de Datos:", ["Agrupar Folios del CRM (Con CSV)", "Prospecto Rápido / Showroom (Sin CSV)"], horizontal=True)
-    
-    c_sel = ""
-    ids = []
-    t_usd, t_mxn = 0.0, 0.0
-    eqs = ""
-    num_proy = 1
-
-    if modo_op == "Agrupar Folios del CRM (Con CSV)":
-        if not df.empty:
-            clientes = sorted(df['Cliente'].dropna().unique().tolist())
-            c_sel_box = st.selectbox("1. Selecciona la Cuenta:", ["-- Selecciona --"] + clientes)
-            if c_sel_box != "-- Selecciona --":
-                c_sel = c_sel_box
-                df_c = df[df['Cliente'] == c_sel]
-                opciones = df_c.apply(lambda x: f"[{x['ID_Proyecto']}] {str(x['Descripcion'])} - ${x['Monto_USD']:,.0f} USD / ${x['Monto_MXN']:,.0f} MXN", axis=1).tolist()
-                p_sel = st.multiselect("2. Agrupar Folios:", opciones)
-                if p_sel:
-                    ids = [o.split("]")[0].replace("[", "") for o in p_sel]
-                    df_s = df[df['ID_Proyecto'].astype(str).isin(ids)]
-                    t_usd, t_mxn = df_s['Monto_USD'].sum(), df_s['Monto_MXN'].sum()
-                    eqs = " | ".join(df_s['Descripcion'].astype(str).tolist())
-                    num_proy = len(df_s)
-                    st.markdown(f"**Valor del Paquete:** <span style='color:green'>${t_usd:,.2f} USD</span> | <span style='color:purple'>${t_mxn:,.2f} MXN</span>", unsafe_allow_html=True)
-        else:
-            st.info("Sube el CSV en el menú lateral para ver tus cuentas, o cambia arriba a 'Prospecto Rápido / Showroom'.")
-    else:
-        cs1, cs2 = st.columns(2)
-        with cs1:
-            c_sel = st.text_input("Nombre de la Empresa / Prospecto:", placeholder="Ej. Fulltech Casting / ITP Aero...")
-            eq_lista = st.multiselect("Equipos o Servicios de Interés:", [
-                "Brazo Articulado Kreon", "Escáner 3D Scantech", "Durómetro Wilson", 
-                "Metalografía Buehler", "Comparador Óptico Baty", "Medición Óptica Vicivision",
-                "CMM Zeiss", "Perfilómetro / Rugosímetro Taylor Hobson", "Máquina Universal Galdabini",
-                "Póliza de Calibración Dimensional / Acreditada"
-            ])
-        with cs2:
-            giro_ind = st.selectbox("Giro Industrial:", ["Manufactura Metálica / Fundición", "Automotriz / Autopartes", "Aeroespacial", "Plásticos y Moldes", "Industria General"])
-            t_usd = st.number_input("Monto Estimado (USD):", min_value=0.0, step=1000.0, value=15000.0)
-            
-        ids = ["SHOWROOM-2026"]
-        eqs = (", ".join(eq_lista) if eq_lista else "Soluciones Metrológicas MESS") + f" (Giro: {giro_ind})"
-
-    if c_sel and ids:
-        st.markdown("#### Configuración Táctica (Motor de Estrategia)")
-        c1, c2 = st.columns(2)
-        with c1:
-            obj_tactico = st.radio(
-                "Objetivo de la Estrategia:", 
-                [
-                    "Cierre / Negociación / Seguimiento Virtual", 
-                    "Apertura / Visita Presencial", 
-                    "Visita con Acompañamiento (Gerencia / Dirección)"
-                ]
-            )
-            canal = st.selectbox(
-                "Canal / Tipo de Acción:", 
-                [
-                    "Correo Electrónico Ejecutivo",
-                    "Guion de Llamada Telefónica",
-                    "Mensaje WhatsApp",
-                    "Visita Presencial con Cliente",
-                    "Visita con Director / Acompañamiento",
-                    "Cierre / Negociación de Propuesta"
-                ]
-            )
-            interlocutor = st.selectbox(
-                "Interlocutor:", 
-                [
-                    "Comprador", 
-                    "Ingeniero / Planta", 
-                    "Gerente de Calidad / Operaciones",
-                    "Director / Dueño"
-                ]
-            )
-        with c2:
-            contexto = st.text_area(
-                "Notas Manuales (Contexto actual):", 
-                placeholder="Ej. Visita a planta con gerencia para destrabar PO, o condiciones de crédito...",
-                height=180
-            )
-            
-        if gemini_activo and st.button("Generar Estrategia", type="primary"):
-            with st.spinner("Procesando estrategia con Gemini..."):
-                try:
-                    datos_ia = ejecutar_ia(c_sel, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico, canal, contexto)
-                    st.session_state.update(datos_ia)
-                    st.session_state.update({'ai_cliente': c_sel, 'ai_folio': ", ".join(ids), 'ai_usd': t_usd, 'ai_mxn': t_mxn})
-                except Exception as e:
-                    st.error(f"Error API: {e}")
-
-    mostrar_resultados_ia(canal_actual="Laboratorio_IA")
-
-with t_revops:
-    t_roi, t_fc = st.tabs(["Calculadora ROI", "Forecast Automático"])
-    with t_roi:
-        st.subheader("Calculadora de ROI Metrológico")
-        cr1, cr2 = st.columns(2)
-        with cr1:
-            inv = st.number_input("Inversión del Equipo (Ej. 60000 USD)", min_value=0.0, value=60000.0)
-            c_hora = st.number_input("Costo Máquina CNC / Hora (USD)", value=50.0)
-            rechazo = st.number_input("Piezas rechazadas o retrabajadas por semana", value=10)
-        with cr2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Calcular Retorno Financiero", type="primary"):
-                ahorro_anual = (c_hora * 2) * rechazo * 52
-                meses_roi = inv / (ahorro_anual / 12) if ahorro_anual > 0 else 999
-                st.session_state.roi_calc = f"Ahorro anual estimado: ${ahorro_anual:,.2f} USD | Retorno de inversión en {meses_roi:.1f} meses"
-                st.success(st.session_state.roi_calc)
-
-    with t_fc:
-        st.subheader("Forecast Real (Pipeline Ponderado)")
-        reps = run_query("SELECT id, folio_proyecto, cliente, monto, probabilidad, semana, divisa, estatus FROM reportes")
-        if reps:
-            df_fc = pd.DataFrame(reps, columns=["ID", "Folio", "Cliente", "Monto", "Prob(%)", "Semana", "Divisa", "Estatus"])
-            df_fc['Forecast_Real'] = df_fc['Monto'] * (df_fc['Prob(%)'] / 100.0)
-            
-            c_f1, c_f2 = st.columns(2)
-            for divisa, col in zip(["USD", "MXN"], [c_f1, c_f2]):
-                df_div = df_fc[df_fc['Divisa'] == divisa]
-                col.metric(f"Forecast {divisa}", f"${df_div['Forecast_Real'].sum():,.2f}", f"Pipeline Total: ${df_div['Monto'].sum():,.2f}")
-            
-            st.dataframe(df_fc.drop(columns=['ID']), use_container_width=True)
-        else:
-            st.info("Sin registros en SQLite para calcular Forecast. Genera e inyecta una estrategia desde el Laboratorio Táctico IA.")
+            elif 'GANAD' in e or 'CERRAD' in e: return "5. Cerrado Ganado
