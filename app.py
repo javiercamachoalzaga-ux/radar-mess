@@ -80,4 +80,4 @@ for v in vars_txt:
 for nv in ['ai_usd', 'ai_mxn']:
     if nv not in st.session_state: st.session_state[nv] = 0.0
 
-def init_
+def init_db():
