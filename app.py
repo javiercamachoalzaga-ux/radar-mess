@@ -344,4 +344,4 @@ with t_dash:
         c2.metric("Pipeline Probable (Activo)", f"${usd_caliente:,.2f} USD", f"+ ${mxn_caliente:,.2f} MXN")
         gap = META_MENSUAL_USD - usd_caliente
         if gap > 0: c3.metric("GAP (Brecha)", f"${gap:,.2f} USD", "- Acción Requerida")
-        else: c3.metric("GAP (Brecha
+        else: c3.metric("GAP (Brecha)", "$0.00 USD", "+ Meta Cubierta")
