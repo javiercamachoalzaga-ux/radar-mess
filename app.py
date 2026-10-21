@@ -83,7 +83,12 @@ for nv in ['ai_usd', 'ai_mxn']:
 def init_db():
     conn = sqlite3.connect("mess_radar.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS reportes (id INTEGER PRIMARY KEY AUTOINCREMENT, folio_proyecto TEXT, cliente TEXT, pain TEXT, monto REAL, probabilidad INTEGER, semana TEXT, divisa TEXT, siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL)")
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS reportes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, folio_proyecto TEXT, cliente TEXT, "
+        "pain TEXT, monto REAL, probabilidad INTEGER, semana TEXT, divisa TEXT, "
+        "siguiente_paso TEXT, fecha_prox TEXT, estatus TEXT, roi_calculado REAL)"
+    )
     cursor.execute("PRAGMA table_info(reportes)")
     columnas = [col[1] for col in cursor.fetchall()]
     if 'folio_proyecto' not in columnas: cursor.execute("ALTER TABLE reportes ADD COLUMN folio_proyecto TEXT")
@@ -123,7 +128,6 @@ def ejecutar_ia(cliente, interlocutor, num_proy, eqs, t_usd, t_mxn, obj_tactico,
         f"<MARKETING>Solicitud concreta de Account-Based Marketing (ABM) para esta cuenta</MARKETING> "
         f"<LOG>Bitácora hiper-resumida de 2 líneas para el CRM SCOTT</LOG>"
     )
-    # Restaurado a la versión estable: gemini-pro
     model = genai.GenerativeModel("gemini-pro")
     res = model.generate_content(prompt).text
     def extr(tag, t): 
@@ -142,9 +146,128 @@ def mostrar_resultados_ia(canal_actual="Seguimiento"):
         st.success(f"Estrategia Generada para: {st.session_state.ai_cliente} (Folios: {st.session_state.ai_folio})")
         st.info(f"**1. Análisis Estratégico (Bundle):**\n\n{st.session_state.ai_analisis}")
         
-        msj_html = f"<div class='caja-ia'><b>2. Mensaje / Guion de Contacto:</b><br><br>{st.session_state.ai_mensaje}</div>"
+        msj_html = (
+            f"<div class='caja-ia'><b>2. Mensaje / Guion de Contacto:</b><br><br>"
+            f"{st.session_state.ai_mensaje}</div>"
+        )
         st.markdown(msj_html, unsafe_allow_html=True)
         
         st.warning(f"**3. Manejo de Objeciones:**\n\n{st.session_state.ai_objeciones}")
         
-        abm_html = f"<div class='caja-abm'><b>4. Solicitud Account-Based Marketing (ABM):</b><br><br>{st.session_state.ai_marketing}
+        abm_html = (
+            f"<div class='caja-abm'><b>4. Solicitud Account-Based Marketing (ABM):</b><br><br>"
+            f"{st.session_state.ai_marketing}</div>"
+        )
+        st.markdown(abm_html, unsafe_allow_html=True)
+        
+        st.divider()
+        st.markdown("### Módulo de Ejecución Rápida")
+        c_op1, c_op2, c_op3 = st.columns(3)
+        
+        with c_op1:
+            txt_wa = urllib.parse.quote(st.session_state.ai_mensaje)
+            url_wa = f"https://wa.me/?text={txt_wa}"
+            st.markdown(f'<a href="{url_wa}" target="_blank" class="btn-wa">Enviar por WhatsApp</a>', unsafe_allow_html=True)
+            
+        with c_op2:
+            titulo_cita = urllib.parse.quote(f"Visita / Seguimiento MESS - {st.session_state.ai_cliente}")
+            detalles_cita = urllib.parse.quote(f"Folios: {st.session_state.ai_folio}\n\nBitácora:\n{st.session_state.ai_log}")
+            url_gcal = f"https://calendar.google.com/calendar/render?action=TEMPLATE&text={titulo_cita}&details={detalles_cita}"
+            st.markdown(f'<a href="{url_gcal}" target="_blank" class="btn-google">Agendar en Calendar</a>', unsafe_allow_html=True)
+
+        with c_op3:
+            if docx_disponible:
+                def generar_docx():
+                    doc = Document()
+                    doc.add_heading("PLAN DE ATAQUE KAM - MESS", 0)
+                    doc.add_paragraph(f"Cliente: {st.session_state.ai_cliente} | Folios: {st.session_state.ai_folio}")
+                    doc.add_heading("1. Análisis Estratégico", 1)
+                    doc.add_paragraph(st.session_state.ai_analisis)
+                    doc.add_heading("2. Guion / Mensaje", 1)
+                    doc.add_paragraph(st.session_state.ai_mensaje)
+                    doc.add_heading("3. Objeciones", 1)
+                    doc.add_paragraph(st.session_state.ai_objeciones)
+                    doc.add_heading("4. Solicitud ABM", 1)
+                    doc.add_paragraph(st.session_state.ai_marketing)
+                    b = io.BytesIO()
+                    doc.save(b)
+                    b.seek(0)
+                    return b
+                st.download_button("Descargar Ficha .docx", data=generar_docx(), file_name=f"Plan_{st.session_state.ai_cliente.replace(' ','_')}.docx", use_container_width=True)
+
+        st.markdown("**5. Bitácora Hiper-Resumida (Copia y pega en SCOTT CRM):**")
+        st.text_area("Reporte listo para SCOTT:", value=st.session_state.ai_log, height=90, key=f"scott_{canal_actual}")
+        
+        if st.button("Inyectar al Forecast del SAIV", key=f"iny_{canal_actual}"):
+            f_hoy = datetime.now().strftime("%Y-%m-%d")
+            div = "USD" if st.session_state.ai_usd > 0 else "MXN"
+            mto = st.session_state.ai_usd if div == "USD" else st.session_state.ai_mxn
+            
+            q_ins = (
+                "INSERT INTO reportes (folio_proyecto, cliente, pain, monto, probabilidad, "
+                "semana, divisa, siguiente_paso, fecha_prox, estatus) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            val_tup = (
+                st.session_state.ai_folio, st.session_state.ai_cliente, 
+                st.session_state.ai_log, mto, 50, "W1", div, 
+                canal_actual, f_hoy, "3. Negociación"
+            )
+            run_query(q_ins, val_tup, fetch=False)
+            st.success("Proyecto registrado en el Forecast.")
+
+def procesar_csv(archivo):
+    try:
+        df_raw = pd.read_csv(archivo, encoding='latin-1', header=None, sep=None, engine='python')
+        header_idx = -1
+        for idx, row in df_raw.iterrows():
+            row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
+            if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
+                header_idx = idx
+                break
+        if header_idx == -1: return None
+        
+        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
+        df_data = df_raw.iloc[header_idx+1:].dropna(axis=1, how='all')
+        df_data.columns = headers[:len(df_data.columns)]
+
+        def buscar_col(claves):
+            for clave in claves:
+                for col in df_data.columns:
+                    if str(col).upper().strip() == clave or str(col).upper().strip() == f"{clave}.1":
+                        return df_data[col].copy()
+            return pd.Series([None] * len(df_data))
+
+        df_clean = pd.DataFrame()
+        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
+        df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
+        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
+        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
+        df_clean['Estatus_CRM'] = buscar_col(["ESTATUS"])
+        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
+        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
+
+        def extr_num(val):
+            v = re.sub(r'[^\d.]', '', str(val).upper().replace(',', ''))
+            return float(v) if v else 0.0
+
+        monto_mxn, monto_usd = np.zeros(len(df_data)), np.zeros(len(df_data))
+        col_moneda = buscar_col(["MONEDA", "DIVISA"])
+        
+        for col in df_data.columns:
+            c_name = str(col).upper().strip()
+            if any(k in c_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
+                is_usd = 'USD' in c_name or 'US$' in c_name
+                for i in range(len(df_data)):
+                    val = df_data[col].iloc[i]
+                    num = extr_num(val)
+                    mon_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
+                    if is_usd or 'USD' in str(val).upper() or 'US$' in str(val).upper() or 'USD' in mon_fila:
+                        monto_usd[i] += num
+                    else:
+                        monto_mxn[i] += num
+                        
+        df_clean['Monto_MXN'] = monto_mxn
+        df_clean['Monto_USD'] = monto_usd
+        df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
+        df_clean['Cliente'] = df_clean['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace("?", "ó")).strip().title() if pd.notna(x)
