@@ -135,4 +135,4 @@ tab_dashboards, tab_enablement, tab_scott, tab_revops = st.tabs([
     "4. Gestión Comercial (RevOps)"
 ])
 
-archivo_c
+archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
