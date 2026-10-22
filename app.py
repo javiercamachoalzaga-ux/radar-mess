@@ -90,9 +90,8 @@ if not check_password():
 st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitulo">Módulo CRM SCOTT | Revenue Operations | MESS</div>', unsafe_allow_html=True)
 
-tab_dashboards, tab_enablement, tab_scott, tab_revops = st.tabs([
-    "1. Dashboards CRM", "2. Proyectos Estancados", 
-    "3. Laboratorio IA (Estrategia Integral)", "4. Gestión Comercial (RevOps)"
+tab_dashboards, tab_scott = st.tabs([
+    "1. Dashboards CRM", "2. Laboratorio IA (Estrategia Integral)"
 ])
 
 @st.cache_data
@@ -229,7 +228,7 @@ if archivo_cargado is not None:
     elif df_proc is None:
         st.sidebar.error("Formato no válido. Sube la plantilla original SCOTT.")
 
-# TAB 1
+# TAB 1: DASHBOARDS
 with tab_dashboards:
     if not df.empty:
         st.markdown("### Análisis de Forecast vs Cuota ($80K USD)")
@@ -282,25 +281,7 @@ with tab_dashboards:
     else:
         st.info("Sube el archivo CSV del CRM SCOTT en la barra lateral para ver tus datos.")
 
-# TAB 2
-with tab_enablement:
-    if not df.empty:
-        st.markdown("### Riesgo Operativo y Proyectos Estancados")
-        estancados = df[(df['Fase_Pipeline'].isin(['1. Propuesta', '2. Cotización'])) & (df['Días_Activo'] > 15)].sort_values(by='Monto_USD', ascending=False)
-        if not estancados.empty:
-            for _, r in estancados.head(4).iterrows():
-                with st.container(border=True):
-                    st.markdown(f"**{r['ID_Proyecto']} | {r['Cliente']}**")
-                    st.write(f"Días inactivo: **{r['Días_Activo']:.0f}** | Riesgo: **${r['Monto_USD']:,.2f} USD**")
-        else:
-            st.success("Embudo limpio.")
-        st.divider()
-        st.markdown("#### Auditoría Rápida CRM")
-        st.dataframe(df[['ID_Proyecto', 'Cliente', 'Descripcion', 'Fase_Pipeline', 'Monto_USD', 'Monto_MXN']], use_container_width=True, hide_index=True)
-    else:
-        st.info("Requiere subir el CSV.")
-
-# TAB 3
+# TAB 2: LABORATORIO IA
 with tab_scott:
     if not df.empty:
         st.markdown("### Copiloto Estratégico (Key Account Management)")
@@ -374,7 +355,20 @@ with tab_scott:
                     st.warning(st.session_state.tactica_objeciones)
                     st.info(st.session_state.tactica_marketing)
                     st.success(st.session_state.tactica_bitacora)
-                    
-                    st.markdown("### 🚀 Enviar al Forecast (RevOps)")
-                    with st.form("form_ia_to_revops"):
-                        cf1, cf2, cf3 = st
+                            
+                    if docx_disponible:
+                        st.divider()
+                        st.markdown("### 📤 Exportar Documento")
+                        def exp_docx():
+                            doc = Document()
+                            doc.add_heading("ESTRATEGIA KAM", 0)
+                            doc.add_paragraph(f"Cliente: {st.session_state.tactica_cliente}")
+                            doc.add_paragraph(st.session_state.tactica_analisis)
+                            doc.add_paragraph(st.session_state.tactica_mensaje)
+                            b = io.BytesIO()
+                            doc.save(b)
+                            b.seek(0)
+                            return b
+                        st.download_button("Descargar .docx", data=exp_docx(), file_name="Estrategia.docx")
+    else:
+        st.info("Requiere datos.")
