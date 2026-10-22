@@ -151,4 +151,4 @@ def procesar_csv(archivo_bytes):
         try:
             df_raw = pd.read_csv(io.BytesIO(archivo_bytes), encoding='utf-8-sig', header=None, sep=None, engine='python')
         except Exception:
-            df_raw =
+ df_raw = pd.read_csv(io.BytesIO(file_bytes), encoding='utf-8-sig', header=None, sep=None, engine='python')
