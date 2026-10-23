@@ -21,9 +21,9 @@ if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
     ia_activa = True
 
-# Modelo compatible forzado de forma explícita y directa
+# Modelo actualizado exactamente al recomendado por el servidor de Google
 def obtener_modelo_activo():
-    return genai.GenerativeModel("gemini-2.0-flash")
+    return genai.GenerativeModel("gemini-3.8-flash")
 
 st.markdown("""
     <style>
