@@ -257,4 +257,50 @@ with t_ia:
                 t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
                 eqs = " | ".join(df_s['Desc'].tolist())
                 
-                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> \vert{}${t_mxn:,.2f} MXN", unsafe_allow_html=
+                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> \vert{}${t_mxn:,.2f} MXN", unsafe_allow_html=True)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    canal = st.radio("Canal:", ["Mensaje WhatsApp", "Correo Ejecutivo", "Llamada", "Visita Presencial"])
+                    perfil = st.selectbox("Interlocutor:", ["Ingeniero/Planta", "Comprador", "Director/Dueño"])
+                with c2:
+                    giro = st.text_input("Giro (Ej. Aeroespacial):")
+                    ctx = st.text_area("Contexto (Opcional):", placeholder="Ej. Tienen parado el proyecto por presupuesto.")
+                
+                if ia_activa and st.button("🧠 Generar Estrategia de Cierre", type="primary"):
+                    with st.spinner("Fusionando MEDDPICC y Sandler..."):
+                        try:
+                            prompt = f"Cliente: {c_sel}. Perfil: {perfil}. Giro: {giro}. Equipos: {eqs}. Monto: ${t_usd} USD. Acción: {canal}. Contexto: {ctx}. Eres KAM de MESS B2B. Usa MEDDPICC, SPIN y Sandler (cierre negativo). Devuelve SOLO en XML: <ANALYSIS> <MESSAGE> <OBJECTIONS> <LOG>."
+                            res = genai.GenerativeModel("gemini-pro").generate_content(prompt).text
+                            
+                            def ext(tag): 
+                                m = re.search(fr'<{tag}>(.*?)</{tag}>', res, re.DOTALL)
+                                return m.group(1).strip() if m else ""
+                            
+                            st.session_state['ia_res'] = {
+                                'analisis': ext('ANALYSIS'), 'mensaje': ext('MESSAGE'),
+                                'objeciones': ext('OBJECTIONS'), 'log': ext('LOG')
+                            }
+                        except Exception as e:
+                            st.error(f"Error IA: {e}")
+
+                res_ia = st.session_state.get('ia_res', {})
+                if res_ia.get('mensaje'):
+                    st.divider()
+                    st.info(f"**Análisis Estratégico:**\n{res_ia['analisis']}")
+                    
+                    st.markdown("#### 💬 Guion / Mensaje (Editable)")
+                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo:", value=res_ia['mensaje'], height=150)
+                    
+                    wa_url = f"https://wa.me/?text={urllib.parse.quote(msg_editado)}"
+                    st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:8px 15px;border-radius:5px;text-decoration:none;font-weight:bold;">📲 Enviar por WhatsApp</a>', unsafe_allow_html=True)
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
+                    st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
+                    
+                    if docx_disponible:
+                        def get_docx():
+                            d = Document()
+                            d.add_heading("ESTRATEGIA KAM", 0)
+                            d.add_paragraph(
