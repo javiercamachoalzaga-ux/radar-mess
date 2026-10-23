@@ -172,6 +172,14 @@ with t_dash:
         with cg2:
             st.markdown("**Salud del Embudo**")
             st.altair_chart(alt.Chart(df.groupby('Fase')['Total_USD_Eq'].sum().reset_index()).mark_bar(color='#2ecc71').encode(x='Total_USD_Eq', y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
+
+        st.divider()
+        st.markdown("#### Detalle Operativo del Pipeline Activo")
+        df_display = activos[['ID', 'Cliente', 'Desc', 'Fase', 'USD', 'MXN']].copy()
+        df_display['USD'] = df_display['USD'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00")
+        df_display['MXN'] = df_display['MXN'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
     else:
         st.info("Sube el CSV de SCOTT para visualizar tu Pipeline.")
 
@@ -181,7 +189,7 @@ with t_ia:
         c_sel = st.selectbox("1. Selecciona Cliente:", ["--"] + sorted(df['Cliente'].unique()))
         if c_sel != "--":
             df_c = df[df['Cliente'] == c_sel]
-            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD)", axis=1).tolist()
+            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD / ${x['MXN']:,.0f} MXN)", axis=1).tolist()
             p_sel = st.multiselect("2. Folios a incluir (Bundle):", opc, default=opc[:1])
             
             if p_sel:
