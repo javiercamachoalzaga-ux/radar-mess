@@ -257,7 +257,7 @@ with t_ia:
                 t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
                 eqs = " | ".join(df_s['Desc'].tolist())
                 
-                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> \vert{}${t_mxn:,.2f} MXN", unsafe_allow_html=True)
+                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> | ${t_mxn:,.2f} MXN", unsafe_allow_html=True)
                 
                 c1, c2 = st.columns(2)
                 with c1:
