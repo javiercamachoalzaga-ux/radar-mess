@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SAIV | Radar Comercial MESS  (v2: pipeline vivo + Laboratorio IA)
+SAIV | Radar Comercial MESS  (v2.1: pipeline vivo + Laboratorio IA + ABM / Marketing)
 
 Secrets (.streamlit/secrets.toml):
     mi_contrasena  = "tu_contraseña"
@@ -75,6 +75,7 @@ OBJETIVOS = [
     "Reactivar proyecto frío",
     "Ampliar la cuenta (cross-selling)",
     "Agendar visita técnica",
+    "Desplegar campaña ABM / Marketing digital específico",
 ]
 FOCO_MEDDPICC = {
     0: "validar si el proyecto sigue vivo y quién decide",
@@ -88,7 +89,6 @@ CANALES = ["WhatsApp", "Correo ejecutivo", "Llamada", "Visita presencial"]
 PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
 # Cuentas que son el mismo grupo bajo distintos nombres en SCOTT.
-# Revisa y ajusta esta lista: se infirió solo por el nombre del cliente.
 ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "DANA", "STEERINGMEX"]
 
 # ---------------------------------------------------------------------------
@@ -188,8 +188,6 @@ def detect_delimiter(text):
         return ","
 
 
-# Reparaciones seguras de letras perdidas en SCOTT (el '?' ya viene así en el CSV).
-# Solo patrones inequívocos: no se adivina una letra para cualquier '?'.
 REPARACIONES = [
     ("ci?n", "ción"), ("CI?N", "CIÓN"), ("Ci?n", "Ción"),
     ("?xico", "éxico"), ("?XICO", "ÉXICO"),
@@ -209,7 +207,6 @@ def reparar_texto(x):
 
 
 def parse_valor(v):
-    """'18,900.00 MXN' -> (18900.0, 'MXN'). Sin moneda explícita se toma MXN."""
     s = "" if v is None else str(v)
     m = re.search(r"-?\d[\d,]*\.?\d*", s)
     try:
@@ -253,7 +250,6 @@ def cuenta_de(cliente):
 
 @st.cache_data(show_spinner=False)
 def load_pipeline(raw_bytes, hoy_iso):
-    """Lee el CSV de SCOTT. Devuelve (DataFrame, lista de avisos)."""
     avisos = []
     hoy = pd.Timestamp(hoy_iso)
     text = decode_bytes(raw_bytes)
@@ -368,7 +364,6 @@ def load_pipeline(raw_bytes, hoy_iso):
 
 
 def enrich(df, tc, probs, rates):
-    """Agrega equivalencias, ponderado, comisión estimada y alertas."""
     d = df.copy()
     d["Total_USD_Eq"] = d["Monto_USD"] + d["Monto_MXN"] / tc
     d["Prob"] = d["Fase_Num"].map(lambda f: probs.get(int(f), 10) / 100.0)
@@ -519,7 +514,7 @@ def call_gemini(prompt):
 
 def parse_tags(text):
     out = {}
-    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "LOG"]:
+    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "MARKETING", "LOG"]:
         pat = "<" + tag + ">(.*?)(?=</" + tag + ">|<[A-Z]+>|$)"
         m = re.search(pat, text or "", re.S | re.I)
         out[tag] = m.group(1).strip() if m else ""
@@ -561,8 +556,9 @@ def build_prompt(ctx):
         "- SPIN Selling: preguntas de Situación, Problema, Implicación y Necesidad-Solución sobre el riesgo de medir mal o calibrar tarde.",
         "- MEDDPICC: en esta fase el foco es " + ctx["foco"] + ". Señala qué elementos faltan por validar y qué pregunta los destapa.",
         "- Sandler: dale al cliente permiso de decir que no, sin presión y sin forzar una decisión. Busca una respuesta honesta, no una promesa.",
+        "- Account-Based Marketing (ABM): propón tácticas de marketing digital o de guerrilla enfocadas específicamente a esta cuenta para influir en los tomadores de decisiones.",
         "",
-        "FORMATO: responde ÚNICAMENTE con estas cuatro etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
+        "FORMATO: responde ÚNICAMENTE con estas cinco etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
         "<ANALYSIS> Diagnóstico breve: qué sabemos, qué falta validar (lista corta MEDDPICC) y la mejor jugada para esta fase. </ANALYSIS>",
         "<MESSAGE> Dos versiones listas para enviar por el canal indicado, separadas por una línea con tres guiones (---): primero la versión BREVE y después la COMPLETA. Incluye al menos una pregunta SPIN y un cierre con permiso de decir no. </MESSAGE>",
         "REGLAS PARA <MESSAGE>: el texto se mostrará en una caja de texto plano. PROHIBIDO usar tablas Markdown (nada de barras verticales ni :---) y PROHIBIDO usar asteriscos.",
@@ -572,16 +568,16 @@ def build_prompt(ctx):
         "Inversión: [monto exacto en USD o MXN; si no hay monto escribe 'Por cotizar']",
         "La versión BREVE no lleva la lista: solo menciona el paquete y una pregunta.",
         "<OBJECTIONS> Las dos o tres objeciones más probables (precio, tiempos, prioridad interna) y cómo responderlas con enfoque Sandler. </OBJECTIONS>",
+        "<MARKETING> Acciones de marketing digital o tácticas ABM recomendadas para esta cuenta (ej. envío de casos de éxito técnicos, whitepapers de metrología o invitación personalizada). </MARKETING>",
         "<LOG> Resumen de dos a cuatro líneas para registrar en SCOTT: acción, interlocutor y siguiente paso. </LOG>",
     ]
     return "\n".join(lines)
 
 
 def clean_message(txt):
-    """Texto plano: quita asteriscos y líneas de tablas Markdown sin borrar contenido útil."""
     out = []
     for line in str(txt or "").replace("**", "").splitlines():
-        if re.match(r"^\s*\|.*\|\s*$", line) or re.match(r"^\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)+\s*$", line):
+        if re.match(r"^\s*\|.*\|\s*$", line) or re.match(r"^\s*:?-{3,}:?(\s*\Vert{}\s*:?-{3,}:?)+\s*$", line):
             continue
         out.append(line.rstrip())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
@@ -615,6 +611,7 @@ def build_docx(ctx, tags, mensaje, log_txt):
         ("Análisis", tags.get("ANALYSIS", "")),
         ("Mensaje", mensaje),
         ("Manejo de objeciones", tags.get("OBJECTIONS", "")),
+        ("Acciones de Marketing / ABM", tags.get("MARKETING", "")),
         ("Registro para SCOTT", log_txt),
     ]:
         doc.add_heading(titulo, level=2)
@@ -731,7 +728,6 @@ def render_dashboard():
         st.info("Ningún proyecto coincide con los filtros activos.")
         return
 
-    # --- KPIs ---------------------------------------------------------
     n_usd = int((df["Monto_USD"] > 0).sum())
     n_mxn = int((df["Monto_MXN"] > 0).sum())
     c1, c2, c3 = st.columns(3)
@@ -769,7 +765,6 @@ def render_dashboard():
         )
     st.caption("La antigüedad se mide desde la fecha de registro; el CSV no trae fecha del último movimiento.")
 
-    # --- Vista de moneda ------------------------------------------------
     vista = st.radio("Vista de gráficas", ["Global (USD equivalente)", "Solo USD", "Solo MXN"], horizontal=True)
     if vista.startswith("Global"):
         dv, col, cur = df, "Total_USD_Eq", "USD eq."
@@ -779,7 +774,6 @@ def render_dashboard():
         dv, col, cur = df[df["Monto_MXN"] > 0], "Monto_MXN", "MXN"
     dv = dv.assign(Valor_Vista=dv[col], Pond_Vista=dv[col] * dv["Prob"])
 
-    # --- Dónde actuar hoy ----------------------------------------------
     st.markdown("### Dónde actuar hoy")
     cols_base = ["Folio", "Cliente", "Descripcion", "Fase", "Monto_USD", "Monto_MXN", "Total_USD_Eq",
                  "Ponderado", "Cierre_Est", "Dias_Registro", "Alerta", "Siguiente_Paso"]
@@ -800,296 +794,4 @@ def render_dashboard():
         show_table(prox.head(25), cols_base)
     with t3:
         pend = df[df["Sin_Cotizar"]].sort_values("Dias_Registro", ascending=False)
-        st.caption("Proyectos con valor 0.00: aún no hay monto cotizado. Sin cotización no hay cierre.")
-        show_table(pend.head(30), ["Folio", "Cliente", "Descripcion", "Fase", "Area", "Dias_Registro", "Cierre_Est", "Siguiente_Paso"])
-    with t4:
-        rojo = df[df["Semaforo"] == "Rojo"].sort_values("Total_USD_Eq", ascending=False)
-        st.caption("Cierre vencido o antigüedad mayor al doble de lo esperado para su fase. Candidatos a rescate (cierre negativo de Sandler) o a cerrar en SCOTT.")
-        show_table(rojo.head(30), cols_base)
-
-    # --- Gráficas -----------------------------------------------------------
-    st.markdown("### Concentración y embudo (" + cur + ")")
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("**Pareto 80/20 por cuenta**")
-        par = dv.groupby("Cuenta")["Valor_Vista"].sum().sort_values(ascending=False)
-        par = par[par > 0]
-        if not par.empty:
-            pdf = par.reset_index()
-            pdf.columns = ["Cuenta", "Monto"]
-            pdf["Acumulado"] = pdf["Monto"].cumsum() / pdf["Monto"].sum() * 100
-            pdf = pdf.head(15)
-            b = alt.Chart(pdf).encode(x=alt.X("Cuenta:N", sort=None, title=None))
-            barras = b.mark_bar(color=MESS_BLUE).encode(
-                y=alt.Y("Monto:Q", title=cur), tooltip=["Cuenta", alt.Tooltip("Monto:Q", format=",.0f")])
-            linea = b.mark_line(color=ACCENT, point=True).encode(
-                y=alt.Y("Acumulado:Q", scale=alt.Scale(domain=[0, 100]), title="% acumulado"))
-            regla = alt.Chart(pd.DataFrame({"y": [80]})).mark_rule(color=RED, strokeDash=[5, 5]).encode(
-                y=alt.Y("y:Q", scale=alt.Scale(domain=[0, 100])))
-            show_chart(alt.layer(barras, linea + regla).resolve_scale(y="independent").properties(height=320))
-        else:
-            st.info("Sin montos en esta vista.")
-    with g2:
-        st.markdown("**Embudo: bruto frente a ponderado**")
-        emb = dv.groupby("Fase").agg(Bruto=("Valor_Vista", "sum"), Ponderado=("Pond_Vista", "sum")).reset_index()
-        if not emb.empty and emb["Bruto"].sum() > 0:
-            ch_b = alt.Chart(emb).mark_bar(color="#9db8d6").encode(
-                y=alt.Y("Fase:N", sort="ascending", title=None), x=alt.X("Bruto:Q", title=cur, stack=None),
-                tooltip=["Fase", alt.Tooltip("Bruto:Q", format=",.0f")])
-            ch_p = alt.Chart(emb).mark_bar(color=MESS_BLUE, size=10).encode(
-                y=alt.Y("Fase:N", sort="ascending"), x=alt.X("Ponderado:Q", stack=None),
-                tooltip=["Fase", alt.Tooltip("Ponderado:Q", format=",.0f")])
-            show_chart(alt.layer(ch_b, ch_p).properties(height=320))
-            st.caption("Barra clara: monto bruto. Barra oscura: monto ponderado.")
-        else:
-            st.info("Sin montos en esta vista.")
-
-    st.markdown("**Forecast ponderado por área o marca**")
-    fa = dv.groupby("Area")["Pond_Vista"].sum().sort_values(ascending=False).head(12).reset_index()
-    fa = fa[fa["Pond_Vista"] > 0]
-    if not fa.empty:
-        show_chart(alt.Chart(fa).mark_bar(color=MESS_DARK).encode(
-            y=alt.Y("Area:N", sort="-x", title=None), x=alt.X("Pond_Vista:Q", title="Ponderado " + cur),
-            tooltip=["Area", alt.Tooltip("Pond_Vista:Q", format=",.0f")]).properties(height=300))
-
-    # --- Ranking de cuentas clave -----------------------------------------------
-    st.markdown("### Ranking de cuentas clave")
-    rk = df.groupby("Cuenta").agg(
-        Proyectos=("Folio", "count"), USD=("Monto_USD", "sum"), MXN=("Monto_MXN", "sum"),
-        Total=("Total_USD_Eq", "sum"), Ponderado=("Ponderado", "sum"),
-        Fase_Max=("Fase_Num", "max"), Dias_max=("Dias_Registro", "max"),
-        En_Rojo=("Semaforo", lambda x: int((x == "Rojo").sum())),
-        Sin_Cotizar=("Sin_Cotizar", "sum"),
-    ).reset_index().sort_values("Total", ascending=False).reset_index(drop=True)
-    total_rk = float(rk["Total"].sum())
-    if total_rk > 0:
-        rk["Pct"] = rk["Total"] / total_rk * 100
-        rk["Pct_Acum"] = rk["Pct"].cumsum()
-        rk["Clave"] = np.where((rk["Pct_Acum"] - rk["Pct"]) < 80, "Clave 80%", "")
-        n80 = int((rk["Clave"] != "").sum())
-        st.caption(
-            str(n80) + " de " + str(len(rk)) + " cuentas concentran el 80% del valor del pipeline filtrado. "
-            "Ordenado por total equivalente en USD; el ponderado usa la probabilidad por fase."
-        )
-    else:
-        rk["Pct"], rk["Pct_Acum"], rk["Clave"] = 0.0, 0.0, ""
-    rk["Fase más avanzada"] = rk["Fase_Max"].map(FASES)
-    rk.insert(0, "#", range(1, len(rk) + 1))
-    rk_show = rk[["#", "Cuenta", "Proyectos", "USD", "MXN", "Total", "Pct", "Pct_Acum", "Ponderado",
-                  "Fase más avanzada", "Dias_max", "En_Rojo", "Sin_Cotizar", "Clave"]].rename(columns={
-        "Total": "Total Eq. USD", "Pct": "% del total", "Pct_Acum": "% acum.", "Ponderado": "Ponderado USD",
-        "Dias_max": "Días reg. máx.", "En_Rojo": "En rojo", "Sin_Cotizar": "Sin cotizar",
-    })
-    rk_sty = rk_show.style.format({
-        "USD": "${:,.2f}", "MXN": "${:,.2f}", "Total Eq. USD": "${:,.0f}", "Ponderado USD": "${:,.0f}",
-        "% del total": "{:.1f}%", "% acum.": "{:.1f}%",
-    })
-    try:
-        st.dataframe(rk_sty, hide_index=True, width="stretch")
-    except TypeError:
-        st.dataframe(rk_sty, hide_index=True, use_container_width=True)
-
-    # --- Cuentas con varios proyectos -------------------------------------------
-    st.markdown("### Cuentas con 2 o más proyectos (candidatas a bundle)")
-    cta = df.groupby("Cuenta").agg(
-        Proyectos=("Folio", "count"), USD=("Monto_USD", "sum"), MXN=("Monto_MXN", "sum"),
-        Total=("Total_USD_Eq", "sum"), Ponderado=("Ponderado", "sum"),
-        Dias_max=("Dias_Registro", "max"),
-    ).reset_index()
-    cta = cta[cta["Proyectos"] >= 2].sort_values("Total", ascending=False)
-    if cta.empty:
-        st.info("No hay cuentas con múltiples proyectos bajo estos filtros.")
-    else:
-        sty = cta.rename(columns={"Total": "Total Eq. USD", "Ponderado": "Ponderado USD", "Dias_max": "Días reg. máx."}).style.format(
-            {"USD": "${:,.2f}", "MXN": "${:,.2f}", "Total Eq. USD": "${:,.0f}", "Ponderado USD": "${:,.0f}"})
-        try:
-            st.dataframe(sty, hide_index=True, width="stretch")
-        except TypeError:
-            st.dataframe(sty, hide_index=True, use_container_width=True)
-
-    # --- Detalle completo ------------------------------------------------------------
-    st.markdown("### Detalle completo del pipeline")
-    det = df.sort_values("Total_USD_Eq", ascending=False)
-    cols_det = ["Folio", "Cliente", "Cuenta", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN",
-                "Total_USD_Eq", "Ponderado", "Cotizacion", "Cierre_Est", "Dias_Registro", "Semaforo", "Alerta"]
-    show_table(det, cols_det)
-    totals_caption(det)
-    exp = det[cols_det].rename(columns=DISPLAY)
-    st.download_button("Descargar vista filtrada (CSV)", exp.to_csv(index=False).encode("utf-8-sig"),
-                       file_name="pipeline_filtrado.csv", mime="text/csv")
-
-
-# ---------------------------------------------------------------------------
-# LABORATORIO IA
-# ---------------------------------------------------------------------------
-def _apply_quick():
-    lab = st.session_state.get("lab_quick")
-    qmap = st.session_state.get("lab_quick_map", {})
-    if lab in qmap:
-        cuenta, folio = qmap[lab]
-        st.session_state["lab_cuenta"] = cuenta
-        st.session_state["lab_folios_" + cuenta] = [folio]
-
-
-def render_lab():
-    st.markdown("### Laboratorio IA | Copiloto estratégico KAM")
-    if base is None or df.empty:
-        st.info("Sube el CSV y ajusta los filtros para trabajar una cuenta.")
-        return
-    st.caption("Trabaja con los proyectos que pasan los filtros activos del panel lateral.")
-
-    top = df[df["Total_USD_Eq"] > 0].sort_values("Ponderado", ascending=False).head(10)
-    qmap = {}
-    for _, r in top.iterrows():
-        qmap[r["Folio"] + " | " + r["Cuenta"] + " | " + fmt_usd(r["Total_USD_Eq"])] = (r["Cuenta"], r["Folio"])
-    st.session_state["lab_quick_map"] = qmap
-    st.selectbox("Atajo: proyecto prioritario (Top 10)", ["--"] + list(qmap.keys()), key="lab_quick", on_change=_apply_quick)
-
-    cuentas = sorted(df["Cuenta"].unique())
-    if st.session_state.get("lab_cuenta") not in ["--"] + cuentas:
-        st.session_state.pop("lab_cuenta", None)
-    cuenta = st.selectbox("Cuenta", ["--"] + cuentas, key="lab_cuenta")
-    if cuenta == "--":
-        return
-
-    sub = df[df["Cuenta"] == cuenta].sort_values("Ponderado", ascending=False)
-    etiquetas = {
-        r["Folio"]: "Proj: " + r["Folio"] + " | Cot: " + (r["Cotizacion"] or "N/D") + " | " + str(r["Descripcion"])[:40] + " | " + r["Fase"] + " | $"
-        + format(r["Monto_USD"], ",.0f") + " USD / $" + format(r["Monto_MXN"], ",.0f") + " MXN | "
-        + str(r["Dias_Registro"]) + " d"
-        for _, r in sub.iterrows()
-    }
-    folios = st.multiselect(
-        "Folios a incluir (bundle)", list(etiquetas.keys()), default=list(etiquetas.keys())[:1],
-        format_func=lambda x: etiquetas.get(x, x), key="lab_folios_" + cuenta,
-    )
-    if not folios:
-        st.info("Selecciona al menos un folio.")
-        return
-    sel = sub[sub["Folio"].isin(folios)]
-
-    usd, mxn = float(sel["Monto_USD"].sum()), float(sel["Monto_MXN"].sum())
-    desglose = "\n".join([
-        "• Cotización " + (r["Cotizacion"] or "sin número") + " (Proyecto " + r["Folio"] + "): " + str(r["Descripcion"])
-        + " -> Inversión: $" + format(r["Monto_USD"], ",.2f") + " USD / $" + format(r["Monto_MXN"], ",.2f") + " MXN"
-        for _, r in sel.iterrows()
-    ])
-    fase_n = int(sel["Fase_Num"].max())
-    cierre_min = sel["Cierre_Est"].min()
-    st.markdown(
-        '<div class="kpi-card"><div class="kpi-label">Valor del paquete</div>'
-        '<div class="kpi-value">$' + format(usd, ",.2f") + " USD | $" + format(mxn, ",.2f") + " MXN</div>"
-        '<div class="kpi-sub">' + FASES[fase_n] + " | equivalente " + fmt_usd(sel["Total_USD_Eq"].sum())
-        + " | ponderado " + fmt_usd(sel["Ponderado"].sum()) + "</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    obj_def = OBJETIVO_FASE.get(fase_n, OBJETIVOS[0])
-    if bool(sel["Sin_Cotizar"].all()):
-        obj_def = OBJETIVOS[0]
-    c1, c2 = st.columns(2)
-    with c1:
-        objetivo = st.selectbox("Objetivo", OBJETIVOS, index=OBJETIVOS.index(obj_def) if obj_def in OBJETIVOS else 0,
-                                key="obj_" + cuenta + "_" + str(fase_n))
-        canal = st.radio("Canal", CANALES, horizontal=True)
-        perfil = st.selectbox("Interlocutor", PERFILES)
-    with c2:
-        giro = st.text_input("Giro industrial", placeholder="Ej. Aeroespacial, automotriz")
-        contexto = st.text_area("Contexto específico (opcional)", height=110,
-                                placeholder="Ej. Pidió cotización pero hay resistencia por presupuesto o tiempos.")
-
-    if st.button("Generar estrategia de cierre"):
-        ctx = {
-            "cuenta": cuenta, "folios": ", ".join(folios),
-            "descripcion": " | ".join(sel["Descripcion"].astype(str))[:700],
-            "usd": usd, "mxn": mxn, "fase": FASES[fase_n], "dias": int(sel["Dias_Registro"].max()),
-            "cierre": cierre_min.strftime("%d/%m/%Y") if pd.notna(cierre_min) else "Sin fecha",
-            "cotizaciones": ", ".join([c for c in sel["Cotizacion"].astype(str) if c]),
-            "desglose": desglose,
-            "objetivo": objetivo, "canal": canal, "perfil": perfil, "giro": giro, "contexto": contexto,
-            "foco": FOCO_MEDDPICC.get(fase_n, FOCO_MEDDPICC[0]),
-        }
-        with st.spinner("Analizando la cuenta con MEDDPICC, SPIN y Sandler..."):
-            txt, err = call_gemini(build_prompt(ctx))
-        if err:
-            st.error(err)
-        else:
-            tags = parse_tags(txt)
-            st.session_state["ia_counter"] = st.session_state.get("ia_counter", 0) + 1
-            st.session_state["ia_res"] = {
-                "key": (cuenta, tuple(sorted(folios))), "ctx": ctx, "tags": tags, "raw": txt,
-                "id": st.session_state["ia_counter"],
-            }
-
-    res = st.session_state.get("ia_res")
-    if not res:
-        return
-    if res["key"] != (cuenta, tuple(sorted(folios))):
-        st.info("Hay una estrategia generada para otra selección. Pulsa 'Generar estrategia de cierre' para esta.")
-        return
-
-    tags, ctx, rid = res["tags"], res["ctx"], str(res["id"])
-    if not any(tags.values()):
-        st.warning("La IA no devolvió las etiquetas esperadas. Se muestra la respuesta completa; vuelve a generar.")
-        st.write(res["raw"])
-        return
-    if not tags["MESSAGE"]:
-        st.warning("La respuesta no incluyó la etiqueta MESSAGE. Vuelve a generar.")
-
-    st.divider()
-    pa, pm, po, pl = st.tabs(["Análisis", "Mensaje", "Objeciones", "Log para SCOTT"])
-    with pa:
-        st.write(tags["ANALYSIS"])
-    with pm:
-        versiones = [clean_message(v) for v in re.split(r"\n\s*-{3,}\s*\n", tags["MESSAGE"]) if v.strip()]
-        if len(versiones) >= 2:
-            ver = st.radio("Versión", ["Breve", "Completa"], horizontal=True, key="ver_" + rid)
-            base_msg = versiones[0] if ver == "Breve" else versiones[1]
-        else:
-            ver = "Unica"
-            base_msg = clean_message(tags["MESSAGE"])
-        mensaje = st.text_area("Mensaje (editable)", value=base_msg, height=190, key="msg_" + rid + "_" + ver)
-    with po:
-        st.write(tags["OBJECTIONS"])
-    with pl:
-        log_txt = st.text_area("Registro sugerido (editable)", value=tags["LOG"], height=110, key="log_" + rid)
-
-    st.markdown("##### Ejecución rápida")
-    a1, a2 = st.columns(2)
-    with a1:
-        phone = st.text_input("Teléfono WhatsApp (opcional, con lada, ej. 524421234567)", key="ph_" + rid)
-        st.link_button("Abrir WhatsApp con el mensaje", whatsapp_link(mensaje, phone))
-    with a2:
-        d1, d2 = st.columns(2)
-        with d1:
-            f_cita = st.date_input("Seguimiento", value=date.today() + timedelta(days=2), key="fc_" + rid)
-        with d2:
-            h_cita = st.time_input("Hora", value=time(10, 0), key="hc_" + rid)
-        st.link_button(
-            "Crear recordatorio en Google Calendar",
-            gcal_link("Seguimiento " + cuenta, ctx["objetivo"] + "\n\n" + (log_txt or ""), datetime.combine(f_cita, h_cita)),
-        )
-    if Document is None:
-        st.warning("Instala python-docx para descargar la ficha .docx.")
-    else:
-        try:
-            st.download_button(
-                "Descargar ficha estratégica (.docx)",
-                data=build_docx(ctx, tags, mensaje, log_txt),
-                file_name="Estrategia_" + re.sub(r"\W+", "_", cuenta) + ".docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-        except Exception as e:
-            st.error("No se pudo generar el .docx: " + str(e))
-
-
-with tab_dash:
-    try:
-        render_dashboard()
-    except Exception as e:
-        st.error("Error en el dashboard: " + str(e))
-with tab_lab:
-    try:
-        render_lab()
-    except Exception as e:
-        st.error("Error en el Laboratorio IA: " + str(e))
+        st.caption("Pro
