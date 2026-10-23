@@ -205,7 +205,8 @@ if archivo:
 
         f_txt = st.sidebar.text_input("🔍 Buscar (Cliente, Folio, Cotización, Marca):", placeholder="Ej. Nissan, 12345, COT-998, Zeiss...")
         
-        f_rezagados = st.sidebar.checkbox("🚨 Ver Solo Proyectos Rezagados (> 60 días)", help="Aísla los proyectos estancados para revivirlos mediante tácticas de reactivación.")
+        # Filtro ajustado a menos de 25 días (ventana óptima de calibración)
+        f_frescos = st.sidebar.checkbox("⚡ Ver Solo Proyectos Recientes (< 25 días)", help="Aísla las cotizaciones dentro de la ventana óptima de ejecución metrológica.")
         
         f_min_usd = st.sidebar.number_input("💰 Monto Mínimo (USD Eq):", min_value=0, value=0, step=5000, help="Filtra proyectos que superen este valor para enfocarte en las cuentas de mayor impacto.")
         f_fase = st.sidebar.multiselect("📈 Salud del Embudo:", sorted(df['Fase'].unique()))
@@ -223,7 +224,7 @@ if archivo:
         if f_fase: df = df[df['Fase'].isin(f_fase)]
         if f_area: df = df[df['Area'].isin(f_area)]
         if f_pilar: df = df[df['Pilar'].isin(f_pilar)]
-        if f_rezagados: df = df[df['Dias_Activo'] >= 60]
+        if f_frescos: df = df[df['Dias_Activo'] < 25]
 
 t_dash, t_ia = st.tabs(["📊 1. Visualización del Pipeline (Dashboards)", "🧠 2. Laboratorio IA (Estrategias)"])
 
@@ -421,7 +422,7 @@ with t_ia:
                     st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:10px 18px;border-radius:5px;text-decoration:none;font-weight:bold;display:inline-block;margin-top:5px;">📲 Enviar por WhatsApp Directo</a>', unsafe_allow_html=True)
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.warning(f"**🛡️ Manejo Preventivo de Objeciones:**\n{res_ia['objeciones']}")
+                    st.warning(f"**🛡️ Manejo Preventivo de Objeciones:**\n{res_ia['objecions']}")
                     st.success(f"**📋 Bitácora Sugerida para SCOTT:**\n{res_ia['log']}")
                     
                     if docx_disponible:
@@ -429,11 +430,11 @@ with t_ia:
                         def get_docx():
                             d = Document()
                             d.add_heading("ESTRATEGIA KAM - MESS", 0)
-                            d.add_paragraph(f"Cliente: {c_sel}\nCotizaciones: {cots_str}\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nANÁLISIS ESTRATÉGICO:\n{res_ia['analisis']}\n\nMENSAJE / GUION TÁCTICO:\n{msg_editado}\n\nMANEJO DE OBJECIONES:\n{res_ia['objeciones']}\n\nBITÁCORA SCOTT:\n{res_ia['log']}")
+                            d.add_paragraph(f"Cliente: {c_sel}\nCotizaciones: {cots_str}\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nANÁLISIS ESTRATÉGICO:\n{res_ia['analisis']}\n\nMENSAJE / GUION TÁCTICO:\n{msg_editado}\n\nMANEJO DE OBJECIONES:\n{res_ia['objecions']}\n\nBITÁCORA SCOTT:\n{res_ia['log']}")
                             b = io.BytesIO()
                             d.save(b)
                             b.seek(0)
                             return b
                         st.download_button("📥 Descargar Ficha Estratégica (.docx)", data=get_docx(), file_name=f"Estrategia_{c_sel}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
-        st.info("Sube tus datos para iniciar el Laboratorio IA.")
+        st.info("Sube tus datos para iniciar le Laboratorio IA.")
