@@ -299,8 +299,15 @@ with t_ia:
                     st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
                     st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
                     
-                    if docx_disponible:
+                   if docx_disponible:
                         def get_docx():
                             d = Document()
                             d.add_heading("ESTRATEGIA KAM", 0)
-                            d.add_paragraph(
+                            d.add_paragraph(f"Cliente: {c_sel}\nAnálisis:\n{res_ia['analisis']}\n\nMensaje Final:\n{msg_editado}")
+                            b = io.BytesIO()
+                            d.save(b)
+                            b.seek(0)
+                            return b
+                        st.download_button("Descargar Ficha .docx", data=get_docx(), file_name="Estrategia.docx")
+    else:
+        st.info("Sube tus datos para iniciar el Laboratorio IA.")
