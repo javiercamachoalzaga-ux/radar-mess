@@ -22,13 +22,38 @@ if "gemini_api_key" in st.secrets:
 else:
     ia_activa = False
 
+# ESTILOS CORPORATIVOS MESS (Diseño Ejecutivo B2B)
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap');
     html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
-    .titulo { font-size: 34px; font-weight: 900; color: #003a70; text-transform: uppercase; margin-bottom: 0; }
+    
+    .header-mess {
+        background: linear-gradient(135deg, #003a70 0%, #002244 100%);
+        padding: 25px 30px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-left: 6px solid #ff6600;
+    }
+    .header-mess h1 {
+        font-size: 28px;
+        font-weight: 900;
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .header-mess p {
+        font-size: 13px;
+        margin: 5px 0 0 0;
+        color: #cbd5e1;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
     div[data-testid="metric-container"] { background: #fff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .caja-ia { background: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #3498db; margin-bottom: 15px; border: 1px solid #e2e8f0;}
+    .caja-ia { background: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #003a70; margin-bottom: 15px; border: 1px solid #e2e8f0;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -41,8 +66,13 @@ if not st.session_state.get("auth_ok"):
     st.info("Ingresa tu contraseña en el menú lateral.")
     st.stop()
 
-st.markdown('<div class="titulo">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
-st.caption("Dashboard Ejecutivo & Copiloto KAM | MESS Servicios Metrológicos")
+# ENCABEZADO CORPORATIVO OFICIAL MESS
+st.markdown("""
+    <div class="header-mess">
+        <h1>MESS Servicios Metrológicos</h1>
+        <p>SAIV | Sistema Automatizado de Ingeniería de Ventas & Copiloto KAM</p>
+    </div>
+""", unsafe_allow_html=True)
 
 @st.cache_data
 def procesar_csv(file_bytes):
@@ -98,7 +128,6 @@ def procesar_csv(file_bytes):
         work['MXN'] = m_mxn
         work = work.dropna(subset=['ID']).reset_index(drop=True)
         
-        # Limpieza inteligente de texto sin afectar letras iniciales
         def fix_text(x):
             if pd.isna(x): return ""
             t = str(x)
@@ -111,14 +140,11 @@ def procesar_csv(file_bytes):
                 'metr?a': 'metría', 'METR?A': 'METRÍA',
                 '?tico': 'ótico', '?TICO': 'ÓTICO',
                 '?tica': 'ótica', '?TICA': 'ÓTICA',
-                # Limpiamos caracteres extraños al inicio sin destruirlos
                 'Â': '', 'Ã³': 'ó', 'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ãº': 'ú'
             }
             for k, v in reemplazos.items():
                 t = t.replace(k, v)
-            # Reemplazar ? solo si está rodeado por letras (evita romper palabras que empiezan con ? como 'Solicito')
             t = re.sub(r'(?<=[a-zA-Z])\?(?=[a-zA-Z])', 'ó', t)
-            # Limpiar cualquier ? sobrante al inicio de palabra que haya quedado huérfano
             t = re.sub(r'\b\?+', 'S', t) 
             return t.strip()
 
@@ -161,7 +187,7 @@ def procesar_csv(file_bytes):
     except Exception as e:
         return pd.DataFrame()
 
-archivo = st.sidebar.file_uploader("Subir CSV de SCOTT", type=["csv"])
+archivo = st.sidebar.file_uploader("Subir extracción CSV de SCOTT", type=["csv"])
 df = pd.DataFrame()
 if archivo:
     df = procesar_csv(archivo.getvalue())
@@ -229,8 +255,8 @@ with t_dash:
         pareto['Acumulado'] = pareto[col_valor].cumsum() / pareto[col_valor].sum()
         
         if not pareto.empty:
-            barras = alt.Chart(pareto).mark_bar(color='#34495e').encode(x=alt.X('Cliente', sort=None), y=col_valor)
-            linea = alt.Chart(pareto).mark_line(color='#e74c3c', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
+            barras = alt.Chart(pareto).mark_bar(color='#003a70').encode(x=alt.X('Cliente', sort=None), y=col_valor)
+            linea = alt.Chart(pareto).mark_line(color='#ff6600', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
             st.altair_chart(alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350), use_container_width=True)
         else:
             st.info(f"No hay proyectos activos en esta moneda para graficar el Pareto.")
@@ -245,7 +271,7 @@ with t_dash:
             st.markdown(f"**Salud del Embudo ({col_valor})**")
             df_f = df_graf.groupby('Fase')[col_valor].sum().reset_index()
             if not df_f.empty and df_f[col_valor].sum() > 0:
-                st.altair_chart(alt.Chart(df_f).mark_bar(color='#2ecc71').encode(x=col_valor, y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
+                st.altair_chart(alt.Chart(df_f).mark_bar(color='#10b981').encode(x=col_valor, y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
 
     st.divider()
     if not df.empty:
@@ -288,7 +314,7 @@ with t_dash:
         st.info("Sube el CSV de SCOTT o ajusta los filtros para visualizar tu Pipeline.")
 
 with t_ia:
-    st.markdown("### Generador de Estrategias y Guiones (KAM)")
+    st.markdown("### 🔬 Laboratorio IA | Copiloto Estratégico KAM")
     if not df.empty:
         c_sel = st.selectbox("1. Selecciona Cliente (Basado en filtros activos):", ["--"] + sorted(df['Cliente'].unique()))
         if c_sel != "--":
@@ -303,24 +329,69 @@ with t_ia:
                 t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
                 eqs = " | ".join(df_s['Desc'].tolist())
                 
-                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> | ${t_mxn:,.2f} MXN", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="background-color:#f1f5f9; padding:15px; border-radius:8px; border-left:4px solid #003a70; margin-bottom:15px;">
+                    <b>Valor del Paquete Seleccionado:</b> <span style='color:#003a70; font-weight:bold; font-size:18px;'>${t_usd:,.2f} USD</span> | <span style='color:#003a70; font-weight:bold;'>${t_mxn:,.2f} MXN</span><br>
+                    <b>Equipos / Proyectos:</b> {eqs}
+                </div>
+                """, unsafe_allow_html=True)
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    canal = st.radio("Canal:", ["Mensaje WhatsApp", "Correo Ejecutivo", "Llamada", "Visita Presencial"])
-                    perfil = st.selectbox("Interlocutor:", ["Ingeniero/Planta", "Comprador", "Director/Dueño"])
+                    canal = st.radio("Canal de Comunicación:", ["Mensaje WhatsApp", "Correo Ejecutivo", "Llamada", "Visita Presencial"])
+                    perfil = st.selectbox("Perfil del Interlocutor:", ["Ingeniero/Planta", "Comprador", "Director/Dueño"])
                 with c2:
-                    giro = st.text_input("Giro (Ej. Aeroespacial):")
-                    ctx = st.text_area("Contexto (Opcional):", placeholder="Ej. Tienen parado el proyecto por presupuesto.")
+                    giro = st.text_input("Giro Industrial (Ej. Aeroespacial, Automotriz):")
+                    ctx = st.text_area("Contexto Específico (Opcional):", placeholder="Ej. El cliente solicitó cotizaciones pero hay resistencia por presupuesto o tiempos de entrega.")
                 
-                if ia_activa and st.button("🧠 Generar Estrategia de Cierre", type="primary"):
-                    with st.spinner("Fusionando MEDDPICC y Sandler..."):
+                if ia_activa and st.button("🚀 Generar Estrategia de Cierre KAM", type="primary"):
+                    with st.spinner("Analizando cuenta y fusionando MEDDPICC, SPIN y Sandler..."):
                         try:
-                            prompt = f"Cliente: {c_sel}. Perfil: {perfil}. Giro: {giro}. Equipos: {eqs}. Monto: ${t_usd} USD. Acción: {canal}. Contexto: {ctx}. Eres KAM de MESS B2B. Usa MEDDPICC, SPIN y Sandler (cierre negativo). Devuelve SOLO en XML: <ANALYSIS> <MESSAGE> <OBJECTIONS> <LOG>."
-                            res = genai.GenerativeModel("gemini-pro").generate_content(prompt).text
+                            # ACTUALIZADO AL MODELO ESTABLE REQUERIDO
+                            model = genai.GenerativeModel("gemini-3.8-flash")
+                            
+                            # PROMPT MAESTRO B2B (METROLOGÍA + MEDDPICC + SPIN + SANDLER)
+                            prompt = f"""
+                            Eres un Key Account Manager (KAM) senior en MESS Servicios Metrológicos, altamente especializado en ventas consultivas B2B de equipos de metrología industrial (CMM Zeiss, brazos de medición Kreon/Scantech, perfilómetros Taylor Hobson, microscopios, durómetros Wilson, calibración y preparación metalográfica).
+                            
+                            DATOS DE LA NEGOCIACIÓN:
+                            - Cliente: {c_sel}
+                            - Giro Industrial: {giro}
+                            - Interlocutor: {perfil}
+                            - Equipos / Servicios en juego: {eqs}
+                            - Valor del Paquete: ${t_usd:,.2f} USD | ${t_mxn:,.2f} MXN
+                            - Canal de Contacto: {canal}
+                            - Contexto de la Cuenta: {ctx}
+                            
+                            INSTRUCCIONES METODOLÓGICAS:
+                            1. Utiliza lenguaje técnico metrológico natural y corporativo, enfocado en asegurar la trazabilidad, evitar paros de línea y garantizar la certidumbre dimensional en piso de producción.
+                            2. Fusiona de forma invisible y experta las siguientes metodologías de venta B2B:
+                               - **SPIN Selling**: Haz preguntas de Situación, Problema, Implicación y Necesidad-Solución orientadas al riesgo de no medir con precisión.
+                               - **MEDDPICC**: Valida los criterios económicos (Metrics), el proceso de decisión (Decision Criteria / Process), y al Economic Buyer.
+                               - **Sandler Training**: Aplica un enfoque consultivo estricto, utilizando técnicas de cierre negativo o desapego profesional para neutralizar objeciones y obligar a una postura de decisión clara por parte del cliente.
+                            
+                            FORMATO DE SALIDA ESTRICTO EN ETIQUETAS XML (NO uses Markdown fuera de los tags):
+                            <ANALYSIS>
+                            (Desglose táctico de la cuenta combinando MEDDPICC y el dolor principal identificado con SPIN)
+                            </ANALYSIS>
+                            
+                            <MESSAGE>
+                            (El guion, correo o mensaje exacto redactado con tono humano, persuasivo, directo y profesional para el canal seleccionado, sin sonar exagerado ni robótico)
+                            </MESSAGE>
+                            
+                            <OBJECTIONS>
+                            (Estrategia Sandler de anticipación y manejo preventivo para las 2 objeciones más probables: precio y tiempos)
+                            </OBJECTIONS>
+                            
+                            <LOG>
+                            (Resumen ultra-resumido y listo para registrar en el CRM SCOTT sobre la acción tomada y el siguiente paso acordado)
+                            </LOG>
+                            """
+                            
+                            res = model.generate_content(prompt).text
                             
                             def ext(tag): 
-                                m = re.search(fr'<{tag}>(.*?)</{tag}>', res, re.DOTALL)
+                                m = re.search(fr'<{tag}>(.*?)</{tag}>', res, re.DOTALL | re.IGNORECASE)
                                 return m.group(1).strip() if m else ""
                             
                             st.session_state['ia_res'] = {
@@ -333,27 +404,28 @@ with t_ia:
                 res_ia = st.session_state.get('ia_res', {})
                 if res_ia.get('mensaje'):
                     st.divider()
-                    st.info(f"**Análisis Estratégico:**\n{res_ia['analisis']}")
+                    st.info(f"**💡 Análisis Estratégico (MEDDPICC & Sandler):**\n{res_ia['analisis']}")
                     
-                    st.markdown("#### 💬 Guion / Mensaje (Editable)")
-                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo:", value=res_ia['mensaje'], height=150)
+                    st.markdown("#### 💬 Guion / Mensaje Táctico (Editable)")
+                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo o copiarlo:", value=res_ia['mensaje'], height=150)
                     
                     wa_url = f"https://wa.me/?text={urllib.parse.quote(msg_editado)}"
-                    st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:8px 15px;border-radius:5px;text-decoration:none;font-weight:bold;">📲 Enviar por WhatsApp</a>', unsafe_allow_html=True)
+                    st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:10px 18px;border-radius:5px;text-decoration:none;font-weight:bold;display:inline-block;margin-top:5px;">📲 Enviar por WhatsApp Directo</a>', unsafe_allow_html=True)
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
-                    st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
+                    st.warning(f"**🛡️ Manejo Preventivo de Objeciones:**\n{res_ia['objeciones']}")
+                    st.success(f"**📋 Bitácora Sugerida para SCOTT:**\n{res_ia['log']}")
                     
                     if docx_disponible:
+                        st.divider()
                         def get_docx():
                             d = Document()
-                            d.add_heading("ESTRATEGIA KAM", 0)
-                            d.add_paragraph(f"Cliente: {c_sel}\nAnálisis:\n{res_ia['analisis']}\n\nMensaje Final:\n{msg_editado}")
+                            d.add_heading("ESTRATEGIA KAM - MESS", 0)
+                            d.add_paragraph(f"Cliente: {c_sel}\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nANÁLISIS ESTRATÉGICO:\n{res_ia['analisis']}\n\nMENSAJE / GUION TÁCTICO:\n{msg_editado}\n\nMANEJO DE OBJECIONES:\n{res_ia['objeciones']}\n\nBITÁCORA SCOTT:\n{res_ia['log']}")
                             b = io.BytesIO()
                             d.save(b)
                             b.seek(0)
                             return b
-                        st.download_button("Descargar Ficha .docx", data=get_docx(), file_name="Estrategia.docx")
+                        st.download_button("📥 Descargar Ficha Estratégica (.docx)", data=get_docx(), file_name=f"Estrategia_{c_sel}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
         st.info("Sube tus datos para iniciar el Laboratorio IA.")
