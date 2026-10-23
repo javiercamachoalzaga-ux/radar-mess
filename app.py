@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from datetime import datetime
 import re
 import io
-import google.generativeai as genai
 import urllib.parse
+from datetime import datetime, date, time, timedelta
+import google.generativeai as genai
 
 try:
     from docx import Document
@@ -14,175 +14,234 @@ try:
 except ImportError:
     docx_disponible = False
 
-st.set_page_config(page_title="SAIV | Radar Comercial MESS", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="SAIV | Radar Comercial MESS", layout="wide")
 
 if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
-    gemini_activo = True
+    ia_activa = True
 else:
-    gemini_activo = False
-
-# Variables de memoria para la IA
-for var in ['tactica_analisis', 'tactica_mensaje', 'tactica_objeciones', 'tactica_marketing', 
-            'tactica_bitacora', 'tactica_cliente', 'tactica_id', 'tactica_equipo', 'tactica_monto']:
-    if var not in st.session_state: 
-        st.session_state[var] = ""
-if 'monto_usd_ia' not in st.session_state: st.session_state.monto_usd_ia = 0.0
-if 'monto_mxn_ia' not in st.session_state: st.session_state.monto_mxn_ia = 0.0
+    ia_activa = False
 
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800;900&display=swap');
     html, body, [class*="css"] { font-family: 'Montserrat', sans-serif !important; }
-    .titulo-radar { font-size: 38px; font-weight: 900; color: #003a70; margin-bottom: -5px; letter-spacing: -1px; text-transform: uppercase; }
-    .subtitulo { font-size: 14px; color: #555555; margin-bottom: 30px; font-weight: 600; text-transform: uppercase; }
-    div[data-testid="metric-container"] { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px 20px; border-radius: 8px; border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    div[data-testid="stMetricLabel"] { font-size: 13px !important; font-weight: 700 !important; color: #7f8c8d !important; text-transform: uppercase; }
-    div[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 800 !important; color: #2c3e50 !important; }
-    .ficha-scott { background-color: #f4f6f7; padding: 20px; border-radius: 8px; border: 1px solid #d5d8dc; margin-bottom: 20px; }
-    .caja-ia { background-color: #fefefe; padding: 15px; border-radius: 5px; border-left: 4px solid #3498db; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
+    .titulo { font-size: 34px; font-weight: 900; color: #003a70; text-transform: uppercase; margin-bottom: 0; }
+    div[data-testid="metric-container"] { background: #fff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; border-left: 5px solid #003a70; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .caja-ia { background: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #3498db; margin-bottom: 15px; border: 1px solid #e2e8f0;}
     </style>
     """, unsafe_allow_html=True)
 
-def check_password():
-    if "mi_contrasena" not in st.secrets: return True
+if not st.session_state.get("auth_ok"):
     st.sidebar.header("Acceso Restringido")
-    pwd = st.sidebar.text_input("Contraseña corporativa", type="password")
-    if pwd == st.secrets["mi_contrasena"]: return True
-    return False
-
-if not check_password():
-    st.info("Ingresa tu contraseña en el menú lateral para acceder al sistema.")
+    pwd = st.sidebar.text_input("Contraseña", type="password")
+    if pwd == st.secrets.get("mi_contrasena", ""):
+        st.session_state["auth_ok"] = True
+        st.rerun()
+    st.info("Ingresa tu contraseña en el menú lateral.")
     st.stop()
 
-st.markdown('<div class="titulo-radar">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitulo">Módulo CRM SCOTT | MESS</div>', unsafe_allow_html=True)
-
-tab_dashboards, tab_scott = st.tabs([
-    "1. Dashboards CRM", "2. Laboratorio IA (Estrategia Integral)"
-])
+st.markdown('<div class="titulo">SAIV | Sistema Automatizado de Ingeniería de Ventas</div>', unsafe_allow_html=True)
+st.caption("Dashboard Ejecutivo & Copiloto KAM | MESS Servicios Metrológicos")
 
 @st.cache_data
 def procesar_csv(file_bytes):
     try:
         try:
-            df_raw = pd.read_csv(io.BytesIO(file_bytes), encoding='utf-8-sig', header=None, sep=None, engine='python')
-        except UnicodeDecodeError:
-            df_raw = pd.read_csv(io.BytesIO(file_bytes), encoding='latin-1', header=None, sep=None, engine='python')
-
-        header_idx = -1
-        for idx, row in df_raw.iterrows():
-            row_str = ' '.join([str(x).upper() for x in row.dropna()]).strip()
-            if 'PROYECTO' in row_str and 'CLIENTE' in row_str:
-                header_idx = idx
+            df = pd.read_csv(io.BytesIO(file_bytes), encoding='utf-8-sig', engine='python', header=None)
+        except:
+            df = pd.read_csv(io.BytesIO(file_bytes), encoding='latin-1', engine='python', header=None)
+            
+        h_idx = -1
+        for i, row in df.iterrows():
+            if 'PROYECTO' in str(row.values).upper() and 'CLIENTE' in str(row.values).upper():
+                h_idx = i
                 break
-        if header_idx == -1: return None
+        if h_idx == -1: return pd.DataFrame()
         
-        headers = [str(x).upper().replace('\ufeff', '').strip() for x in df_raw.iloc[header_idx] if pd.notna(x)]
-        df_data = df_raw.iloc[header_idx+1:].copy().dropna(axis=1, how='all')
-        df_data.columns = headers[:len(df_data.columns)]
-
-        def buscar_col(claves):
-            for clave in claves:
-                for col in df_data.columns:
-                    col_limpia = str(col).upper().strip()
-                    if col_limpia == clave or col_limpia == f"{clave}.1":
-                        return df_data[col].copy()
-            return pd.Series([None] * len(df_data))
-
-        df_clean = pd.DataFrame()
-        df_clean['ID_Proyecto'] = buscar_col(["PROYECTO", "FOLIO"])
-        df_clean['Cliente'] = buscar_col(["CLIENTE", "EMPRESA"])
-        df_clean['Area'] = buscar_col(["AREA", "ÁREA"]) 
-        df_clean['Fecha_Creacion'] = buscar_col(["FECHA DE REGISTRO", "FECHA"])
-        df_clean['Fecha_Cierre'] = buscar_col(["FECHA DE CIERRE", "CIERRE", "FECHA CIERRE"])
-        df_clean['Estatus'] = buscar_col(["ESTATUS"])
-        df_clean['Etapa'] = buscar_col(["ETAPA", "FASE"]) 
-        df_clean['Descripcion'] = buscar_col(["DESCRIPCION"])
-
-        def extr_num(val_str):
-            try:
-                v = str(val_str).upper().replace('$', '').replace('USD', '').replace('MXN', '').replace(' ', '').strip()
-                if ',' in v and '.' in v: v = v.replace(',', '')
-                elif ',' in v and len(v.split(',')[-1]) != 2: v = v.replace(',', '')
-                elif ',' in v and len(v.split(',')[-1]) == 2: v = v.replace(',', '.')
-                v = ''.join(c for c in v if c.isdigit() or c == '.')
-                return float(v) if v else 0.0
-            except: return 0.0
-
-        monto_mxn, monto_usd = np.zeros(len(df_data)), np.zeros(len(df_data))
-        col_moneda = buscar_col(["MONEDA", "DIVISA"])
+        headers = [str(x).upper().strip() for x in df.iloc[h_idx]]
+        d = df.iloc[h_idx+1:].copy()
+        d.columns = headers[:len(d.columns)]
         
-        for col in df_data.columns:
-            col_name = str(col).upper().strip()
-            if any(k in col_name for k in ["VALOR", "MONTO", "IMPORTE", "TOTAL"]):
-                is_col_usd = 'USD' in col_name or 'US$' in col_name
-                for i in range(len(df_data)):
-                    val_raw = df_data[col].iloc[i]
-                    val_str = str(val_raw).upper()
-                    num = extr_num(val_raw)
-                    moneda_fila = str(col_moneda.iloc[i]).upper() if not col_moneda.isna().all() else ""
-                    if is_col_usd or 'USD' in val_str or 'US$' in val_str or 'USD' in moneda_fila or 'US$' in moneda_fila or 'DÓLA' in moneda_fila:
-                        monto_usd[i] += num
-                    else:
-                        monto_mxn[i] += num
-                        
-        df_clean['Monto_MXN'] = monto_mxn
-        df_clean['Monto_USD'] = monto_usd
-        df_clean = df_clean.dropna(subset=['ID_Proyecto']).reset_index(drop=True)
-        
-        def limpiar_cliente(texto):
-            if pd.isna(texto): return ""
-            return re.sub(r'\s+', ' ', str(texto).replace("?", "ó")).strip().title()
+        def get_col(keys):
+            for k in keys:
+                for c in d.columns:
+                    if k in str(c).upper(): return d[c].copy()
+            return pd.Series([None]*len(d))
             
-        df_clean['Cliente'] = df_clean['Cliente'].apply(limpiar_cliente)
-        df_clean['Cliente_Maestro'] = df_clean['Cliente'].str.upper()
-        df_clean['Cliente_Final'] = df_clean.groupby('ID_Proyecto')['Cliente_Maestro'].transform(lambda x: x.replace("", np.nan).ffill().bfill())
-
-        df_g = df_clean.groupby('ID_Proyecto').agg({
-            'Cliente_Final': 'first', 'Area': 'first', 'Fecha_Creacion': 'first',
-            'Fecha_Cierre': 'first', 'Estatus': 'first', 'Etapa': 'first',
-            'Descripcion': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip() != ""]),
-            'Monto_MXN': 'sum', 'Monto_USD': 'sum'
+        work = pd.DataFrame()
+        work['ID'] = get_col(['PROYECTO', 'FOLIO'])
+        work['Cliente'] = get_col(['CLIENTE', 'EMPRESA'])
+        work['Area'] = get_col(['AREA', 'ÁREA'])
+        work['Etapa'] = get_col(['ETAPA', 'FASE'])
+        work['Desc'] = get_col(['DESCRIPCION'])
+        
+        m_usd, m_mxn = np.zeros(len(d)), np.zeros(len(d))
+        c_mon = get_col(['MONEDA', 'DIVISA'])
+        
+        for c in d.columns:
+            cn = str(c).upper()
+            if any(k in cn for k in ['VALOR', 'MONTO', 'TOTAL', 'IMPORTE']):
+                is_usd = 'USD' in cn
+                for i in range(len(d)):
+                    v_str = str(d[c].iloc[i]).upper()
+                    m = re.search(r'-?\d+(?:\.\d+)?', v_str.replace(',','').replace('USD','').replace('MXN','').replace('$',''))
+                    val = float(m.group()) if m else 0.0
+                    mon = str(c_mon.iloc[i]).upper() if not c_mon.empty else ""
+                    if is_usd or 'USD' in v_str or 'USD' in mon: m_usd[i] += val
+                    else: m_mxn[i] += val
+                    
+        work['USD'] = m_usd
+        work['MXN'] = m_mxn
+        work = work.dropna(subset=['ID']).reset_index(drop=True)
+        work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace('?','ó')).strip().title())
+        work['Cliente'] = work.groupby('ID')['Cliente'].transform(lambda x: x.ffill().bfill())
+        
+        df_g = work.groupby('ID').agg({
+            'Cliente': 'first', 'Area': 'first', 'Etapa': 'first',
+            'Desc': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip()!='']),
+            'USD': 'sum', 'MXN': 'sum'
         }).reset_index()
-
-        df_g.rename(columns={'Cliente_Final': 'Cliente'}, inplace=True)
         
-        filtro_etapa = df_g['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)
-        filtro_monto = (df_g['Monto_MXN'] > 0) | (df_g['Monto_USD'] > 0)
-        df_g = df_g[filtro_etapa | filtro_monto].copy()
-
-        def clasificar_pilar(row):
-            texto = (str(row['Area']) + " " + str(row['Descripcion'])).upper()
-            if any(k in texto for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
-            elif any(k in texto for k in ["CALIBRACIÓN", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
-            else: return "3. Productos Generales"
+        df_g = df_g[(df_g['USD']>0) | (df_g['MXN']>0)]
+        df_g = df_g[df_g['Etapa'].str.contains('PROPUESTA|COTIZACI|NEGOCIACI|PO|ORDEN', regex=True, case=False, na=False)]
+        
+        def set_pilar(r):
+            t = str(r['Area'] + " " + r['Desc']).upper()
+            if any(k in t for k in ["ALTA GAMA", "CMM", "SCANNER", "ÓPTICO", "BRAZO", "ZEISS", "BATY"]): return "1. Alta Gama"
+            if any(k in t for k in ["CALIBRACIÓN", "LABORATORIO", "DIMENSIONAL"]): return "2. Calibraciones"
+            return "3. Productos Generales"
             
-        df_g['Pilar_Estrategico'] = df_g.apply(clasificar_pilar, axis=1)
-        
-        def clasificar_fase(etapa):
-            e = str(etapa).upper()
+        def set_fase(e):
+            e = str(e).upper()
             if any(k in e for k in ['PO', 'ORDEN', 'ESPERANDO']): return "4. Esperando PO"
-            elif 'NEGOCIACI' in e: return "3. Negociación"
-            elif 'COTIZACI' in e: return "2. Cotización"
-            elif 'PROPUESTA' in e: return "1. Propuesta"
-            else: return "5. En Proceso"
+            if 'NEGOCIACI' in e: return "3. Negociación"
+            if 'COTIZACI' in e: return "2. Cotización"
+            return "1. Propuesta"
             
-        df_g['Fase_Pipeline'] = df_g['Etapa'].apply(clasificar_fase)
-        df_g['Fecha_Creacion_DT'] = pd.to_datetime(df_g['Fecha_Creacion'], errors='coerce', dayfirst=True)
-        df_g['Fecha_Cierre_DT'] = pd.to_datetime(df_g['Fecha_Cierre'], errors='coerce', dayfirst=True)
-        df_g['Días_Activo'] = (pd.Timestamp.now() - df_g['Fecha_Creacion_DT']).dt.days
-
-        return df_g, None
+        df_g['Pilar'] = df_g.apply(set_pilar, axis=1)
+        df_g['Fase'] = df_g['Etapa'].apply(set_fase)
+        return df_g
     except Exception as e:
-        return pd.DataFrame(), str(e)
+        return pd.DataFrame()
 
-archivo_cargado = st.sidebar.file_uploader("Subir extracción CRM (CSV)", type=["csv"])
+archivo = st.sidebar.file_uploader("Subir CSV de SCOTT", type=["csv"])
 df = pd.DataFrame()
+if archivo:
+    df = procesar_csv(archivo.getvalue())
+    if df.empty:
+        st.sidebar.error("Error al leer formato SCOTT.")
+    else:
+        st.sidebar.divider()
+        st.sidebar.markdown("**Filtros Rápidos**")
+        f_pilar = st.sidebar.multiselect("Pilar", df['Pilar'].unique(), default=df['Pilar'].unique())
+        f_txt = st.sidebar.text_input("Buscar Cliente/Folio")
+        if f_pilar: df = df[df['Pilar'].isin(f_pilar)]
+        if f_txt: df = df[df['Cliente'].str.contains(f_txt, case=False) | df['ID'].astype(str).str.contains(f_txt, case=False)]
 
-if archivo_cargado is not None:
-    file_bytes = archivo_cargado.getvalue()
-    df_proc, error_msg = procesar_csv(file_bytes)
-    
-    if error_msg:
-        st.sidebar.error(f
+t_dash, t_ia = st.tabs(["📊 1. Visualización del Pipeline (Dashboards)", "🧠 2. Laboratorio IA (Estrategias)"])
+
+with t_dash:
+    if not df.empty:
+        META_USD = 80000.0
+        tc = st.sidebar.number_input("Tipo de Cambio (MXN a USD)", value=18.0, step=0.5)
+        
+        df['Total_USD_Eq'] = df['USD'] + (df['MXN'] / tc)
+        activos = df[df['Fase'].isin(['3. Negociación', '4. Esperando PO'])]
+        usd_activo = activos['Total_USD_Eq'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Meta Mensual (USD)", f"${META_USD:,.0f}")
+        c2.metric("Pipeline Probable (USD Eq)", f"${usd_activo:,.0f}")
+        c3.metric("Brecha para Meta (GAP)", f"${max(0, META_USD - usd_activo):,.0f}")
+        
+        st.divider()
+        st.markdown("#### Análisis Pareto 80/20 (Cuentas Clave en USD Eq)")
+        pareto = df.groupby('Cliente')['Total_USD_Eq'].sum().sort_values(ascending=False).reset_index()
+        pareto = pareto[pareto['Total_USD_Eq'] > 0]
+        pareto['Acumulado'] = pareto['Total_USD_Eq'].cumsum() / pareto['Total_USD_Eq'].sum()
+        
+        barras = alt.Chart(pareto).mark_bar(color='#34495e').encode(x=alt.X('Cliente', sort=None), y='Total_USD_Eq')
+        linea = alt.Chart(pareto).mark_line(color='#e74c3c', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
+        st.altair_chart(alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350), use_container_width=True)
+        
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            st.markdown("**Forecast por Área**")
+            st.altair_chart(alt.Chart(df.groupby('Area')['Total_USD_Eq'].sum().reset_index()).mark_bar(color='#003a70').encode(x='Total_USD_Eq', y=alt.Y('Area', sort='-x')).properties(height=300), use_container_width=True)
+        with cg2:
+            st.markdown("**Salud del Embudo**")
+            st.altair_chart(alt.Chart(df.groupby('Fase')['Total_USD_Eq'].sum().reset_index()).mark_bar(color='#2ecc71').encode(x='Total_USD_Eq', y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
+    else:
+        st.info("Sube el CSV de SCOTT para visualizar tu Pipeline.")
+
+with t_ia:
+    st.markdown("### Generador de Estrategias y Guiones (KAM)")
+    if not df.empty:
+        c_sel = st.selectbox("1. Selecciona Cliente:", ["--"] + sorted(df['Cliente'].unique()))
+        if c_sel != "--":
+            df_c = df[df['Cliente'] == c_sel]
+            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD)", axis=1).tolist()
+            p_sel = st.multiselect("2. Folios a incluir (Bundle):", opc, default=opc[:1])
+            
+            if p_sel:
+                ids = [o.split("]")[0].replace("[", "") for o in p_sel]
+                df_s = df[df['ID'].isin(ids)]
+                
+                t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
+                eqs = " | ".join(df_s['Desc'].tolist())
+                
+                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> | ${t_mxn:,.2f} MXN", unsafe_allow_html=True)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    canal = st.radio("Canal:", ["Mensaje WhatsApp", "Correo Ejecutivo", "Llamada", "Visita Presencial"])
+                    perfil = st.selectbox("Interlocutor:", ["Ingeniero/Planta", "Comprador", "Director/Dueño"])
+                with c2:
+                    giro = st.text_input("Giro (Ej. Aeroespacial):")
+                    ctx = st.text_area("Contexto (Opcional):", placeholder="Ej. Tienen parado el proyecto por presupuesto.")
+                
+                if ia_activa and st.button("🧠 Generar Estrategia de Cierre", type="primary"):
+                    with st.spinner("Fusionando MEDDPICC y Sandler..."):
+                        try:
+                            prompt = f"Cliente: {c_sel}. Perfil: {perfil}. Giro: {giro}. Equipos: {eqs}. Monto: ${t_usd} USD. Acción: {canal}. Contexto: {ctx}. Eres KAM de MESS B2B. Usa MEDDPICC, SPIN y Sandler (cierre negativo). Devuelve SOLO en XML: <ANALYSIS> <MESSAGE> <OBJECTIONS> <LOG>."
+                            res = genai.GenerativeModel("gemini-pro").generate_content(prompt).text
+                            
+                            def ext(tag): 
+                                m = re.search(fr'<{tag}>(.*?)</{tag}>', res, re.DOTALL)
+                                return m.group(1).strip() if m else ""
+                            
+                            st.session_state['ia_res'] = {
+                                'analisis': ext('ANALYSIS'), 'mensaje': ext('MESSAGE'),
+                                'objeciones': ext('OBJECTIONS'), 'log': ext('LOG')
+                            }
+                        except Exception as e:
+                            st.error(f"Error IA: {e}")
+
+                res_ia = st.session_state.get('ia_res', {})
+                if res_ia.get('mensaje'):
+                    st.divider()
+                    st.info(f"**Análisis Estratégico:**\n{res_ia['analisis']}")
+                    
+                    st.markdown("#### 💬 Guion / Mensaje (Editable)")
+                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo:", value=res_ia['mensaje'], height=150)
+                    
+                    wa_url = f"https://wa.me/?text={urllib.parse.quote(msg_editado)}"
+                    st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:8px 15px;border-radius:5px;text-decoration:none;font-weight:bold;">📲 Enviar por WhatsApp</a>', unsafe_allow_html=True)
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
+                    st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
+                    
+                    if docx_disponible:
+                        def get_docx():
+                            d = Document()
+                            d.add_heading("ESTRATEGIA KAM", 0)
+                            d.add_paragraph(f"Cliente: {c_sel}\nAnálisis:\n{res_ia['analisis']}\n\nMensaje Final:\n{msg_editado}")
+                            b = io.BytesIO()
+                            d.save(b)
+                            b.seek(0)
+                            return b
+                        st.download_button("Descargar Ficha .docx", data=get_docx(), file_name="Estrategia.docx")
+    else:
+        st.info("Sube tus datos para iniciar el Laboratorio IA.")
