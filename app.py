@@ -95,7 +95,6 @@ def procesar_csv(file_bytes):
         work['MXN'] = m_mxn
         work = work.dropna(subset=['ID']).reset_index(drop=True)
         
-        # LIMPIEZA DE CARACTERES DE CODIFICACIÓN ROTA
         work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace('?','ó')).strip().title())
         work['Desc'] = work['Desc'].apply(lambda x: str(x).replace('?','ó') if pd.notna(x) else "")
         work['Area'] = work['Area'].apply(lambda x: str(x).replace('?','ó') if pd.notna(x) else "")
@@ -204,7 +203,7 @@ with t_ia:
                 t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
                 eqs = " | ".join(df_s['Desc'].tolist())
                 
-                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> \vert{}${t_mxn:,.2f} MXN", unsafe_allow_html=True)
+                st.markdown(f"**Valor del Paquete:** <span style='color:#27ae60;font-size:18px;'>${t_usd:,.2f} USD</span> | ${t_mxn:,.2f} MXN", unsafe_allow_html=True)
                 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -232,4 +231,29 @@ with t_ia:
                             st.error(f"Error IA: {e}")
 
                 res_ia = st.session_state.get('ia_res', {})
-                if res_ia.get('mensaje
+                if res_ia.get('mensaje'):
+                    st.divider()
+                    st.info(f"**Análisis Estratégico:**\n{res_ia['analisis']}")
+                    
+                    st.markdown("#### 💬 Guion / Mensaje (Editable)")
+                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo:", value=res_ia['mensaje'], height=150)
+                    
+                    wa_url = f"https://wa.me/?text={urllib.parse.quote(msg_editado)}"
+                    st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:8px 15px;border-radius:5px;text-decoration:none;font-weight:bold;">📲 Enviar por WhatsApp</a>', unsafe_allow_html=True)
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
+                    st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
+                    
+                    if docx_disponible:
+                        def get_docx():
+                            d = Document()
+                            d.add_heading("ESTRATEGIA KAM", 0)
+                            d.add_paragraph(f"Cliente: {c_sel}\nAnálisis:\n{res_ia['analisis']}\n\nMensaje Final:\n{msg_editado}")
+                            b = io.BytesIO()
+                            d.save(b)
+                            b.seek(0)
+                            return b
+                        st.download_button("Descargar Ficha .docx", data=get_docx(), file_name="Estrategia.docx")
+    else:
+        st.info("Sube tus datos para iniciar el Laboratorio IA.")
