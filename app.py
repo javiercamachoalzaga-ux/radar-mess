@@ -152,34 +152,62 @@ with t_dash:
         
         df['Total_USD_Eq'] = df['USD'] + (df['MXN'] / tc)
         activos = df[df['Fase'].isin(['3. Negociación', '4. Esperando PO'])]
-        usd_activo = activos['Total_USD_Eq'].sum()
         
+        # KPI Globales siempre en USD para monitoreo de Cuota
+        usd_activo = activos['Total_USD_Eq'].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("Meta Mensual (USD)", f"${META_USD:,.0f}")
         c2.metric("Pipeline Probable (USD Eq)", f"${usd_activo:,.0f}")
         c3.metric("Brecha para Meta (GAP)", f"${max(0, META_USD - usd_activo):,.0f}")
         
         st.divider()
-        st.markdown("#### Análisis Pareto 80/20 (Cuentas Clave en USD Eq)")
-        pareto = df.groupby('Cliente')['Total_USD_Eq'].sum().sort_values(ascending=False).reset_index()
-        pareto = pareto[pareto['Total_USD_Eq'] > 0]
-        pareto['Acumulado'] = pareto['Total_USD_Eq'].cumsum() / pareto['Total_USD_Eq'].sum()
         
-        barras = alt.Chart(pareto).mark_bar(color='#34495e').encode(x=alt.X('Cliente', sort=None), y='Total_USD_Eq')
-        linea = alt.Chart(pareto).mark_line(color='#e74c3c', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
-        st.altair_chart(alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350), use_container_width=True)
+        # Botones de visualización
+        vista = st.radio("📊 Selecciona la vista operativa de los gráficos y tablas:", ["Vista Global (USD Equivalente)", "Solo Proyectos en USD", "Solo Proyectos en MXN"], horizontal=True)
         
+        if "USD Equivalente" in vista:
+            df_graf = df.copy()
+            col_valor = "Total_USD_Eq"
+        elif "USD" in vista:
+            df_graf = df[df['USD'] > 0].copy()
+            col_valor = "USD"
+        else:
+            df_graf = df[df['MXN'] > 0].copy()
+            col_valor = "MXN"
+            
+        st.markdown(f"#### Análisis Pareto 80/20 - {vista}")
+        pareto = df_graf.groupby('Cliente')[col_valor].sum().sort_values(ascending=False).reset_index()
+        pareto = pareto[pareto[col_valor] > 0]
+        pareto['Acumulado'] = pareto[col_valor].cumsum() / pareto[col_valor].sum()
+        
+        if not pareto.empty:
+            barras = alt.Chart(pareto).mark_bar(color='#34495e').encode(x=alt.X('Cliente', sort=None), y=col_valor)
+            linea = alt.Chart(pareto).mark_line(color='#e74c3c', point=True).encode(x=alt.X('Cliente', sort=None), y=alt.Y('Acumulado', axis=alt.Axis(format='%')))
+            st.altair_chart(alt.layer(barras, linea).resolve_scale(y='independent').properties(height=350), use_container_width=True)
+        else:
+            st.info(f"No hay proyectos activos en esta moneda para graficar el Pareto.")
+            
         cg1, cg2 = st.columns(2)
         with cg1:
-            st.markdown("**Forecast por Área**")
-            st.altair_chart(alt.Chart(df.groupby('Area')['Total_USD_Eq'].sum().reset_index()).mark_bar(color='#003a70').encode(x='Total_USD_Eq', y=alt.Y('Area', sort='-x')).properties(height=300), use_container_width=True)
+            st.markdown(f"**Forecast por Área ({col_valor})**")
+            df_a = df_graf.groupby('Area')[col_valor].sum().reset_index()
+            if not df_a.empty and df_a[col_valor].sum() > 0:
+                st.altair_chart(alt.Chart(df_a).mark_bar(color='#003a70').encode(x=col_valor, y=alt.Y('Area', sort='-x')).properties(height=300), use_container_width=True)
         with cg2:
-            st.markdown("**Salud del Embudo**")
-            st.altair_chart(alt.Chart(df.groupby('Fase')['Total_USD_Eq'].sum().reset_index()).mark_bar(color='#2ecc71').encode(x='Total_USD_Eq', y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
+            st.markdown(f"**Salud del Embudo ({col_valor})**")
+            df_f = df_graf.groupby('Fase')[col_valor].sum().reset_index()
+            if not df_f.empty and df_f[col_valor].sum() > 0:
+                st.altair_chart(alt.Chart(df_f).mark_bar(color='#2ecc71').encode(x=col_valor, y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
 
         st.divider()
-        st.markdown("#### Detalle Operativo del Pipeline Activo")
+        st.markdown(f"#### Detalle Operativo del Pipeline Activo - {vista}")
         df_display = activos[['ID', 'Cliente', 'Desc', 'Fase', 'USD', 'MXN']].copy()
+        
+        # Filtramos la tabla operativa según el botón seleccionado
+        if "USD Equivalente" not in vista:
+            if "MXN" in vista: df_display = df_display[df_display['MXN'] > 0]
+            else: df_display = df_display[df_display['USD'] > 0]
+            
         df_display['USD'] = df_display['USD'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00")
         df_display['MXN'] = df_display['MXN'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
