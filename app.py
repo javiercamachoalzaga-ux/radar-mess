@@ -21,6 +21,10 @@ if "gemini_api_key" in st.secrets:
     genai.configure(api_key=st.secrets["gemini_api_key"])
     ia_activa = True
 
+# Modelo compatible forzado de forma explícita y directa
+def obtener_modelo_activo():
+    return genai.GenerativeModel("gemini-2.0-flash")
+
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap');
@@ -259,7 +263,7 @@ with t_ia:
                 cots_str = ", ".join([c for c in cots if c and str(c).strip() != ''])
                 
                 desglose_items = "\n".join([
-                    f"• Cotización {r['Cotizacion']} (Proyecto {r['Proyecto']}): {r['Desc']} -> Monto: ${r['USD']:,.2f} USD / ${r['MXN']:,.2f} MXN"
+                    f"• Cotización {r['Cotizacion']} (Proyecto {r['Proyecto']}): {r['Desc']} -> Inversión: ${r['USD']:,.2f} USD / ${r['MXN']:,.2f} MXN"
                     for _, r in df_sub.iterrows()
                 ])
                 
@@ -291,14 +295,14 @@ with t_ia:
                             {desglose_items}
                             
                             REGLAS ESTRICTAS PARA EL BLOQUE <MESSAGE>:
-                            1. PROHIBIDO usar tablas Markdown (NO uses barras '|' ni ':---') y PROHIBIDO usar asteriscos '**'. El texto va en una caja de texto plano.
-                            2. Presenta cada cotización en una lista limpia y espaciada (con una línea en blanco entre cada una) usando este formato exacto:
+                            1. PROHIBIDO usar tablas Markdown (NO uses barras '|' ni ':---') y PROHIBIDO usar asteriscos '**'. El texto se mostrará en una caja de texto plano.
+                            2. Presenta cada cotización en una lista vertical limpia y muy bien espaciada (dejando una línea en blanco entre cada propuesta) con este formato exacto:
                             
                             • Cotización [Número] - [Equipo/Servicio]
                               Impacto en planta: [Beneficio técnico metrológico o cumplimiento normativo IATF/ISO]
                               Inversión: [Monto exacto en USD o MXN]
                             
-                            3. Fusiona SPIN Selling, MEDDPICC y cierre negativo Sandler con tono natural y ejecutivo.
+                            3. Fusiona SPIN Selling, MEDDPICC y cierre negativo Sandler con tono natural, directo y ejecutivo.
                             
                             Devuelve ÚNICAMENTE estas 4 etiquetas XML:
                             <ANALYSIS>...</ANALYSIS>
@@ -306,10 +310,8 @@ with t_ia:
                             <OBJECTIONS>...</OBJECTIONS>
                             <LOG>...</LOG>
                             """
-                            try:
-                                res = genai.GenerativeModel("gemini-2.5-flash").generate_content(prompt).text
-                            except Exception:
-                                res = genai.GenerativeModel("gemini-1.5-flash").generate_content(prompt).text
+                            modelo_ia = obtener_modelo_activo()
+                            res = modelo_ia.generate_content(prompt).text
                             
                             def ext(tag):
                                 m = re.search(fr'<{tag}>(.*?)</{tag}>', res, re.DOTALL | re.IGNORECASE)
