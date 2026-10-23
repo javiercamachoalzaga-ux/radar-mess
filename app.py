@@ -98,7 +98,7 @@ def procesar_csv(file_bytes):
         work['MXN'] = m_mxn
         work = work.dropna(subset=['ID']).reset_index(drop=True)
         
-        # Filtros lógicos para reparación de caracteres rotos
+        # Limpieza inteligente de texto sin afectar letras iniciales
         def fix_text(x):
             if pd.isna(x): return ""
             t = str(x)
@@ -111,10 +111,15 @@ def procesar_csv(file_bytes):
                 'metr?a': 'metría', 'METR?A': 'METRÍA',
                 '?tico': 'ótico', '?TICO': 'ÓTICO',
                 '?tica': 'ótica', '?TICA': 'ÓTICA',
-                '?': 'ó'
+                # Limpiamos caracteres extraños al inicio sin destruirlos
+                'Â': '', 'Ã³': 'ó', 'Ã¡': 'á', 'Ã©': 'é', 'Ã­': 'í', 'Ãº': 'ú'
             }
             for k, v in reemplazos.items():
                 t = t.replace(k, v)
+            # Reemplazar ? solo si está rodeado por letras (evita romper palabras que empiezan con ? como 'Solicito')
+            t = re.sub(r'(?<=[a-zA-Z])\?(?=[a-zA-Z])', 'ó', t)
+            # Limpiar cualquier ? sobrante al inicio de palabra que haya quedado huérfano
+            t = re.sub(r'\b\?+', 'S', t) 
             return t.strip()
 
         work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', fix_text(x)).title())
