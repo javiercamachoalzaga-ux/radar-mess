@@ -299,7 +299,7 @@ with t_ia:
                     st.warning(f"**Manejo de Objeciones:**\n{res_ia['objeciones']}")
                     st.success(f"**Bitácora SCOTT:**\n{res_ia['log']}")
                     
-                   if docx_disponible:
+                    if docx_disponible:
                         def get_docx():
                             d = Document()
                             d.add_heading("ESTRATEGIA KAM", 0)
