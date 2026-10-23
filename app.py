@@ -48,9 +48,7 @@ FASES = {
     3: "3. Negociación",
     4: "4. Esperando PO",
 }
-# Probabilidad inicial por fase: calíbrala con tu histórico real de cierre.
 PROB_DEFAULT = {1: 10, 2: 25, 3: 50, 4: 80}
-# Antigüedad (días desde el registro) esperada como máximo por fase.
 UMBRAL_DIAS = {0: 60, 1: 30, 2: 45, 3: 75, 4: 45}
 
 SIGUIENTE_PASO = {
@@ -83,11 +81,10 @@ FOCO_MEDDPICC = {
     3: "validar proceso de decisión (Decision Process), papeleo y comprador económico",
     4: "validar el proceso de compra interno y la fecha real de colocación de la PO",
 }
-DIAS_FRESCO = 25  # umbral de tu versión en GitHub: en tiempo (menos de 25 días) frente a rezagado
+DIAS_FRESCO = 25
 CANALES = ["WhatsApp", "Correo ejecutivo", "Llamada", "Visita presencial"]
 PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
-# Cuentas que son el mismo grupo bajo distintos nombres en SCOTT.
 ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "DANA", "STEERINGMEX"]
 
 # ---------------------------------------------------------------------------
@@ -482,187 +479,4 @@ def totals_caption(d):
     if d is None or d.empty:
         return
     st.caption(
-        "Totales de esta vista: " + str(len(d)) + " proyectos | USD "
-        + format(d["Monto_USD"].sum(), ",.2f") + " | MXN " + format(d["Monto_MXN"].sum(), ",.2f")
-        + " | Total equivalente USD " + format(d["Total_USD_Eq"].sum(), ",.0f")
-    )
-
-
-# ---------------------------------------------------------------------------
-# IA (GEMINI)
-# ---------------------------------------------------------------------------
-def call_gemini(prompt):
-    if genai is None:
-        return None, "Falta instalar la librería google-generativeai."
-    key = None
-    model_name = DEFAULT_MODEL
-    try:
-        key = st.secrets.get("gemini_api_key") or st.secrets.get("GEMINI_API_KEY")
-        model_name = st.secrets.get("gemini_model") or DEFAULT_MODEL
-    except Exception:
-        pass
-    if not key:
-        return None, "Falta 'gemini_api_key' en st.secrets."
-    try:
-        genai.configure(api_key=key)
-        resp = genai.GenerativeModel(model_name).generate_content(prompt)
-        return resp.text, None
-    except Exception as e:
-        return None, "Error al consultar Gemini (" + model_name + "): " + str(e)
-
-
-def parse_tags(text):
-    out = {}
-    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "LOG"]:
-        pat = "<" + tag + ">(.*?)(?=</" + tag + ">|<[A-Z]+>|$)"
-        m = re.search(pat, text or "", re.S | re.I)
-        out[tag] = m.group(1).strip() if m else ""
-    return out
-
-
-def build_prompt(ctx):
-    montos = []
-    if ctx["usd"] > 0:
-        montos.append(format(ctx["usd"], ",.2f") + " USD")
-    if ctx["mxn"] > 0:
-        montos.append(format(ctx["mxn"], ",.2f") + " MXN")
-    monto_txt = " y ".join(montos) if montos else "Aún sin cotizar (sin monto): no menciones precios en el mensaje."
-    lines = [
-        "Actúa como Javier Camacho, Key Account Manager (KAM) B2B de MESS Servicios Metrológicos en Querétaro, México.",
-        "Eres experto en metrología dimensional, calibración acreditada ISO/IEC 17025 y equipos de alta gama (Zeiss, Taylor Hobson, Wilson, Kreon).",
-        "Hablas como asesor técnico de metrología industrial: trazabilidad, incertidumbre, repetibilidad, paros de línea, retrabajo y certeza dimensional en piso de producción.",
-        "Tono consultivo, humano y directo, sin exageraciones técnicas ni lenguaje de marketing inflado. Frases claras y cortas.",
-        "No inventes precios, fechas de entrega, certificaciones, referencias ni datos que no estén en el contexto.",
-        "",
-        "DATOS DE LA OPORTUNIDAD:",
-        "- Cuenta: " + ctx["cuenta"],
-        "- Folios agrupados: " + ctx["folios"],
-        "- Descripción de equipos o servicios: " + ctx["descripcion"],
-        "- Monto del paquete: " + monto_txt,
-        "- Fase actual: " + ctx["fase"],
-        "- Días desde el registro: " + str(ctx["dias"]),
-        "- Cierre estimado en SCOTT: " + ctx["cierre"],
-        "- Cotizaciones: " + (ctx["cotizaciones"] or "Sin número de cotización registrado"),
-        "- Propuestas a incluir:",
-        ctx["desglose"],
-        "- Objetivo de esta acción: " + ctx["objetivo"],
-        "- Canal: " + ctx["canal"],
-        "- Interlocutor: " + ctx["perfil"],
-        "- Giro industrial: " + (ctx["giro"] or "No especificado"),
-        "- Contexto adicional: " + (ctx["contexto"] or "Ninguno"),
-        "",
-        "METODOLOGÍA (aplícala de forma invisible y natural):",
-        "- SPIN Selling: preguntas de Situación, Problema, Implicación y Necesidad-Solución sobre el riesgo de medir mal o calibrar tarde.",
-        "- MEDDPICC: en esta fase el foco es " + ctx["foco"] + ". Señala qué elementos faltan por validar y qué pregunta los destapa.",
-        "- Sandler: dale al cliente permiso de decir que no, sin presión y sin forzar una decisión. Busca una respuesta honesta, no una promesa.",
-        "",
-        "FORMATO: responde ÚNICAMENTE con estas cuatro etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
-        "<ANALYSIS> Diagnóstico breve: qué sabemos, qué falta validar (lista corta MEDDPICC) y la mejor jugada para esta fase. </ANALYSIS>",
-        "<MESSAGE> Dos versiones listas para enviar por el canal indicado, separadas por una línea con tres guiones (---): primero la versión BREVE y después la COMPLETA. Incluye al menos una pregunta SPIN y un cierre con permiso de decir no. </MESSAGE>",
-        "REGLAS PARA <MESSAGE>: el texto se mostrará en una caja de texto plano. PROHIBIDO usar tablas Markdown (nada de barras verticales ni :---) y PROHIBIDO usar asteriscos.",
-        "En la versión COMPLETA presenta cada propuesta en una lista vertical, con una línea en blanco entre propuestas, con este formato exacto:",
-        "• Cotización [Número] - [Equipo o servicio]",
-        "Impacto en planta: [beneficio técnico metrológico o cumplimiento normativo IATF/ISO, sin inventar certificaciones adicionales]",
-        "Inversión: [monto exacto en USD o MXN; si no hay monto escribe 'Por cotizar']",
-        "La versión BREVE no lleva la lista: solo menciona el paquete y una pregunta.",
-        "<OBJECTIONS> Las dos o tres objeciones más probables (precio, tiempos, prioridad interna) y cómo responderlas con enfoque Sandler. </OBJECTIONS>",
-        "<LOG> Resumen de dos a cuatro líneas para registrar en SCOTT: acción, interlocutor y siguiente paso. </LOG>",
-    ]
-    return "\n".join(lines)
-
-
-def clean_message(txt):
-    out = []
-    for line in str(txt or "").replace("**", "").splitlines():
-        if re.match(r"^\s*\|.*\|\s*$", line) or re.match(r"^\s*:?-{3,}:?(\s*\Vert{}\s*:?-{3,}:?)+\s*$", line):
-            continue
-        out.append(line.rstrip())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
-
-
-def whatsapp_link(message, phone=""):
-    digits = re.sub(r"\D", "", phone or "")
-    base_url = "https://wa.me/" + digits if digits else "https://wa.me/"
-    return base_url + "?text=" + quote(message or "")
-
-
-def gcal_link(title, details, start_dt, minutes=30):
-    end_dt = start_dt + timedelta(minutes=minutes)
-    f = "%Y%m%dT%H%M%S"
-    return (
-        "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + quote(title)
-        + "&details=" + quote((details or "")[:1500])
-        + "&dates=" + start_dt.strftime(f) + "/" + end_dt.strftime(f)
-    )
-
-
-def build_docx(ctx, tags, mensaje, log_txt):
-    doc = Document()
-    doc.add_heading("Estrategia KAM | MESS Servicios Metrológicos", 0)
-    doc.add_paragraph("Cuenta: " + ctx["cuenta"] + "\nFolios: " + ctx["folios"]
-                      + "\nFecha: " + datetime.now().strftime("%d/%m/%Y"))
-    doc.add_paragraph("Fase: " + ctx["fase"] + " | Objetivo: " + ctx["objetivo"] + " | Canal: " + ctx["canal"])
-    doc.add_paragraph("USD: " + format(ctx["usd"], ",.2f") + " | MXN: " + format(ctx["mxn"], ",.2f"))
-    doc.add_paragraph("Cotizaciones: " + (ctx["cotizaciones"] or "N/D") + "\n" + ctx["desglose"])
-    for titulo, txt in [
-        ("Análisis", tags.get("ANALYSIS", "")),
-        ("Mensaje", mensaje),
-        ("Manejo de objeciones", tags.get("OBJECTIONS", "")),
-        ("Registro para SCOTT", log_txt),
-    ]:
-        doc.add_heading(titulo, level=2)
-        doc.add_paragraph(txt or "Sin contenido.")
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
-# ---------------------------------------------------------------------------
-# SIDEBAR: DATOS, PARÁMETROS Y FILTROS
-# ---------------------------------------------------------------------------
-with st.sidebar:
-    st.markdown("### Carga de datos")
-    archivo = st.file_uploader("Extracción CSV de SCOTT", type=["csv"])
-
-    st.markdown("### Parámetros")
-    tc = st.number_input("Tipo de cambio (MXN por USD)", min_value=1.0, value=18.0, step=0.5)
-    meta = st.number_input("Meta mensual (USD)", min_value=0.0, value=80000.0, step=5000.0)
-    cerrado = st.number_input(
-        "Cerrado del mes (USD, de tu otra app)", min_value=0.0, value=0.0, step=1000.0,
-        help="Los ganados no vienen en este CSV; captúralo para calcular faltante y cobertura.",
-    )
-    with st.expander("Probabilidad por fase (%)"):
-        probs = {
-            1: st.number_input("Propuesta", 0, 100, PROB_DEFAULT[1], step=5),
-            2: st.number_input("Cotización", 0, 100, PROB_DEFAULT[2], step=5),
-            3: st.number_input("Negociación", 0, 100, PROB_DEFAULT[3], step=5),
-            4: st.number_input("Esperando PO", 0, 100, PROB_DEFAULT[4], step=5),
-        }
-    with st.expander("Comisión estimada (opcional, %)"):
-        st.caption("Captura tu tasa efectiva por tipo. Con cero no se muestra la columna.")
-        rates = {
-            "Equipos y consumibles": st.number_input("Equipos y consumibles", 0.0, 100.0, 0.0, step=0.5),
-            "Servicios y laboratorio": st.number_input("Servicios y laboratorio", 0.0, 100.0, 0.0, step=0.5),
-            "Otros (revisar)": st.number_input("Otros", 0.0, 100.0, 0.0, step=0.5),
-        }
-
-hoy = pd.Timestamp.today().normalize()
-base = None
-avisos = []
-if archivo is not None:
-    try:
-        raw_df, avisos = load_pipeline(archivo.getvalue(), hoy.strftime("%Y-%m-%d"))
-        if raw_df is not None:
-            base = enrich(raw_df, tc, probs, rates)
-        else:
-            st.sidebar.error("; ".join(avisos))
-    except Exception as e:
-        st.sidebar.error("No se pudo procesar el CSV: " + str(e))
-
-df = pd.DataFrame()
-if base is not None:
-    with st.sidebar:
-        st.markdown("### Búsqueda y filtros")
-        f_txt = st.text_input("Buscar", placeholder="Cliente, folio, equipo, marca, cotización...")
-        f_fase = st.multiselect("Fase", [FASES[i] for i in sorted(base
+        "Totales de
