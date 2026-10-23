@@ -101,6 +101,7 @@ def procesar_csv(file_bytes):
             
         work = pd.DataFrame()
         work['ID'] = get_col(['PROYECTO', 'FOLIO'])
+        work['Cotizacion'] = get_col(['COTIZACION', 'COTIZACIÓN', 'NO. COTIZACION', 'FOLIO COTIZACION'])
         work['Cliente'] = get_col(['CLIENTE', 'EMPRESA'])
         work['Area'] = get_col(['AREA', 'ÁREA'])
         work['Etapa'] = get_col(['ETAPA', 'FASE'])
@@ -149,17 +150,19 @@ def procesar_csv(file_bytes):
             return t.strip()
 
         work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', fix_text(x)).title())
+        work['Cotizacion'] = work['Cotizacion'].apply(fix_text)
         work['Desc'] = work['Desc'].apply(fix_text)
         work['Area'] = work['Area'].apply(fix_text)
         
         work['Cliente'] = work.groupby('ID')['Cliente'].transform(lambda x: x.ffill().bfill())
+        work['Cotizacion'] = work.groupby('ID')['Cotizacion'].transform(lambda x: x.ffill().bfill())
         
         work['Fecha_Creacion_DT'] = pd.to_datetime(work['Fecha_Creacion'], errors='coerce', dayfirst=True)
         work['Dias_Activo'] = (pd.Timestamp.now() - work['Fecha_Creacion_DT']).dt.days
         work['Dias_Activo'] = work['Dias_Activo'].fillna(0).astype(int)
         
         df_g = work.groupby('ID').agg({
-            'Cliente': 'first', 'Area': 'first', 'Etapa': 'first',
+            'Cotizacion': 'first', 'Cliente': 'first', 'Area': 'first', 'Etapa': 'first',
             'Desc': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip()!='']),
             'Dias_Activo': 'max', 'Fecha_Cierre': 'first',
             'USD': 'sum', 'MXN': 'sum'
@@ -200,7 +203,7 @@ if archivo:
         tc = st.sidebar.number_input("Tipo de Cambio (MXN a USD)", value=18.0, step=0.5)
         df['Total_USD_Eq'] = df['USD'] + (df['MXN'] / tc)
 
-        f_txt = st.sidebar.text_input("🔍 Buscar (Cliente, Folio, Marca/Eq.):", placeholder="Ej. Nissan, 12345, Zeiss...")
+        f_txt = st.sidebar.text_input("🔍 Buscar (Cliente, Folio, Cotización, Marca):", placeholder="Ej. Nissan, 12345, COT-998, Zeiss...")
         
         f_rezagados = st.sidebar.checkbox("🚨 Ver Solo Proyectos Rezagados (> 60 días)", help="Aísla los proyectos estancados para revivirlos mediante tácticas de reactivación.")
         
@@ -213,6 +216,7 @@ if archivo:
             df = df[
                 df['Cliente'].str.contains(f_txt, case=False, na=False) | 
                 df['ID'].astype(str).str.contains(f_txt, case=False, na=False) |
+                df['Cotizacion'].astype(str).str.contains(f_txt, case=False, na=False) |
                 df['Desc'].str.contains(f_txt, case=False, na=False)
             ]
         if f_min_usd > 0: df = df[df['Total_USD_Eq'] >= f_min_usd]
@@ -277,7 +281,9 @@ with t_dash:
     if not df.empty:
         st.markdown(f"#### Detalle Operativo del Pipeline Activo - {vista}")
         
-        df_display = activos[['ID', 'Cliente', 'Desc', 'Dias_Activo', 'Fecha_Cierre', 'Fase', 'USD', 'MXN']].copy()
+        df_display = activos[['ID', 'Cotizacion', 'Cliente', 'Desc', 'Dias_Activo', 'Fecha_Cierre', 'Fase', 'USD', 'MXN']].copy()
+        df_display.columns = ['Proyecto', 'Cotización', 'Cliente', 'Descripción', 'Días Activos', 'Fecha Cierre', 'Fase', 'USD', 'MXN']
+        
         if "USD Equivalente" not in vista:
             if "MXN" in vista: df_display = df_display[df_display['MXN'] > 0]
             else: df_display = df_display[df_display['USD'] > 0]
@@ -299,7 +305,7 @@ with t_dash:
             st.markdown("##### 💼 Venta Consultiva KAM (2+ Proyectos)")
             st.caption("Cuentas clave para armar paquetes (Bundles) en Laboratorio IA.")
             if not df_multi.empty:
-                st.dataframe(df_multi.sort_values(by=['Cliente', 'ID']), use_container_width=True, hide_index=True)
+                st.dataframe(df_multi.sort_values(by=['Cliente', 'Proyecto']), use_container_width=True, hide_index=True)
             else:
                 st.info("No hay cuentas con múltiples proyectos activos bajo estos filtros.")
                 
@@ -319,19 +325,22 @@ with t_ia:
         c_sel = st.selectbox("1. Selecciona Cliente (Basado en filtros activos):", ["--"] + sorted(df['Cliente'].unique()))
         if c_sel != "--":
             df_c = df[df['Cliente'] == c_sel]
-            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD / ${x['MXN']:,.0f} MXN) - {x['Dias_Activo']} días", axis=1).tolist()
+            opc = df_c.apply(lambda x: f"Proj: [{x['ID']}] | Cot: [{x['Cotizacion']}] | {str(x['Desc'])[:30]}... (${x['USD']:,.0f} USD / ${x['MXN']:,.0f} MXN) - {x['Dias_Activo']} días", axis=1).tolist()
             p_sel = st.multiselect("2. Folios a incluir (Bundle):", opc, default=opc[:1])
             
             if p_sel:
-                ids = [o.split("]")[0].replace("[", "") for o in p_sel]
+                ids = [re.search(r'Proj: \[(.*?)\]', o).group(1) for o in p_sel]
+                cots = [re.search(r'Cot: \[(.*?)\]', o).group(1) for o in p_sel]
                 df_s = df[df['ID'].isin(ids)]
                 
                 t_usd, t_mxn = df_s['USD'].sum(), df_s['MXN'].sum()
                 eqs = " | ".join(df_s['Desc'].tolist())
+                cots_str = ", ".join([c for c in cots if c and str(c).strip() != ''])
                 
                 st.markdown(f"""
                 <div style="background-color:#f1f5f9; padding:15px; border-radius:8px; border-left:4px solid #003a70; margin-bottom:15px;">
                     <b>Valor del Paquete Seleccionado:</b> <span style='color:#003a70; font-weight:bold; font-size:18px;'>${t_usd:,.2f} USD</span> | <span style='color:#003a70; font-weight:bold;'>${t_mxn:,.2f} MXN</span><br>
+                    <b>Cotizaciones / Folios:</b> {cots_str if cots_str else 'N/D'}<br>
                     <b>Equipos / Proyectos:</b> {eqs}
                 </div>
                 """, unsafe_allow_html=True)
@@ -347,15 +356,14 @@ with t_ia:
                 if ia_activa and st.button("🚀 Generar Estrategia de Cierre KAM", type="primary"):
                     with st.spinner("Analizando cuenta y fusionando MEDDPICC, SPIN y Sandler..."):
                         try:
-                            # ACTUALIZADO AL MODELO ESTABLE REQUERIDO
                             model = genai.GenerativeModel("gemini-3.8-flash")
                             
-                            # PROMPT MAESTRO B2B (METROLOGÍA + MEDDPICC + SPIN + SANDLER)
                             prompt = f"""
                             Eres un Key Account Manager (KAM) senior en MESS Servicios Metrológicos, altamente especializado en ventas consultivas B2B de equipos de metrología industrial (CMM Zeiss, brazos de medición Kreon/Scantech, perfilómetros Taylor Hobson, microscopios, durómetros Wilson, calibración y preparación metalográfica).
                             
                             DATOS DE LA NEGOCIACIÓN:
                             - Cliente: {c_sel}
+                            - Cotizaciones involucradas: {cots_str}
                             - Giro Industrial: {giro}
                             - Interlocutor: {perfil}
                             - Equipos / Servicios en juego: {eqs}
@@ -363,7 +371,7 @@ with t_ia:
                             - Canal de Contacto: {canal}
                             - Contexto de la Cuenta: {ctx}
                             
-                            INSTRUCCIONES METODOLÓGICAS:
+                            INSTRUCCIONES METODOLÓGICAS ESTRICTAS:
                             1. Utiliza lenguaje técnico metrológico natural y corporativo, enfocado en asegurar la trazabilidad, evitar paros de línea y garantizar la certidumbre dimensional en piso de producción.
                             2. Fusiona de forma invisible y experta las siguientes metodologías de venta B2B:
                                - **SPIN Selling**: Haz preguntas de Situación, Problema, Implicación y Necesidad-Solución orientadas al riesgo de no medir con precisión.
@@ -376,11 +384,11 @@ with t_ia:
                             </ANALYSIS>
                             
                             <MESSAGE>
-                            (El guion, correo o mensaje exacto redactado con tono humano, persuasivo, directo y profesional para el canal seleccionado, sin sonar exagerado ni robótico)
+                            (¡MUY IMPORTANTE! Redacta un guion, correo o mensaje completo, persuasivo, humano y profesional de al menos 3 párrafos para el canal seleccionado [{canal}]. Debe abordar directamente las cotizaciones [{cots_str}] y los equipos [{eqs}], cerrando con una llamada a la acción clara, sin dejar textos vacíos ni firmas genéricas incompletas).
                             </MESSAGE>
                             
                             <OBJECTIONS>
-                            (Estrategia Sandler de anticipación y manejo preventivo para las 2 objeciones más probables: precio y tiempos)
+                            (Estrategia Sandler de anticipación y manejo preventivo para las 2 objeciones más probables: precio y tiempos de entrega)
                             </OBJECTIONS>
                             
                             <LOG>
@@ -407,7 +415,7 @@ with t_ia:
                     st.info(f"**💡 Análisis Estratégico (MEDDPICC & Sandler):**\n{res_ia['analisis']}")
                     
                     st.markdown("#### 💬 Guion / Mensaje Táctico (Editable)")
-                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo o copiarlo:", value=res_ia['mensaje'], height=150)
+                    msg_editado = st.text_area("Ajusta el texto antes de enviarlo o copiarlo:", value=res_ia['mensaje'], height=180)
                     
                     wa_url = f"https://wa.me/?text={urllib.parse.quote(msg_editado)}"
                     st.markdown(f'<a href="{wa_url}" target="_blank" style="background-color:#25D366;color:white;padding:10px 18px;border-radius:5px;text-decoration:none;font-weight:bold;display:inline-block;margin-top:5px;">📲 Enviar por WhatsApp Directo</a>', unsafe_allow_html=True)
@@ -421,7 +429,7 @@ with t_ia:
                         def get_docx():
                             d = Document()
                             d.add_heading("ESTRATEGIA KAM - MESS", 0)
-                            d.add_paragraph(f"Cliente: {c_sel}\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nANÁLISIS ESTRATÉGICO:\n{res_ia['analisis']}\n\nMENSAJE / GUION TÁCTICO:\n{msg_editado}\n\nMANEJO DE OBJECIONES:\n{res_ia['objeciones']}\n\nBITÁCORA SCOTT:\n{res_ia['log']}")
+                            d.add_paragraph(f"Cliente: {c_sel}\nCotizaciones: {cots_str}\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nANÁLISIS ESTRATÉGICO:\n{res_ia['analisis']}\n\nMENSAJE / GUION TÁCTICO:\n{msg_editado}\n\nMANEJO DE OBJECIONES:\n{res_ia['objeciones']}\n\nBITÁCORA SCOTT:\n{res_ia['log']}")
                             b = io.BytesIO()
                             d.save(b)
                             b.seek(0)
