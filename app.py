@@ -76,7 +76,6 @@ def procesar_csv(file_bytes):
         work['Etapa'] = get_col(['ETAPA', 'FASE'])
         work['Desc'] = get_col(['DESCRIPCION'])
         
-        # Recuperación de fechas para análisis de rezagos
         work['Fecha_Creacion'] = get_col(['FECHA DE REGISTRO', 'FECHA CREACION', 'FECHA'])
         work['Fecha_Cierre'] = get_col(['FECHA DE CIERRE', 'CIERRE'])
         
@@ -99,13 +98,31 @@ def procesar_csv(file_bytes):
         work['MXN'] = m_mxn
         work = work.dropna(subset=['ID']).reset_index(drop=True)
         
-        work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', str(x).replace('?','ó')).strip().title())
-        work['Desc'] = work['Desc'].apply(lambda x: str(x).replace('?','ó') if pd.notna(x) else "")
-        work['Area'] = work['Area'].apply(lambda x: str(x).replace('?','ó') if pd.notna(x) else "")
+        # Filtros lógicos para reparación de caracteres rotos
+        def fix_text(x):
+            if pd.isna(x): return ""
+            t = str(x)
+            reemplazos = {
+                'ci?n': 'ción', 'CI?N': 'CIÓN',
+                'se?o': 'seño', 'SE?O': 'SEÑO',
+                'Dise?o': 'Diseño', 'DISE?O': 'DISEÑO',
+                'Diseóo': 'Diseño', 'diseóo': 'diseño', 
+                'a?o': 'año', 'A?O': 'AÑO',
+                'metr?a': 'metría', 'METR?A': 'METRÍA',
+                '?tico': 'ótico', '?TICO': 'ÓTICO',
+                '?tica': 'ótica', '?TICA': 'ÓTICA',
+                '?': 'ó'
+            }
+            for k, v in reemplazos.items():
+                t = t.replace(k, v)
+            return t.strip()
+
+        work['Cliente'] = work['Cliente'].apply(lambda x: re.sub(r'\s+', ' ', fix_text(x)).title())
+        work['Desc'] = work['Desc'].apply(fix_text)
+        work['Area'] = work['Area'].apply(fix_text)
         
         work['Cliente'] = work.groupby('ID')['Cliente'].transform(lambda x: x.ffill().bfill())
         
-        # Cálculo matemático de días de antigüedad
         work['Fecha_Creacion_DT'] = pd.to_datetime(work['Fecha_Creacion'], errors='coerce', dayfirst=True)
         work['Dias_Activo'] = (pd.Timestamp.now() - work['Fecha_Creacion_DT']).dt.days
         work['Dias_Activo'] = work['Dias_Activo'].fillna(0).astype(int)
@@ -154,7 +171,6 @@ if archivo:
 
         f_txt = st.sidebar.text_input("🔍 Buscar (Cliente, Folio, Marca/Eq.):", placeholder="Ej. Nissan, 12345, Zeiss...")
         
-        # Filtro de Rezagados
         f_rezagados = st.sidebar.checkbox("🚨 Ver Solo Proyectos Rezagados (> 60 días)", help="Aísla los proyectos estancados para revivirlos mediante tácticas de reactivación.")
         
         f_min_usd = st.sidebar.number_input("💰 Monto Mínimo (USD Eq):", min_value=0, value=0, step=5000, help="Filtra proyectos que superen este valor para enfocarte en las cuentas de mayor impacto.")
@@ -226,10 +242,10 @@ with t_dash:
             if not df_f.empty and df_f[col_valor].sum() > 0:
                 st.altair_chart(alt.Chart(df_f).mark_bar(color='#2ecc71').encode(x=col_valor, y=alt.Y('Fase', sort='-x')).properties(height=300), use_container_width=True)
 
-        st.divider()
+    st.divider()
+    if not df.empty:
         st.markdown(f"#### Detalle Operativo del Pipeline Activo - {vista}")
         
-        # Inclusión de métricas de tiempo en la tabla operativa
         df_display = activos[['ID', 'Cliente', 'Desc', 'Dias_Activo', 'Fecha_Cierre', 'Fase', 'USD', 'MXN']].copy()
         if "USD Equivalente" not in vista:
             if "MXN" in vista: df_display = df_display[df_display['MXN'] > 0]
@@ -263,7 +279,6 @@ with t_dash:
                 st.dataframe(df_single.sort_values(by='Cliente'), use_container_width=True, hide_index=True)
             else:
                 st.info("No hay cuentas con un solo proyecto activo bajo estos filtros.")
-
     else:
         st.info("Sube el CSV de SCOTT o ajusta los filtros para visualizar tu Pipeline.")
 
