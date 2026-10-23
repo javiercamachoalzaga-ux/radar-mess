@@ -76,6 +76,10 @@ def procesar_csv(file_bytes):
         work['Etapa'] = get_col(['ETAPA', 'FASE'])
         work['Desc'] = get_col(['DESCRIPCION'])
         
+        # Recuperación de fechas para análisis de rezagos
+        work['Fecha_Creacion'] = get_col(['FECHA DE REGISTRO', 'FECHA CREACION', 'FECHA'])
+        work['Fecha_Cierre'] = get_col(['FECHA DE CIERRE', 'CIERRE'])
+        
         m_usd, m_mxn = np.zeros(len(d)), np.zeros(len(d))
         c_mon = get_col(['MONEDA', 'DIVISA'])
         
@@ -101,9 +105,15 @@ def procesar_csv(file_bytes):
         
         work['Cliente'] = work.groupby('ID')['Cliente'].transform(lambda x: x.ffill().bfill())
         
+        # Cálculo matemático de días de antigüedad
+        work['Fecha_Creacion_DT'] = pd.to_datetime(work['Fecha_Creacion'], errors='coerce', dayfirst=True)
+        work['Dias_Activo'] = (pd.Timestamp.now() - work['Fecha_Creacion_DT']).dt.days
+        work['Dias_Activo'] = work['Dias_Activo'].fillna(0).astype(int)
+        
         df_g = work.groupby('ID').agg({
             'Cliente': 'first', 'Area': 'first', 'Etapa': 'first',
             'Desc': lambda x: ' | '.join([str(i) for i in x.dropna().unique() if str(i).strip()!='']),
+            'Dias_Activo': 'max', 'Fecha_Cierre': 'first',
             'USD': 'sum', 'MXN': 'sum'
         }).reset_index()
         
@@ -137,32 +147,49 @@ if archivo:
         st.sidebar.error("Error al leer formato SCOTT.")
     else:
         st.sidebar.divider()
-        st.sidebar.markdown("**Filtros Rápidos**")
-        f_pilar = st.sidebar.multiselect("Pilar", df['Pilar'].unique(), default=df['Pilar'].unique())
-        f_txt = st.sidebar.text_input("Buscar Cliente/Folio")
+        st.sidebar.markdown("**🎯 Motor de Búsqueda KAM (Sniper)**")
+        
+        tc = st.sidebar.number_input("Tipo de Cambio (MXN a USD)", value=18.0, step=0.5)
+        df['Total_USD_Eq'] = df['USD'] + (df['MXN'] / tc)
+
+        f_txt = st.sidebar.text_input("🔍 Buscar (Cliente, Folio, Marca/Eq.):", placeholder="Ej. Nissan, 12345, Zeiss...")
+        
+        # Filtro de Rezagados
+        f_rezagados = st.sidebar.checkbox("🚨 Ver Solo Proyectos Rezagados (> 60 días)", help="Aísla los proyectos estancados para revivirlos mediante tácticas de reactivación.")
+        
+        f_min_usd = st.sidebar.number_input("💰 Monto Mínimo (USD Eq):", min_value=0, value=0, step=5000, help="Filtra proyectos que superen este valor para enfocarte en las cuentas de mayor impacto.")
+        f_fase = st.sidebar.multiselect("📈 Salud del Embudo:", sorted(df['Fase'].unique()))
+        f_area = st.sidebar.multiselect("🏭 Área de Negocio:", sorted(df['Area'].unique()))
+        f_pilar = st.sidebar.multiselect("📌 Pilar Estratégico:", df['Pilar'].unique())
+        
+        if f_txt: 
+            df = df[
+                df['Cliente'].str.contains(f_txt, case=False, na=False) | 
+                df['ID'].astype(str).str.contains(f_txt, case=False, na=False) |
+                df['Desc'].str.contains(f_txt, case=False, na=False)
+            ]
+        if f_min_usd > 0: df = df[df['Total_USD_Eq'] >= f_min_usd]
+        if f_fase: df = df[df['Fase'].isin(f_fase)]
+        if f_area: df = df[df['Area'].isin(f_area)]
         if f_pilar: df = df[df['Pilar'].isin(f_pilar)]
-        if f_txt: df = df[df['Cliente'].str.contains(f_txt, case=False) | df['ID'].astype(str).str.contains(f_txt, case=False)]
+        if f_rezagados: df = df[df['Dias_Activo'] >= 60]
 
 t_dash, t_ia = st.tabs(["📊 1. Visualización del Pipeline (Dashboards)", "🧠 2. Laboratorio IA (Estrategias)"])
 
 with t_dash:
     if not df.empty:
         META_USD = 80000.0
-        tc = st.sidebar.number_input("Tipo de Cambio (MXN a USD)", value=18.0, step=0.5)
         
-        df['Total_USD_Eq'] = df['USD'] + (df['MXN'] / tc)
         activos = df[df['Fase'].isin(['3. Negociación', '4. Esperando PO'])]
         
-        # KPI Globales siempre en USD para monitoreo de Cuota
         usd_activo = activos['Total_USD_Eq'].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("Meta Mensual (USD)", f"${META_USD:,.0f}")
-        c2.metric("Pipeline Probable (USD Eq)", f"${usd_activo:,.0f}")
+        c2.metric("Pipeline Filtrado Probable (USD Eq)", f"${usd_activo:,.0f}")
         c3.metric("Brecha para Meta (GAP)", f"${max(0, META_USD - usd_activo):,.0f}")
         
         st.divider()
         
-        # Botones de visualización
         vista = st.radio("📊 Selecciona la vista operativa de los gráficos y tablas:", ["Vista Global (USD Equivalente)", "Solo Proyectos en USD", "Solo Proyectos en MXN"], horizontal=True)
         
         if "USD Equivalente" in vista:
@@ -202,13 +229,12 @@ with t_dash:
         st.divider()
         st.markdown(f"#### Detalle Operativo del Pipeline Activo - {vista}")
         
-        # Filtramos la tabla operativa según el botón seleccionado
-        df_display = activos[['ID', 'Cliente', 'Desc', 'Fase', 'USD', 'MXN']].copy()
+        # Inclusión de métricas de tiempo en la tabla operativa
+        df_display = activos[['ID', 'Cliente', 'Desc', 'Dias_Activo', 'Fecha_Cierre', 'Fase', 'USD', 'MXN']].copy()
         if "USD Equivalente" not in vista:
             if "MXN" in vista: df_display = df_display[df_display['MXN'] > 0]
             else: df_display = df_display[df_display['USD'] > 0]
             
-        # Separación Lógica: Venta Consultiva vs Transaccional
         conteo_clientes = df_display['Cliente'].value_counts()
         clientes_multi = conteo_clientes[conteo_clientes > 1].index
         clientes_single = conteo_clientes[conteo_clientes == 1].index
@@ -228,7 +254,7 @@ with t_dash:
             if not df_multi.empty:
                 st.dataframe(df_multi.sort_values(by=['Cliente', 'ID']), use_container_width=True, hide_index=True)
             else:
-                st.info("No hay cuentas con múltiples proyectos activos.")
+                st.info("No hay cuentas con múltiples proyectos activos bajo estos filtros.")
                 
         with col_t2:
             st.markdown("##### ⚡ Venta Transaccional (1 Proyecto)")
@@ -236,18 +262,18 @@ with t_dash:
             if not df_single.empty:
                 st.dataframe(df_single.sort_values(by='Cliente'), use_container_width=True, hide_index=True)
             else:
-                st.info("No hay cuentas con un solo proyecto activo.")
+                st.info("No hay cuentas con un solo proyecto activo bajo estos filtros.")
 
     else:
-        st.info("Sube el CSV de SCOTT para visualizar tu Pipeline.")
+        st.info("Sube el CSV de SCOTT o ajusta los filtros para visualizar tu Pipeline.")
 
 with t_ia:
     st.markdown("### Generador de Estrategias y Guiones (KAM)")
     if not df.empty:
-        c_sel = st.selectbox("1. Selecciona Cliente:", ["--"] + sorted(df['Cliente'].unique()))
+        c_sel = st.selectbox("1. Selecciona Cliente (Basado en filtros activos):", ["--"] + sorted(df['Cliente'].unique()))
         if c_sel != "--":
             df_c = df[df['Cliente'] == c_sel]
-            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD / ${x['MXN']:,.0f} MXN)", axis=1).tolist()
+            opc = df_c.apply(lambda x: f"[{x['ID']}] {str(x['Desc'])[:40]}... (${x['USD']:,.0f} USD / ${x['MXN']:,.0f} MXN) - {x['Dias_Activo']} días", axis=1).tolist()
             p_sel = st.multiselect("2. Folios a incluir (Bundle):", opc, default=opc[:1])
             
             if p_sel:
