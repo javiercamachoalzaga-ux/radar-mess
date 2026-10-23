@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SAIV | Radar Comercial MESS  (v2.1: pipeline vivo + Laboratorio IA + ABM / Marketing)
+SAIV | Radar Comercial MESS  (v2: pipeline vivo + Laboratorio IA)
 
 Secrets (.streamlit/secrets.toml):
     mi_contrasena  = "tu_contraseña"
@@ -48,7 +48,9 @@ FASES = {
     3: "3. Negociación",
     4: "4. Esperando PO",
 }
+# Probabilidad inicial por fase: calíbrala con tu histórico real de cierre.
 PROB_DEFAULT = {1: 10, 2: 25, 3: 50, 4: 80}
+# Antigüedad (días desde el registro) esperada como máximo por fase.
 UMBRAL_DIAS = {0: 60, 1: 30, 2: 45, 3: 75, 4: 45}
 
 SIGUIENTE_PASO = {
@@ -73,7 +75,6 @@ OBJETIVOS = [
     "Reactivar proyecto frío",
     "Ampliar la cuenta (cross-selling)",
     "Agendar visita técnica",
-    "Desplegar campaña ABM / Marketing digital específico",
 ]
 FOCO_MEDDPICC = {
     0: "validar si el proyecto sigue vivo y quién decide",
@@ -82,10 +83,12 @@ FOCO_MEDDPICC = {
     3: "validar proceso de decisión (Decision Process), papeleo y comprador económico",
     4: "validar el proceso de compra interno y la fecha real de colocación de la PO",
 }
-DIAS_FRESCO = 25
+DIAS_FRESCO = 25  # umbral de tu versión en GitHub: en tiempo (menos de 25 días) frente a rezagado
 CANALES = ["WhatsApp", "Correo ejecutivo", "Llamada", "Visita presencial"]
 PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
+# Cuentas que son el mismo grupo bajo distintos nombres en SCOTT.
+# Revisa y ajusta esta lista: se infirió solo por el nombre del cliente.
 ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "DANA", "STEERINGMEX"]
 
 # ---------------------------------------------------------------------------
@@ -185,6 +188,8 @@ def detect_delimiter(text):
         return ","
 
 
+# Reparaciones seguras de letras perdidas en SCOTT (el '?' ya viene así en el CSV).
+# Solo patrones inequívocos: no se adivina una letra para cualquier '?'.
 REPARACIONES = [
     ("ci?n", "ción"), ("CI?N", "CIÓN"), ("Ci?n", "Ción"),
     ("?xico", "éxico"), ("?XICO", "ÉXICO"),
@@ -204,6 +209,7 @@ def reparar_texto(x):
 
 
 def parse_valor(v):
+    """'18,900.00 MXN' -> (18900.0, 'MXN'). Sin moneda explícita se toma MXN."""
     s = "" if v is None else str(v)
     m = re.search(r"-?\d[\d,]*\.?\d*", s)
     try:
@@ -247,6 +253,7 @@ def cuenta_de(cliente):
 
 @st.cache_data(show_spinner=False)
 def load_pipeline(raw_bytes, hoy_iso):
+    """Lee el CSV de SCOTT. Devuelve (DataFrame, lista de avisos)."""
     avisos = []
     hoy = pd.Timestamp(hoy_iso)
     text = decode_bytes(raw_bytes)
@@ -361,6 +368,7 @@ def load_pipeline(raw_bytes, hoy_iso):
 
 
 def enrich(df, tc, probs, rates):
+    """Agrega equivalencias, ponderado, comisión estimada y alertas."""
     d = df.copy()
     d["Total_USD_Eq"] = d["Monto_USD"] + d["Monto_MXN"] / tc
     d["Prob"] = d["Fase_Num"].map(lambda f: probs.get(int(f), 10) / 100.0)
@@ -511,7 +519,7 @@ def call_gemini(prompt):
 
 def parse_tags(text):
     out = {}
-    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "MARKETING", "LOG"]:
+    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "LOG"]:
         pat = "<" + tag + ">(.*?)(?=</" + tag + ">|<[A-Z]+>|$)"
         m = re.search(pat, text or "", re.S | re.I)
         out[tag] = m.group(1).strip() if m else ""
@@ -553,9 +561,8 @@ def build_prompt(ctx):
         "- SPIN Selling: preguntas de Situación, Problema, Implicación y Necesidad-Solución sobre el riesgo de medir mal o calibrar tarde.",
         "- MEDDPICC: en esta fase el foco es " + ctx["foco"] + ". Señala qué elementos faltan por validar y qué pregunta los destapa.",
         "- Sandler: dale al cliente permiso de decir que no, sin presión y sin forzar una decisión. Busca una respuesta honesta, no una promesa.",
-        "- Account-Based Marketing (ABM): propón tácticas de marketing digital o de guerrilla enfocadas específicamente a esta cuenta para influir en los tomadores de decisiones.",
         "",
-        "FORMATO: responde ÚNICAMENTE con estas cinco etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
+        "FORMATO: responde ÚNICAMENTE con estas cuatro etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
         "<ANALYSIS> Diagnóstico breve: qué sabemos, qué falta validar (lista corta MEDDPICC) y la mejor jugada para esta fase. </ANALYSIS>",
         "<MESSAGE> Dos versiones listas para enviar por el canal indicado, separadas por una línea con tres guiones (---): primero la versión BREVE y después la COMPLETA. Incluye al menos una pregunta SPIN y un cierre con permiso de decir no. </MESSAGE>",
         "REGLAS PARA <MESSAGE>: el texto se mostrará en una caja de texto plano. PROHIBIDO usar tablas Markdown (nada de barras verticales ni :---) y PROHIBIDO usar asteriscos.",
@@ -565,13 +572,13 @@ def build_prompt(ctx):
         "Inversión: [monto exacto en USD o MXN; si no hay monto escribe 'Por cotizar']",
         "La versión BREVE no lleva la lista: solo menciona el paquete y una pregunta.",
         "<OBJECTIONS> Las dos o tres objeciones más probables (precio, tiempos, prioridad interna) y cómo responderlas con enfoque Sandler. </OBJECTIONS>",
-        "<MARKETING> Acciones de marketing digital o tácticas ABM recomendadas para esta cuenta (ej. envío de casos de éxito técnicos, whitepapers de metrología o invitación personalizada). </MARKETING>",
         "<LOG> Resumen de dos a cuatro líneas para registrar en SCOTT: acción, interlocutor y siguiente paso. </LOG>",
     ]
     return "\n".join(lines)
 
 
 def clean_message(txt):
+    """Texto plano: quita asteriscos y líneas de tablas Markdown sin borrar contenido útil."""
     out = []
     for line in str(txt or "").replace("**", "").splitlines():
         if re.match(r"^\s*\|.*\|\s*$", line) or re.match(r"^\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)+\s*$", line):
@@ -608,7 +615,6 @@ def build_docx(ctx, tags, mensaje, log_txt):
         ("Análisis", tags.get("ANALYSIS", "")),
         ("Mensaje", mensaje),
         ("Manejo de objeciones", tags.get("OBJECTIONS", "")),
-        ("Acciones de Marketing / ABM", tags.get("MARKETING", "")),
         ("Registro para SCOTT", log_txt),
     ]:
         doc.add_heading(titulo, level=2)
@@ -725,6 +731,7 @@ def render_dashboard():
         st.info("Ningún proyecto coincide con los filtros activos.")
         return
 
+    # --- KPIs ---------------------------------------------------------
     n_usd = int((df["Monto_USD"] > 0).sum())
     n_mxn = int((df["Monto_MXN"] > 0).sum())
     c1, c2, c3 = st.columns(3)
@@ -762,6 +769,7 @@ def render_dashboard():
         )
     st.caption("La antigüedad se mide desde la fecha de registro; el CSV no trae fecha del último movimiento.")
 
+    # --- Vista de moneda ------------------------------------------------
     vista = st.radio("Vista de gráficas", ["Global (USD equivalente)", "Solo USD", "Solo MXN"], horizontal=True)
     if vista.startswith("Global"):
         dv, col, cur = df, "Total_USD_Eq", "USD eq."
@@ -771,6 +779,7 @@ def render_dashboard():
         dv, col, cur = df[df["Monto_MXN"] > 0], "Monto_MXN", "MXN"
     dv = dv.assign(Valor_Vista=dv[col], Pond_Vista=dv[col] * dv["Prob"])
 
+    # --- Dónde actuar hoy ----------------------------------------------
     st.markdown("### Dónde actuar hoy")
     cols_base = ["Folio", "Cliente", "Descripcion", "Fase", "Monto_USD", "Monto_MXN", "Total_USD_Eq",
                  "Ponderado", "Cierre_Est", "Dias_Registro", "Alerta", "Siguiente_Paso"]
@@ -798,6 +807,7 @@ def render_dashboard():
         st.caption("Cierre vencido o antigüedad mayor al doble de lo esperado para su fase. Candidatos a rescate (cierre negativo de Sandler) o a cerrar en SCOTT.")
         show_table(rojo.head(30), cols_base)
 
+    # --- Gráficas -----------------------------------------------------------
     st.markdown("### Concentración y embudo (" + cur + ")")
     g1, g2 = st.columns(2)
     with g1:
@@ -842,6 +852,7 @@ def render_dashboard():
             y=alt.Y("Area:N", sort="-x", title=None), x=alt.X("Pond_Vista:Q", title="Ponderado " + cur),
             tooltip=["Area", alt.Tooltip("Pond_Vista:Q", format=",.0f")]).properties(height=300))
 
+    # --- Ranking de cuentas clave -----------------------------------------------
     st.markdown("### Ranking de cuentas clave")
     rk = df.groupby("Cuenta").agg(
         Proyectos=("Folio", "count"), USD=("Monto_USD", "sum"), MXN=("Monto_MXN", "sum"),
@@ -878,6 +889,7 @@ def render_dashboard():
     except TypeError:
         st.dataframe(rk_sty, hide_index=True, use_container_width=True)
 
+    # --- Cuentas con varios proyectos -------------------------------------------
     st.markdown("### Cuentas con 2 o más proyectos (candidatas a bundle)")
     cta = df.groupby("Cuenta").agg(
         Proyectos=("Folio", "count"), USD=("Monto_USD", "sum"), MXN=("Monto_MXN", "sum"),
@@ -895,6 +907,7 @@ def render_dashboard():
         except TypeError:
             st.dataframe(sty, hide_index=True, use_container_width=True)
 
+    # --- Detalle completo ------------------------------------------------------------
     st.markdown("### Detalle completo del pipeline")
     det = df.sort_values("Total_USD_Eq", ascending=False)
     cols_det = ["Folio", "Cliente", "Cuenta", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN",
@@ -996,7 +1009,7 @@ def render_lab():
             "objetivo": objetivo, "canal": canal, "perfil": perfil, "giro": giro, "contexto": contexto,
             "foco": FOCO_MEDDPICC.get(fase_n, FOCO_MEDDPICC[0]),
         }
-        with st.spinner("Analizando la cuenta con MEDDPICC, SPIN, Sandler y ABM..."):
+        with st.spinner("Analizando la cuenta con MEDDPICC, SPIN y Sandler..."):
             txt, err = call_gemini(build_prompt(ctx))
         if err:
             st.error(err)
@@ -1024,7 +1037,7 @@ def render_lab():
         st.warning("La respuesta no incluyó la etiqueta MESSAGE. Vuelve a generar.")
 
     st.divider()
-    pa, pm, po, p_mkt, pl = st.tabs(["Análisis", "Mensaje", "Objeciones", "Acciones ABM / Marketing", "Log para SCOTT"])
+    pa, pm, po, pl = st.tabs(["Análisis", "Mensaje", "Objeciones", "Log para SCOTT"])
     with pa:
         st.write(tags["ANALYSIS"])
     with pm:
@@ -1038,8 +1051,6 @@ def render_lab():
         mensaje = st.text_area("Mensaje (editable)", value=base_msg, height=190, key="msg_" + rid + "_" + ver)
     with po:
         st.write(tags["OBJECTIONS"])
-    with p_mkt:
-        st.write(tags.get("MARKETING", "Sin recomendaciones de marketing generadas."))
     with pl:
         log_txt = st.text_area("Registro sugerido (editable)", value=tags["LOG"], height=110, key="log_" + rid)
 
