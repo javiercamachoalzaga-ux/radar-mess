@@ -8,6 +8,7 @@ Secrets (.streamlit/secrets.toml):
     gemini_model   = "gemini-3.8-flash"   # opcional; cambia aquí el modelo sin tocar el código
 """
 
+import base64
 import csv
 import hmac
 import io
@@ -32,9 +33,162 @@ except Exception:
     Document = None
 
 # ---------------------------------------------------------------------------
+# LOGOTIPOS GRUPO MESS (incrustados; azul para fondos claros, blanco para fondos azules)
+# ---------------------------------------------------------------------------
+_LOGO_BLUE_B64 = (
+    "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"
+)
+_LOGO_WHITE_B64 = (
+    "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"
+)
+_ICON_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAP1BMVEUAX3sARH4ARIEARYEABn8AQ34AAP8ARIEAS5AAQ34A"
+    "HpgA//8ARYAAAAAARYIAPn4AAAAAAAAAAAAAAAAAAAAzBwJ3AAAAEHRSTlMT/GjKA2QBmxCGCgH+AC8JcrrwPgAAAWFJREFU"
+    "eNrtlu1uwyAMRa/NZ7oA7/+2tSFJq25dCdF+TMJVG1zwwQbbCtaLggmYgAmYgAmYgAn4DKCVSL5tTM8TdNYDOn4OhUZCoJMh"
+    "5AggypRhGYBN3ddwFiW84H4EIKlg5dSkiNWhZPPZA/jo4bNLtsB7FJ9Y7FGsKgkdIaTmQyntaZH4UKLQqA9Q0pNgH1iPbg/A"
+    "vNuJ55x3lukCoAYbYvJ1fxZl2cB9gK9Yb49bJNiuB90Am2wdB7XZD26jdQGwbRoEJWZcFTcAMHoGfw2giwC66IHY8xggBDFG"
+    "vRw+DyC5n5tkCvTfEYA4YHWJFj2+hWCLfHID2JsVWRrAVtlDKMmtkEzz+UVKemSvaQW0e9B6ShOWAndQr4q0sPIQRJ2GawCo"
+    "EvW8aF3qTG6LY5QkBYS6LT0tUqnRoHZAHrKvnQGkBP61c7/p9KF2Fk0k487bb4l0pPKIPb0vpvl+8N8Ad7Not7N+LN5TAAAA"
+    "AElFTkSuQmCC"
+)
+
+
+def logo_tag(white=False, height=50, extra=""):
+    data = _LOGO_WHITE_B64 if white else _LOGO_BLUE_B64
+    return ('<img src="data:image/png;base64,' + data + '" alt="Grupo MESS" '
+            'style="height:' + str(height) + 'px;width:auto;' + extra + '"/>')
+
+
+def page_icon():
+    try:
+        from PIL import Image
+        return Image.open(io.BytesIO(base64.b64decode(_ICON_B64)))
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CONSTANTES EDITABLES
 # ---------------------------------------------------------------------------
-MESS_BLUE = "#003a70"
+MESS_BLUE = "#004580"
 MESS_DARK = "#2c3e50"
 ACCENT = "#ff6600"
 RED = "#c0392b"
@@ -84,6 +238,28 @@ FOCO_MEDDPICC = {
     4: "validar el proceso de compra interno y la fecha real de colocación de la PO",
 }
 DIAS_FRESCO = 25  # umbral de tu versión en GitHub: en tiempo (menos de 25 días) frente a rezagado
+CIERRE_OPC = ["Todas", "Vencidas", "Próximos 7 días", "Este mes", "Próximo mes", "Rango personalizado"]
+
+MK_TAGS = ("ESTRATEGIA", "LINKEDIN", "EMAILS", "WHATSAPP", "FICHA", "CALENDARIO", "KPIS")
+MK_OBJETIVOS = [
+    "Nutrir una cotización abierta",
+    "Reactivar proyectos fríos",
+    "Impulsar cross-selling de calibración o alta gama",
+    "Asegurar la colocación de la PO",
+    "Invitar a evento, webinar o capacitación",
+    "Posicionar una marca o línea de equipos",
+]
+MK_CANALES = ["LinkedIn", "Correo", "WhatsApp", "Ficha o landing"]
+MK_TONOS = ["Técnico y consultivo", "Ejecutivo y breve", "Cercano y humano"]
+# Hechos públicos de Grupo MESS (mess.com.mx). Revísalos y ajústalos: la IA solo debe apoyarse en ellos.
+MESS_HECHOS = [
+    "Grupo MESS: 'all about metrology'. Laboratorio con acreditaciones ISO/IEC 17025 (confirma el alcance vigente antes de citar magnitudes o cifras).",
+    "Servicios: calibración, inspección y medición, laboratorio de pruebas, equipo y consumibles, desarrollo profesional y desarrollo tecnológico.",
+    "Alta gama: servicio a CMM, retrofit, ingeniería inversa, escáneres 3D, medición en sitio y renta de equipo.",
+    "Marcas que representa o distribuye: Buehler, Wilson, Nikon, Kreon, Taylor Hobson, Zygo, Vicivision, Mark-10, Galdabini, Baty, Fluke, Powervar, Scanology.",
+    "Capacitación técnica en línea (MESS Academy) y equipo seminuevo en renta o venta.",
+    "Presencia en Querétaro, San Luis Potosí, Saltillo, Monterrey, Guadalajara y Aguascalientes.",
+]
 CANALES = ["WhatsApp", "Correo ejecutivo", "Llamada", "Visita presencial"]
 PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
@@ -94,7 +270,7 @@ ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "D
 # ---------------------------------------------------------------------------
 # PÁGINA Y ESTILOS
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="SAIV | Radar Comercial MESS", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="SAIV | Radar Comercial MESS", page_icon=page_icon(), layout="wide", initial_sidebar_state="expanded")
 
 CSS = """
 <style>
@@ -104,24 +280,33 @@ html, body, [class*="css"], .stApp, button, input, textarea, select {
 }
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-.stApp { background-color: #f8fafc; }
-h1, h2, h3, h4 { color: #003a70; font-weight: 700; }
+.stApp { background-color: #f4f7fb; }
+h1, h2, h3, h4 { color: #004580; font-weight: 700; }
 .header-mess {
-    background: linear-gradient(135deg, #003a70 0%, #002244 100%);
-    padding: 22px 28px; border-radius: 10px; color: #ffffff; margin-bottom: 18px;
-    border-left: 6px solid #ff6600; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    display: flex; align-items: center; gap: 26px;
+    background: linear-gradient(135deg, #004580 0%, #002b52 100%);
+    padding: 18px 28px; border-radius: 10px; margin-bottom: 18px;
+    border-bottom: 4px solid #ff6600; box-shadow: 0 4px 10px rgba(0,43,82,0.18);
 }
-.header-mess h1 { color: #ffffff; font-size: 24px; font-weight: 800; margin: 0; text-transform: uppercase; }
-.header-mess p { font-size: 12px; margin: 4px 0 0 0; color: #cbd5e1; text-transform: uppercase; letter-spacing: 1px; }
+.header-text { border-left: 1px solid rgba(255,255,255,0.35); padding-left: 24px; }
+.header-text h1 { color: #ffffff; font-size: 22px; font-weight: 800; margin: 0; text-transform: uppercase; letter-spacing: 0.5px; }
+.header-text p { font-size: 12px; margin: 4px 0 0 0; color: #cbd5e1; text-transform: uppercase; font-weight: 600; letter-spacing: 1px; }
 .kpi-card {
-    background: #ffffff; border: 1px solid #e2e8f0; border-left: 6px solid #003a70;
-    border-radius: 8px; padding: 12px 16px; box-shadow: 0 2px 6px rgba(0,58,112,0.08); margin-bottom: 10px;
+    background: #ffffff; border: 1px solid #dde6f0; border-left: 6px solid #004580;
+    border-radius: 8px; padding: 12px 16px; box-shadow: 0 2px 6px rgba(0,69,128,0.08); margin-bottom: 10px;
 }
 .kpi-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #2c3e50; font-weight: 600; }
-.kpi-value { font-size: 1.5rem; font-weight: 700; color: #003a70; line-height: 1.2; }
+.kpi-value { font-size: 1.5rem; font-weight: 700; color: #004580; line-height: 1.2; }
 .kpi-sub { font-size: 0.72rem; color: #64748b; }
-.stButton > button { background-color: #003a70; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; }
-.stButton > button:hover { background-color: #002a52; color: #ffffff; }
+section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #dde6f0; }
+.sidebar-brand { padding: 4px 0 14px 0; margin-bottom: 8px; border-bottom: 3px solid #004580; }
+div[data-baseweb="tab-list"] button[aria-selected="true"] { color: #004580 !important; font-weight: 700; }
+div[data-baseweb="tab-highlight"] { background-color: #ff6600 !important; }
+span[data-baseweb="tag"] { background-color: #004580 !important; color: #ffffff !important; }
+.stButton > button { background-color: #004580; color: #ffffff; border: none; border-radius: 6px; font-weight: 600; }
+.stButton > button:hover { background-color: #00335f; color: #ffffff; }
+.login-brand { text-align: center; padding: 30px 0 10px 0; }
+.brand-footer { text-align: center; color: #64748b; font-size: 0.72rem; margin-top: 30px; padding-top: 14px; border-top: 1px solid #dde6f0; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -152,12 +337,14 @@ def check_password():
 
 
 if not check_password():
+    st.markdown('<div class="login-brand">' + logo_tag(False, 90) + "</div>", unsafe_allow_html=True)
     st.info("Ingresa tu contraseña en el menú lateral para continuar.")
     st.stop()
 
 st.markdown(
-    '<div class="header-mess"><h1>MESS Servicios Metrológicos</h1>'
-    "<p>SAIV | Radar Comercial y Copiloto KAM</p></div>",
+    '<div class="header-mess">' + logo_tag(True, 56)
+    + '<div class="header-text"><h1>Radar Comercial</h1>'
+    "<p>SAIV | Sistema Automatizado de Ingeniería de Ventas y Copiloto KAM</p></div></div>",
     unsafe_allow_html=True,
 )
 
@@ -405,6 +592,23 @@ def enrich(df, tc, probs, rates):
     return d
 
 
+def filtrar_cierre(d, modo, rango, hoy):
+    """Filtra por la fecha de cierre estimada. Sin fecha solo aparece en 'Todas'."""
+    c = d["Cierre_Est"]
+    if modo == "Vencidas":
+        return d[c < hoy]
+    if modo == "Próximos 7 días":
+        return d[(c >= hoy) & (c <= hoy + pd.Timedelta(days=7))]
+    if modo == "Este mes":
+        return d[c.dt.to_period("M") == hoy.to_period("M")]
+    if modo == "Próximo mes":
+        return d[c.dt.to_period("M") == (hoy.to_period("M") + 1)]
+    if modo == "Rango personalizado" and rango is not None and len(rango) == 2:
+        ini, fin = pd.Timestamp(rango[0]), pd.Timestamp(rango[1])
+        return d[(c >= ini) & (c <= fin)]
+    return d
+
+
 # ===========================================================================
 # LÓGICA DE DATOS (fin)
 # ===========================================================================
@@ -517,9 +721,9 @@ def call_gemini(prompt):
         return None, "Error al consultar Gemini (" + model_name + "): " + str(e)
 
 
-def parse_tags(text):
+def parse_tags(text, tags=("ANALYSIS", "MESSAGE", "OBJECTIONS", "LOG")):
     out = {}
-    for tag in ["ANALYSIS", "MESSAGE", "OBJECTIONS", "LOG"]:
+    for tag in tags:
         pat = "<" + tag + ">(.*?)(?=</" + tag + ">|<[A-Z]+>|$)"
         m = re.search(pat, text or "", re.S | re.I)
         out[tag] = m.group(1).strip() if m else ""
@@ -629,6 +833,7 @@ def build_docx(ctx, tags, mensaje, log_txt):
 # SIDEBAR: DATOS, PARÁMETROS Y FILTROS
 # ---------------------------------------------------------------------------
 with st.sidebar:
+    st.markdown('<div class="sidebar-brand">' + logo_tag(False, 54) + "</div>", unsafe_allow_html=True)
     st.markdown("### Carga de datos")
     archivo = st.file_uploader("Extracción CSV de SCOTT", type=["csv"])
 
@@ -682,6 +887,16 @@ if base is not None:
         f_rezag = st.checkbox("Solo rezagados (" + str(DIAS_FRESCO) + " días o más)")
         f_sin_cot = st.checkbox("Solo sin cotizar")
         f_riesgo = st.checkbox("Solo en rojo (cierre vencido o por depurar)")
+        st.markdown("##### Fecha de cierre")
+        f_cierre = st.selectbox("Cierre estimado", CIERRE_OPC)
+        f_rango = None
+        if f_cierre == "Rango personalizado":
+            f_rango = st.date_input("Del - al", value=(hoy.date(), (hoy + pd.Timedelta(days=30)).date()))
+            if len(f_rango) != 2:
+                st.caption("Elige la fecha final para aplicar el rango.")
+        _cmin, _cmax = base["Cierre_Est"].min(), base["Cierre_Est"].max()
+        if pd.notna(_cmin):
+            st.caption("Cierres en SCOTT: " + _cmin.strftime("%d/%m/%Y") + " a " + _cmax.strftime("%d/%m/%Y"))
 
     df = base.copy()
     if f_txt:
@@ -711,11 +926,12 @@ if base is not None:
         df = df[df["Sin_Cotizar"]]
     if f_riesgo:
         df = df[df["Semaforo"] == "Rojo"]
+    df = filtrar_cierre(df, f_cierre, f_rango, hoy)
     st.sidebar.caption("Mostrando " + str(len(df)) + " de " + str(len(base)) + " proyectos")
 
 hay_comision = any(v > 0 for v in rates.values())
 
-tab_dash, tab_lab = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA"])
+tab_dash, tab_lab, tab_mk = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital"])
 
 
 # ---------------------------------------------------------------------------
@@ -833,7 +1049,7 @@ def render_dashboard():
         st.markdown("**Embudo: bruto frente a ponderado**")
         emb = dv.groupby("Fase").agg(Bruto=("Valor_Vista", "sum"), Ponderado=("Pond_Vista", "sum")).reset_index()
         if not emb.empty and emb["Bruto"].sum() > 0:
-            ch_b = alt.Chart(emb).mark_bar(color="#9db8d6").encode(
+            ch_b = alt.Chart(emb).mark_bar(color="#a8c3de").encode(
                 y=alt.Y("Fase:N", sort="ascending", title=None), x=alt.X("Bruto:Q", title=cur, stack=None),
                 tooltip=["Fase", alt.Tooltip("Bruto:Q", format=",.0f")])
             ch_p = alt.Chart(emb).mark_bar(color=MESS_BLUE, size=10).encode(
@@ -1083,6 +1299,182 @@ def render_lab():
             st.error("No se pudo generar el .docx: " + str(e))
 
 
+
+# ---------------------------------------------------------------------------
+# MOTOR DE MARKETING DIGITAL (apoyo a la venta)
+# ---------------------------------------------------------------------------
+def build_mk_prompt(ctx):
+    lines = [
+        "Actúa como estratega de marketing digital B2B de Grupo MESS (metrología industrial en México), apoyando a Javier Camacho, Key Account Manager.",
+        "Tu trabajo es crear acciones de marketing que ayuden a cerrar ventas ya abiertas, no campañas genéricas.",
+        "Lenguaje metrológico natural (trazabilidad, incertidumbre, repetibilidad, paros de línea, retrabajo), tono " + ctx["tono"].lower() + ", sin exageraciones.",
+        "",
+        "HECHOS VERIFICABLES DE MESS (apóyate solo en estos; no inventes certificaciones, cifras, clientes, casos de éxito ni plazos):",
+    ]
+    lines += ["- " + h for h in MESS_HECHOS]
+    lines += [
+        "",
+        "BASE DE LA ACCIÓN:",
+        ctx["resumen"],
+        "- Objetivo de marketing: " + ctx["objetivo"],
+        "- Canales solicitados: " + ", ".join(ctx["canales"]),
+        "- Giro o público: " + (ctx["giro"] or "No especificado"),
+        "- Evento, oferta o novedad a mencionar: " + (ctx["oferta"] or "Ninguna"),
+        "",
+        "REGLAS:",
+        "- El contenido de LinkedIn y de la FICHA es público: nunca menciones nombres de clientes ni montos.",
+        "- Si un caso de éxito no está en los hechos, no lo inventes; propón 'tema de caso a documentar'.",
+        "- Aplica SPIN en los ganchos y Sandler en los cierres: da permiso de decir que no, sin presión.",
+        "- Texto plano: prohibido usar tablas Markdown y asteriscos.",
+        "- Para los canales no solicitados escribe únicamente: No solicitado.",
+        "",
+        "FORMATO: responde ÚNICAMENTE con estas siete etiquetas XML, en este orden, sin texto fuera de ellas ni bloques de código:",
+        "<ESTRATEGIA> Mensaje central, audiencia, por qué ahora y cómo esta acción apoya el cierre en la fase actual (5 a 8 líneas). </ESTRATEGIA>",
+        "<LINKEDIN> Una publicación lista para publicar: gancho, tres ideas, llamada a la acción y máximo cinco hashtags. </LINKEDIN>",
+        "<EMAILS> Secuencia de tres correos (día 0, día 3 y día 7), cada uno con 'Asunto:' y cuerpo corto, separados por una línea con tres guiones (---). </EMAILS>",
+        "<WHATSAPP> Dos mensajes cortos de seguimiento separados por una línea con tres guiones (---). </WHATSAPP>",
+        "<FICHA> Texto para una ficha de una página o landing: titular, subtítulo y tres bloques (Qué resuelve, Por qué MESS, Siguiente paso). </FICHA>",
+        "<CALENDARIO> Plan de 14 días: una línea por acción con el día y el responsable (KAM o Marketing). </CALENDARIO>",
+        "<KPIS> Entre cuatro y seis indicadores para medir si la acción apoyó la venta (respuestas, cotizaciones reabiertas, reuniones agendadas, POs). Sin prometer resultados ni inventar cifras. </KPIS>",
+    ]
+    return "\n".join(lines)
+
+
+def build_mk_docx(ctx, tags):
+    doc = Document()
+    doc.add_heading("Plan de marketing digital | Grupo MESS", 0)
+    doc.add_paragraph("Fecha: " + datetime.now().strftime("%d/%m/%Y") + "\nObjetivo: " + ctx["objetivo"]
+                      + "\nCanales: " + ", ".join(ctx["canales"]))
+    for titulo, tag in [("Estrategia", "ESTRATEGIA"), ("Publicación de LinkedIn", "LINKEDIN"),
+                        ("Secuencia de correos", "EMAILS"), ("Mensajes de WhatsApp", "WHATSAPP"),
+                        ("Ficha o landing", "FICHA"), ("Calendario de 14 días", "CALENDARIO"),
+                        ("Indicadores", "KPIS")]:
+        doc.add_heading(titulo, level=2)
+        doc.add_paragraph(tags.get(tag, "") or "Sin contenido.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def render_marketing():
+    st.markdown("### Motor de Marketing Digital | Apoyo a la venta")
+    if base is None or df.empty:
+        st.info("Sube el CSV y ajusta los filtros para generar acciones de marketing.")
+        return
+    st.caption("Convierte tu pipeline en acciones de apoyo: contenido, correos, WhatsApp, ficha y calendario de 14 días.")
+
+    modo = st.radio("Base de la acción", ["Oportunidad (cuenta y folios)", "Campaña por segmento (filtros activos)"],
+                    horizontal=True, key="mk_modo")
+    if modo.startswith("Oportunidad"):
+        cuentas = sorted(df["Cuenta"].unique())
+        if st.session_state.get("mk_cuenta") not in ["--"] + cuentas:
+            st.session_state.pop("mk_cuenta", None)
+        cuenta = st.selectbox("Cuenta", ["--"] + cuentas, key="mk_cuenta")
+        if cuenta == "--":
+            return
+        sub = df[df["Cuenta"] == cuenta].sort_values("Ponderado", ascending=False)
+        etiq = {r["Folio"]: "Proj: " + r["Folio"] + " | " + str(r["Descripcion"])[:50] + " | " + r["Fase"] for _, r in sub.iterrows()}
+        folios = st.multiselect("Folios", list(etiq.keys()), default=list(etiq.keys())[:1],
+                                format_func=lambda x: etiq.get(x, x), key="mk_folios_" + cuenta)
+        if not folios:
+            st.info("Selecciona al menos un folio.")
+            return
+        sel = sub[sub["Folio"].isin(folios)]
+        fase_n = int(sel["Fase_Num"].max())
+        cierre = sel["Cierre_Est"].min()
+        resumen = "\n".join([
+            "- Tipo: oportunidad abierta en una cuenta (el nombre solo puede usarse en correos y WhatsApp privados): " + cuenta,
+            "- Equipos o servicios: " + " | ".join(sel["Descripcion"].astype(str))[:600],
+            "- Fase: " + FASES[fase_n] + " | Días desde el registro: " + str(int(sel["Dias_Registro"].max())),
+            "- Cierre estimado: " + (cierre.strftime("%d/%m/%Y") if pd.notna(cierre) else "Sin fecha"),
+            "- Monto: " + format(sel["Monto_USD"].sum(), ",.2f") + " USD y " + format(sel["Monto_MXN"].sum(), ",.2f") + " MXN",
+        ])
+        firma = ("op", cuenta, tuple(sorted(folios)))
+    else:
+        sel = df
+        fases = ", ".join(k + ": " + str(v) for k, v in sel["Fase"].value_counts().sort_index().items())
+        areas = ", ".join(sel.groupby("Area")["Total_USD_Eq"].sum().sort_values(ascending=False).head(5).index)
+        resumen = "\n".join([
+            "- Tipo: campaña por segmento, sin nombres de cliente (" + str(len(sel)) + " proyectos de " + str(sel["Cuenta"].nunique()) + " cuentas)",
+            "- Fases: " + fases,
+            "- Áreas o marcas principales: " + areas,
+            "- Antigüedad promedio: " + str(int(sel["Dias_Registro"].mean())) + " días | Sin cotizar: " + str(int(sel["Sin_Cotizar"].sum())),
+        ])
+        firma = ("seg", len(sel), round(float(sel["Total_USD_Eq"].sum())))
+        st.info("Campaña sobre " + str(len(sel)) + " proyectos que pasan los filtros del panel lateral. No se envían nombres de cliente a la IA.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        objetivo = st.selectbox("Objetivo de marketing", MK_OBJETIVOS)
+        canales = st.multiselect("Canales", MK_CANALES, default=["LinkedIn", "Correo", "WhatsApp"])
+        tono = st.selectbox("Tono", MK_TONOS)
+    with c2:
+        giro = st.text_input("Giro o público", placeholder="Ej. Automotriz, aeroespacial, laboratorios de calidad", key="mk_giro")
+        oferta = st.text_area("Evento, oferta o novedad (opcional)", height=100, key="mk_oferta",
+                              placeholder="Ej. Seguimiento posterior a un evento, capacitación, renta de equipo.")
+
+    if st.button("Generar plan de marketing"):
+        if not canales:
+            st.warning("Elige al menos un canal.")
+        else:
+            ctx = {"resumen": resumen, "objetivo": objetivo, "canales": canales, "tono": tono, "giro": giro, "oferta": oferta}
+            with st.spinner("Armando el plan de marketing..."):
+                txt, err = call_gemini(build_mk_prompt(ctx))
+            if err:
+                st.error(err)
+            else:
+                st.session_state["mk_counter"] = st.session_state.get("mk_counter", 0) + 1
+                st.session_state["mk_res"] = {"firma": firma, "ctx": ctx, "raw": txt, "id": st.session_state["mk_counter"],
+                                              "tags": parse_tags(txt, MK_TAGS)}
+
+    res = st.session_state.get("mk_res")
+    if not res:
+        return
+    if res["firma"] != firma:
+        st.info("Hay un plan generado para otra selección. Pulsa 'Generar plan de marketing' para esta.")
+        return
+    tags = {k: clean_message(v) for k, v in res["tags"].items()}
+    ctx, rid = res["ctx"], str(res["id"])
+    if not any(tags.values()):
+        st.warning("La IA no devolvió las etiquetas esperadas. Se muestra la respuesta completa; vuelve a generar.")
+        st.write(res["raw"])
+        return
+
+    st.divider()
+    names = ["Estrategia", "LinkedIn", "Correos", "WhatsApp", "Ficha o landing", "Calendario 14 días", "Indicadores"]
+    keys = ["ESTRATEGIA", "LINKEDIN", "EMAILS", "WHATSAPP", "FICHA", "CALENDARIO", "KPIS"]
+    for tab, name, key in zip(st.tabs(names), names, keys):
+        with tab:
+            st.text_area(name + " (editable)", value=tags.get(key, ""), height=300, key="mk_" + key + "_" + rid)
+
+    st.markdown("##### Ejecución rápida")
+    wa_msgs = [m.strip() for m in re.split(r"\n\s*-{3,}\s*\n", tags.get("WHATSAPP", "")) if m.strip()]
+    a1, a2 = st.columns(2)
+    with a1:
+        if wa_msgs and "No solicitado" not in wa_msgs[0]:
+            pick = st.radio("Mensaje de WhatsApp", ["Mensaje 1", "Mensaje 2"][:len(wa_msgs)], horizontal=True, key="mk_wa_" + rid)
+            msg = wa_msgs[0] if pick == "Mensaje 1" else wa_msgs[1]
+            phone = st.text_input("Teléfono (opcional, con lada, ej. 524421234567)", key="mk_ph_" + rid)
+            st.link_button("Abrir WhatsApp con el mensaje", whatsapp_link(msg, phone))
+    with a2:
+        d1, d2 = st.columns(2)
+        with d1:
+            f_acc = st.date_input("Primera acción", value=date.today() + timedelta(days=1), key="mk_fd_" + rid)
+        with d2:
+            h_acc = st.time_input("Hora", value=time(9, 0), key="mk_hd_" + rid)
+        st.link_button("Programar en Google Calendar",
+                       gcal_link("Marketing de apoyo: " + ctx["objetivo"], tags.get("CALENDARIO", ""), datetime.combine(f_acc, h_acc)))
+    if Document is None:
+        st.warning("Instala python-docx para descargar el plan en .docx.")
+    else:
+        try:
+            st.download_button("Descargar plan de marketing (.docx)", data=build_mk_docx(ctx, tags),
+                               file_name="Plan_marketing_MESS.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.error("No se pudo generar el .docx: " + str(e))
+
 with tab_dash:
     try:
         render_dashboard()
@@ -1093,3 +1485,13 @@ with tab_lab:
         render_lab()
     except Exception as e:
         st.error("Error en el Laboratorio IA: " + str(e))
+with tab_mk:
+    try:
+        render_marketing()
+    except Exception as e:
+        st.error("Error en el motor de marketing: " + str(e))
+
+st.markdown(
+    '<div class="brand-footer">Grupo MESS | all about metrology | mess.com.mx</div>',
+    unsafe_allow_html=True,
+)
