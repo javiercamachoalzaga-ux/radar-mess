@@ -1,3 +1,10 @@
+# Código completo de SAIV | Radar Comercial MESS
+
+Copia todo el bloque del archivo 1 y pégalo en `app.py` de GitHub (reemplaza todo el contenido). El archivo 2 reemplaza `requirements.txt` (agrega openpyxl para leer plantillas de Excel). El archivo 3 es opcional.
+
+## Archivo 1: app.py
+
+````python
 # -*- coding: utf-8 -*-
 """
 SAIV | Radar Comercial MESS  (v2: pipeline vivo + Laboratorio IA)
@@ -609,6 +616,186 @@ def filtrar_cierre(d, modo, rango, hoy):
     return d
 
 
+
+# ---------------------------------------------------------------------------
+# ÓRDENES DE VENTA Y COBRANZA
+# ---------------------------------------------------------------------------
+PLANTILLA_OV = [
+    "Orden de venta", "Fecha de registro", "Planta (cliente)", "Facturas", "Orden de compra",
+    "Cotización", "Estatus", "Valor", "Área", "Fecha de facturación", "Fecha de cobro", "Crédito (días)",
+]
+BUCKETS = ["Por vencer", "Vencido 1-30", "Vencido 31-60", "Vencido 61-90", "Vencido más de 90"]
+
+
+def vacio(x):
+    return norm(x) in ("", "SIN REGISTRO", "N/A", "NA", "-", "NAN", "NONE")
+
+
+def parse_fecha(serie):
+    s = pd.Series(serie)
+    try:
+        return pd.to_datetime(s, format="mixed", dayfirst=True, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+
+def bucket_vencido(dias):
+    if pd.isna(dias):
+        return ""
+    if dias <= 0:
+        return BUCKETS[0]
+    if dias <= 30:
+        return BUCKETS[1]
+    if dias <= 60:
+        return BUCKETS[2]
+    if dias <= 90:
+        return BUCKETS[3]
+    return BUCKETS[4]
+
+
+@st.cache_data(show_spinner=False)
+def load_ordenes(raw_bytes, nombre, hoy_iso, credito_def, dias_fact):
+    """Lee la plantilla de órdenes de venta (CSV o Excel). Devuelve (DataFrame, avisos)."""
+    avisos = []
+    hoy = pd.Timestamp(hoy_iso)
+    if str(nombre).lower().endswith((".xlsx", ".xlsm", ".xls")):
+        try:
+            rows = pd.read_excel(io.BytesIO(raw_bytes), header=None, dtype=str).fillna("").values.tolist()
+        except Exception as e:
+            return None, ["No se pudo leer el Excel (si falta openpyxl, agrégalo a requirements.txt): " + str(e)]
+    else:
+        text = decode_bytes(raw_bytes)
+        rows = list(csv.reader(io.StringIO(text), delimiter=detect_delimiter(text)))
+
+    h = None
+    for i, r in enumerate(rows):
+        j = " ".join(norm(c) for c in r)
+        if "VENTA" in j and "VALOR" in j:
+            h = i
+            break
+    if h is None:
+        return None, ["No se encontró la fila de encabezados con ORDEN DE VENTA y VALOR."]
+    header = [norm(c) for c in rows[h]]
+
+    def find(*keys):
+        for k in keys:
+            for pos, n in enumerate(header):
+                if k in n:
+                    return pos
+        return None
+
+    pos = {
+        "ov": find("ORDEN DE VENTA"), "reg": find("FECHA DE REGISTRO"), "cli": find("PLANTA", "CLIENTE"),
+        "fact": find("FACTURAS"), "oc": find("ORDEN DE COMPRA"), "cot": find("COTIZACION"),
+        "est": find("ESTATUS"), "valor": find("VALOR", "MONTO"), "area": find("AREA"),
+        "ffact": find("FECHA DE FACTURACION", "FECHA DE FACTURA", "FECHA FACTURA"),
+        "fcobro": find("FECHA DE COBRO", "FECHA DE PAGO", "FECHA COBRO"), "cred": find("CREDITO"),
+    }
+    if pos["ov"] is None or pos["valor"] is None:
+        return None, ["Faltan las columnas ORDEN DE VENTA o VALOR."]
+    for k, etiqueta in [("ffact", "Fecha de facturación"), ("fcobro", "Fecha de cobro"), ("area", "Área"), ("cred", "Crédito (días)")]:
+        if pos[k] is None:
+            avisos.append("No se encontró la columna '" + etiqueta + "'; agrégala a la plantilla para un análisis completo.")
+
+    def cell(r, key):
+        p = pos.get(key)
+        return str(r[p]).strip() if p is not None and p < len(r) else ""
+
+    recs = []
+    for r in rows[h + 1:]:
+        ov = cell(r, "ov")
+        if not ov or vacio(ov):
+            continue
+        recs.append({
+            "OV": ov, "Registro_txt": cell(r, "reg"), "Cliente": cell(r, "cli") or "SIN CLIENTE",
+            "Facturas": "" if vacio(cell(r, "fact")) else cell(r, "fact"),
+            "OC": "" if vacio(cell(r, "oc")) else cell(r, "oc"),
+            "Cotizacion": "" if vacio(cell(r, "cot")) else cell(r, "cot"),
+            "Estatus": cell(r, "est"), "Valor_txt": cell(r, "valor"), "Area": cell(r, "area") or "Sin área",
+            "Fact_txt": cell(r, "ffact"), "Cobro_txt": cell(r, "fcobro"), "Cred_txt": cell(r, "cred"),
+        })
+    if not recs:
+        return None, ["La plantilla no tiene órdenes de venta debajo de los encabezados."]
+    d = pd.DataFrame(recs).drop_duplicates(subset="OV", keep="first").reset_index(drop=True)
+
+    vals = d["Valor_txt"].map(parse_valor)
+    d["Monto"] = [a for a, c in vals]
+    d["Moneda"] = [c for a, c in vals]
+    d["Monto_USD"] = [a if c == "USD" else 0.0 for a, c in vals]
+    d["Monto_MXN"] = [a if c == "MXN" else 0.0 for a, c in vals]
+
+    def credito(txt):
+        m = re.search(r"\d+", str(txt))
+        return int(m.group()) if m else None
+    cr = d["Cred_txt"].map(credito)
+    n_def = int(cr.isna().sum())
+    if n_def:
+        avisos.append(str(n_def) + " orden(es) sin crédito capturado; se usó el crédito por omisión de " + str(credito_def) + " días.")
+    d["Credito"] = cr.fillna(credito_def).astype(int)
+
+    d["Registro"] = parse_fecha(d["Registro_txt"])
+    d["F_Fact"] = parse_fecha(d["Fact_txt"])
+    d["F_Cobro"] = parse_fecha(d["Cobro_txt"])
+
+    estados = []
+    for _, r in d.iterrows():
+        if "CANCEL" in norm(r["Estatus"]):
+            estados.append("Cancelada")
+        elif pd.notna(r["F_Cobro"]):
+            estados.append("Cobrada")
+        elif pd.notna(r["F_Fact"]) or r["Facturas"]:
+            estados.append("Por cobrar")
+        else:
+            estados.append("Por facturar")
+    d["Estado"] = estados
+
+    d["Dias_Registro"] = (hoy - d["Registro"].dt.normalize()).dt.days
+    d["Dias_a_Facturar"] = (d["F_Fact"] - d["Registro"]).dt.days
+    d["Vence"] = d["F_Fact"] + pd.to_timedelta(d["Credito"], unit="D")
+    dv = (hoy - d["Vence"].dt.normalize()).dt.days
+    d["Dias_Vencido"] = dv.where(d["Estado"] == "Por cobrar")
+    d["Dias_Cobro"] = (d["F_Cobro"] - d["F_Fact"]).dt.days
+    d["Atraso_Cobro"] = d["Dias_Cobro"] - d["Credito"]
+    d["Bucket"] = d["Dias_Vencido"].map(bucket_vencido)
+
+    n_sin_fecha = int(((d["Estado"] == "Por cobrar") & d["F_Fact"].isna()).sum())
+    if n_sin_fecha:
+        avisos.append(str(n_sin_fecha) + " orden(es) con factura pero sin fecha de facturación: no se puede calcular su vencimiento.")
+    n_sin_reg = int(d["Registro"].isna().sum())
+    if n_sin_reg:
+        avisos.append(str(n_sin_reg) + " orden(es) sin fecha de registro válida.")
+    n_inc = int(((d["Dias_a_Facturar"] < 0) | (d["Dias_Cobro"] < 0)).sum())
+    if n_inc:
+        avisos.append(str(n_inc) + " orden(es) con fechas inconsistentes (facturación antes del registro o cobro antes de la facturación); se excluyen de los promedios.")
+
+    alertas, semaforos = [], []
+    for _, r in d.iterrows():
+        f = []
+        if r["Estado"] == "Por facturar":
+            if pd.notna(r["Dias_Registro"]) and r["Dias_Registro"] > dias_fact:
+                f.append("Sin facturar " + str(int(r["Dias_Registro"])) + " días")
+        elif r["Estado"] == "Por cobrar":
+            if pd.isna(r["Dias_Vencido"]):
+                f.append("Falta fecha de facturación")
+            elif r["Dias_Vencido"] > 0:
+                f.append("Vencida " + str(int(r["Dias_Vencido"])) + " días")
+            elif r["Dias_Vencido"] >= -7:
+                f.append("Vence en " + str(int(-r["Dias_Vencido"])) + " días")
+        if r["Estado"] in ("Por facturar", "Por cobrar") and not r["OC"]:
+            f.append("Sin orden de compra")
+        alertas.append(", ".join(f))
+        rojo = (r["Estado"] == "Por cobrar" and pd.notna(r["Dias_Vencido"]) and r["Dias_Vencido"] > 30) or (
+            r["Estado"] == "Por facturar" and pd.notna(r["Dias_Registro"]) and r["Dias_Registro"] > 2 * dias_fact)
+        semaforos.append("Rojo" if rojo else ("Ámbar" if f else "Verde"))
+    d["Alerta"] = alertas
+    d["Semaforo"] = semaforos
+    return d, avisos
+
+
+def plantilla_csv_bytes():
+    return (",".join(PLANTILLA_OV) + "\n").encode("utf-8-sig")
+
+
 # ===========================================================================
 # LÓGICA DE DATOS (fin)
 # ===========================================================================
@@ -931,7 +1118,7 @@ if base is not None:
 
 hay_comision = any(v > 0 for v in rates.values())
 
-tab_dash, tab_lab, tab_mk = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital"])
+tab_dash, tab_lab, tab_mk, tab_cob = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital", "Órdenes y Cobranza"])
 
 
 # ---------------------------------------------------------------------------
@@ -1475,6 +1662,216 @@ def render_marketing():
         except Exception as e:
             st.error("No se pudo generar el .docx: " + str(e))
 
+
+# ---------------------------------------------------------------------------
+# PESTAÑA: SEGUIMIENTO DE ÓRDENES DE VENTA Y COBRANZA
+# ---------------------------------------------------------------------------
+def show_df(d, fmt=None, color_cols=None):
+    if d is None or d.empty:
+        st.info("Sin registros para esta vista.")
+        return
+    sty = d.style.format(fmt or {}, na_rep="")
+    for c in (color_cols or []):
+        if c in d.columns:
+            try:
+                sty = sty.map(lambda v: SEMAFORO_CSS.get(v, ""), subset=[c])
+            except AttributeError:
+                sty = sty.applymap(lambda v: SEMAFORO_CSS.get(v, ""), subset=[c])
+    try:
+        st.dataframe(sty, hide_index=True, width="stretch")
+    except TypeError:
+        st.dataframe(sty, hide_index=True, use_container_width=True)
+
+
+def _f(serie):
+    return serie.dt.strftime("%d/%m/%Y").fillna("")
+
+
+def render_cobranza():
+    st.markdown("### Seguimiento de órdenes de venta y cobranza")
+    st.caption("Los montos se muestran en USD y MXN tal como vienen en el registro; no se convierten con tipo de cambio.")
+    with st.expander("Plantilla: columnas y cómo llenarla"):
+        st.write("Pega las primeras ocho columnas desde tu CRM, en este orden, y llena las cuatro últimas:")
+        st.write(", ".join(PLANTILLA_OV[:8]) + ".")
+        st.write("Agrega: " + ", ".join(PLANTILLA_OV[8:]) + ".")
+        st.caption("Estado automático: sin fecha de facturación ni facturas = Por facturar; con factura = Por cobrar; con fecha de cobro = Cobrada. "
+                   "El vencimiento es la fecha de facturación más los días de crédito del cliente (0, 30, 60 o 90).")
+        st.download_button("Descargar encabezados de la plantilla (CSV)", plantilla_csv_bytes(),
+                           file_name="plantilla_ov_cobranza.csv", mime="text/csv")
+
+    u1, u2, u3 = st.columns([2, 1, 1])
+    with u1:
+        archivo_ov = st.file_uploader("Plantilla de órdenes de venta (CSV o Excel)", type=["csv", "xlsx"], key="ov_file")
+    with u2:
+        cred_def = st.number_input("Crédito por omisión (días)", min_value=0, max_value=180, value=30, step=30)
+    with u3:
+        dias_fact = st.number_input("Días máximos para facturar", min_value=1, max_value=180, value=30, step=5,
+                                    help="Tiempo razonable entre el registro de la OV y su facturación.")
+    if archivo_ov is None:
+        st.info("Sube la plantilla para ver el seguimiento de facturación y cobranza.")
+        return
+    d, avs = load_ordenes(archivo_ov.getvalue(), archivo_ov.name, hoy.strftime("%Y-%m-%d"), int(cred_def), int(dias_fact))
+    for a in avs:
+        st.warning(a)
+    if d is None:
+        return
+    n_canc = int((d["Estado"] == "Cancelada").sum())
+    d = d[d["Estado"] != "Cancelada"].copy()
+    if d.empty:
+        st.info("No hay órdenes vigentes en la plantilla.")
+        return
+
+    # --- filtros
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        q = st.text_input("Buscar", placeholder="OV, cliente, factura, OC, cotización", key="ov_q")
+    with f2:
+        f_cli = st.multiselect("Cliente", sorted(d["Cliente"].unique()), key="ov_cli")
+    with f3:
+        f_area = st.multiselect("Área", sorted(d["Area"].unique()), key="ov_area")
+    with f4:
+        f_est = st.multiselect("Estado", ["Por facturar", "Por cobrar", "Cobrada"], key="ov_est")
+    if q:
+        hay = (d["OV"] + " " + d["Cliente"] + " " + d["Facturas"] + " " + d["OC"] + " " + d["Cotizacion"]).str.lower()
+        d = d[hay.str.contains(q.strip().lower(), regex=False)]
+    if f_cli:
+        d = d[d["Cliente"].isin(f_cli)]
+    if f_area:
+        d = d[d["Area"].isin(f_area)]
+    if f_est:
+        d = d[d["Estado"].isin(f_est)]
+    st.caption("Mostrando " + str(len(d)) + " órdenes vigentes" + ((" (" + str(n_canc) + " canceladas excluidas)") if n_canc else "") + ".")
+    if d.empty:
+        st.info("Ninguna orden coincide con los filtros.")
+        return
+
+    def par(mask):
+        sub = d[mask]
+        return float(sub["Monto_USD"].sum()), float(sub["Monto_MXN"].sum()), int(len(sub))
+
+    pf = par(d["Estado"] == "Por facturar")
+    pc = par(d["Estado"] == "Por cobrar")
+    ve = par((d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] > 0))
+    co = par(d["Estado"] == "Cobrada")
+
+    def card(label, t, sub):
+        kpi_card(label, "USD $" + format(t[0], ",.2f"), "MXN $" + format(t[1], ",.2f") + " | " + str(t[2]) + " OV" + sub)
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        card("Por facturar", pf, "")
+    with k2:
+        card("Por cobrar", pc, "")
+    with k3:
+        card("Vencido", ve, " vencidas")
+    with k4:
+        card("Cobrado", co, "")
+
+    cobradas = d[(d["Estado"] == "Cobrada") & (d["Dias_Cobro"] >= 0)]
+    facturadas = d[d["Dias_a_Facturar"] >= 0]
+    en_plazo = float((cobradas["Atraso_Cobro"] <= 0).mean() * 100) if len(cobradas) else None
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        kpi_card("Promedio días a facturar", (format(facturadas["Dias_a_Facturar"].mean(), ".0f") + " días") if len(facturadas) and facturadas["Dias_a_Facturar"].notna().any() else "N/D",
+                 "Del registro a la facturación")
+    with m2:
+        kpi_card("Promedio días de cobro", (format(cobradas["Dias_Cobro"].mean(), ".0f") + " días") if len(cobradas) and cobradas["Dias_Cobro"].notna().any() else "N/D",
+                 "De la facturación al cobro")
+    with m3:
+        kpi_card("Cobradas dentro de crédito", (format(en_plazo, ".0f") + "%") if en_plazo is not None else "N/D",
+                 str(len(cobradas)) + " órdenes cobradas")
+    with m4:
+        sin_oc = int(((d["Estado"] != "Cobrada") & (d["OC"] == "")).sum())
+        kpi_card("Sin orden de compra", str(sin_oc), "Pendientes de cobro con riesgo")
+
+    # --- listas de acción
+    st.markdown("### Dónde actuar hoy")
+    cols = ["OV", "Cliente", "Area", "Estado", "Registro", "F_Fact", "Vence", "Credito", "Dias_Vencido",
+            "Facturas", "OC", "Monto_USD", "Monto_MXN", "Semaforo", "Alerta"]
+    ren = {"Area": "Área", "Registro": "Registro", "F_Fact": "F. facturación", "Credito": "Crédito",
+           "Dias_Vencido": "Días vencido", "Monto_USD": "USD", "Monto_MXN": "MXN", "Semaforo": "Semáforo", "Facturas": "Factura(s)"}
+    fmt = {"USD": "${:,.2f}", "MXN": "${:,.2f}", "Días vencido": "{:.0f}", "Crédito": "{:.0f}"}
+
+    def vista(x):
+        t = x[cols].copy()
+        for c in ("Registro", "F_Fact", "Vence"):
+            t[c] = _f(t[c])
+        return t.rename(columns=ren).rename(columns={"Vence": "Vence"})
+
+    t1, t2, t3, t4, t5 = st.tabs(["Vencidas: cobrar ya", "Vencen en 15 días", "Por facturar", "Sin orden de compra", "Cartera por cliente"])
+    with t1:
+        x = d[(d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] > 0)].sort_values("Dias_Vencido", ascending=False)
+        st.caption("Facturas ya vencidas contra el crédito del cliente. Ordenadas por días de atraso.")
+        show_df(vista(x), fmt, ["Semáforo"])
+    with t2:
+        x = d[(d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] <= 0) & (d["Dias_Vencido"] >= -15)].sort_values("Dias_Vencido", ascending=False)
+        st.caption("Facturas que vencen en los próximos 15 días: el mejor momento para confirmar la fecha de pago.")
+        show_df(vista(x), fmt, ["Semáforo"])
+    with t3:
+        x = d[d["Estado"] == "Por facturar"].sort_values("Dias_Registro", ascending=False)
+        st.caption("Órdenes registradas que aún no se facturan. Más de " + str(int(dias_fact)) + " días es ámbar y más del doble es rojo.")
+        show_df(vista(x), fmt, ["Semáforo"])
+    with t4:
+        x = d[(d["Estado"] != "Cobrada") & (d["OC"] == "")].sort_values("Dias_Registro", ascending=False)
+        st.caption("Servicios sin orden de compra registrada: mayor riesgo de problemas de cobro.")
+        show_df(vista(x), fmt, ["Semáforo"])
+    with t5:
+        g = d.groupby("Cliente").agg(
+            Credito=("Credito", "max"), OV=("OV", "count"),
+            Prom_cobro=("Dias_Cobro", "mean"), Atraso_prom=("Atraso_Cobro", "mean"),
+            Por_facturar_USD=("Monto_USD", lambda x: float(x[d.loc[x.index, "Estado"] == "Por facturar"].sum())),
+            Por_facturar_MXN=("Monto_MXN", lambda x: float(x[d.loc[x.index, "Estado"] == "Por facturar"].sum())),
+            Por_cobrar_USD=("Monto_USD", lambda x: float(x[d.loc[x.index, "Estado"] == "Por cobrar"].sum())),
+            Por_cobrar_MXN=("Monto_MXN", lambda x: float(x[d.loc[x.index, "Estado"] == "Por cobrar"].sum())),
+            Vencidas=("Dias_Vencido", lambda x: int((x > 0).sum())),
+            Max_vencido=("Dias_Vencido", "max"),
+        ).reset_index().sort_values(["Vencidas", "Max_vencido"], ascending=False)
+        g = g.rename(columns={"Credito": "Crédito", "Prom_cobro": "Prom. días de cobro", "Atraso_prom": "Atraso prom. vs crédito",
+                              "Por_facturar_USD": "Por facturar USD", "Por_facturar_MXN": "Por facturar MXN",
+                              "Por_cobrar_USD": "Por cobrar USD", "Por_cobrar_MXN": "Por cobrar MXN",
+                              "Max_vencido": "Máx. días vencido"})
+        st.caption("Muestra cómo paga cada cliente frente a su crédito. No se suman USD con MXN.")
+        show_df(g, {"Por facturar USD": "${:,.2f}", "Por facturar MXN": "${:,.2f}", "Por cobrar USD": "${:,.2f}",
+                    "Por cobrar MXN": "${:,.2f}", "Prom. días de cobro": "{:.0f}", "Atraso prom. vs crédito": "{:.0f}",
+                    "Máx. días vencido": "{:.0f}"})
+
+    # --- antigüedad de cartera y flujo esperado (una gráfica por moneda)
+    st.markdown("### Antigüedad de cartera y flujo esperado de cobro")
+    pcb = d[d["Estado"] == "Por cobrar"]
+    if pcb.empty:
+        st.info("No hay facturas por cobrar con los filtros actuales.")
+    else:
+        for moneda, col in (("USD", "Monto_USD"), ("MXN", "Monto_MXN")):
+            sub = pcb[pcb[col] > 0]
+            if sub.empty:
+                continue
+            c1, c2 = st.columns(2)
+            ag = sub.groupby("Bucket")[col].sum().reindex(BUCKETS).fillna(0).reset_index()
+            ag.columns = ["Antigüedad", "Monto"]
+            with c1:
+                st.markdown("**Antigüedad de cartera (" + moneda + ")**")
+                show_chart(alt.Chart(ag).mark_bar(color=MESS_BLUE).encode(
+                    x=alt.X("Antigüedad:N", sort=BUCKETS, title=None), y=alt.Y("Monto:Q", title=moneda),
+                    tooltip=["Antigüedad", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
+            fl = sub[sub["Vence"].notna()].copy()
+            fl["Mes"] = fl["Vence"].dt.strftime("%Y-%m")
+            fl = fl.groupby("Mes")[col].sum().reset_index()
+            fl.columns = ["Mes de vencimiento", "Monto"]
+            with c2:
+                st.markdown("**Flujo esperado por mes de vencimiento (" + moneda + ")**")
+                if fl.empty:
+                    st.info("Sin fechas de facturación para proyectar.")
+                else:
+                    show_chart(alt.Chart(fl).mark_bar(color=ACCENT).encode(
+                        x=alt.X("Mes de vencimiento:N", sort=None), y=alt.Y("Monto:Q", title=moneda),
+                        tooltip=["Mes de vencimiento", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
+
+    st.markdown("### Detalle de órdenes")
+    det = d.sort_values(["Estado", "Dias_Registro"], ascending=[True, False])
+    show_df(vista(det), fmt, ["Semáforo"])
+    st.download_button("Descargar detalle (CSV)", vista(det).to_csv(index=False).encode("utf-8-sig"),
+                       file_name="seguimiento_ov_cobranza.csv", mime="text/csv")
+
 with tab_dash:
     try:
         render_dashboard()
@@ -1490,8 +1887,40 @@ with tab_mk:
         render_marketing()
     except Exception as e:
         st.error("Error en el motor de marketing: " + str(e))
+with tab_cob:
+    try:
+        render_cobranza()
+    except Exception as e:
+        st.error("Error en Órdenes y Cobranza: " + str(e))
 
 st.markdown(
     '<div class="brand-footer">Grupo MESS | all about metrology | mess.com.mx</div>',
     unsafe_allow_html=True,
 )
+````
+
+## Archivo 2: requirements.txt
+
+````text
+streamlit
+pandas
+numpy
+altair
+google-generativeai
+python-docx
+openpyxl
+````
+
+## Archivo 3 (opcional): .streamlit/config.toml
+
+````toml
+# Copia este archivo a .streamlit/config.toml dentro de tu repositorio.
+# Hace que botones, casillas, controles y etiquetas usen el azul institucional del logotipo.
+[theme]
+base = "light"
+primaryColor = "#004580"
+backgroundColor = "#f4f7fb"
+secondaryBackgroundColor = "#e6eef7"
+textColor = "#1f2d3d"
+font = "sans serif"
+````
