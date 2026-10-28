@@ -1,10 +1,3 @@
-# Código completo de SAIV | Radar Comercial MESS
-
-Copia todo el bloque del archivo 1 y pégalo en `app.py` de GitHub (reemplaza todo el contenido). El archivo 2 reemplaza `requirements.txt` (agrega openpyxl para leer plantillas de Excel). El archivo 3 es opcional.
-
-## Archivo 1: app.py
-
-````python
 # -*- coding: utf-8 -*-
 """
 SAIV | Radar Comercial MESS  (v2: pipeline vivo + Laboratorio IA)
@@ -1897,30 +1890,3 @@ st.markdown(
     '<div class="brand-footer">Grupo MESS | all about metrology | mess.com.mx</div>',
     unsafe_allow_html=True,
 )
-````
-
-## Archivo 2: requirements.txt
-
-````text
-streamlit
-pandas
-numpy
-altair
-google-generativeai
-python-docx
-openpyxl
-````
-
-## Archivo 3 (opcional): .streamlit/config.toml
-
-````toml
-# Copia este archivo a .streamlit/config.toml dentro de tu repositorio.
-# Hace que botones, casillas, controles y etiquetas usen el azul institucional del logotipo.
-[theme]
-base = "light"
-primaryColor = "#004580"
-backgroundColor = "#f4f7fb"
-secondaryBackgroundColor = "#e6eef7"
-textColor = "#1f2d3d"
-font = "sans serif"
-````
