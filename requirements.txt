@@ -4,4 +4,4 @@ numpy
 altair
 google-generativeai
 python-docx
-plotly
+openpyxl
