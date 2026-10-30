@@ -265,7 +265,7 @@ PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
 # Cuentas que son el mismo grupo bajo distintos nombres en SCOTT.
 # Revisa y ajusta esta lista: se infirió solo por el nombre del cliente.
-ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "DANA", "STEERINGMEX"]
+ALIAS_CUENTAS = ["CNH", "SAFRAN", "ITP", "SIEMENS ENERGY", "ADIENT", "BROSE", "DANA", "STEERINGMEX", "TREMEC"]
 
 # ---------------------------------------------------------------------------
 # PÁGINA Y ESTILOS
@@ -615,9 +615,11 @@ def filtrar_cierre(d, modo, rango, hoy):
 # ---------------------------------------------------------------------------
 PLANTILLA_OV = [
     "Orden de venta", "Fecha de registro", "Planta (cliente)", "Facturas", "Orden de compra",
-    "Cotización", "Estatus", "Valor", "Área", "Fecha de facturación", "Fecha de cobro", "Crédito (días)",
+    "Cotización", "Estatus", "Valor", "Área", "Fecha de facturación", "Fecha de cobro",
+    "Monto cobrado", "Crédito (días)",
 ]
 BUCKETS = ["Por vencer", "Vencido 1-30", "Vencido 31-60", "Vencido 61-90", "Vencido más de 90"]
+EPS = 0.005
 
 
 def vacio(x):
@@ -644,6 +646,20 @@ def bucket_vencido(dias):
     if dias <= 90:
         return BUCKETS[3]
     return BUCKETS[4]
+
+
+def parse_valor_doble(txt):
+    """'$ 4,500.00 MXN / Facturado: / $ 1,000.00 MXN' -> (total, moneda, facturado o None)."""
+    s = "" if txt is None else str(txt)
+    up = norm(s)
+    if "FACTURADO" in up:
+        i = up.index("FACTURADO")
+        izq, der = s[:i], s[i:]
+    else:
+        izq, der = s, ""
+    total, moneda = parse_valor(izq)
+    facturado = parse_valor(der)[0] if der else None
+    return total, moneda, facturado
 
 
 @st.cache_data(show_spinner=False)
@@ -680,9 +696,10 @@ def load_ordenes(raw_bytes, nombre, hoy_iso, credito_def, dias_fact):
     pos = {
         "ov": find("ORDEN DE VENTA"), "reg": find("FECHA DE REGISTRO"), "cli": find("PLANTA", "CLIENTE"),
         "fact": find("FACTURAS"), "oc": find("ORDEN DE COMPRA"), "cot": find("COTIZACION"),
-        "est": find("ESTATUS"), "valor": find("VALOR", "MONTO"), "area": find("AREA"),
+        "est": find("ESTATUS"), "valor": find("VALOR"), "area": find("AREA"),
         "ffact": find("FECHA DE FACTURACION", "FECHA DE FACTURA", "FECHA FACTURA"),
-        "fcobro": find("FECHA DE COBRO", "FECHA DE PAGO", "FECHA COBRO"), "cred": find("CREDITO"),
+        "fcobro": find("FECHA DE COBRO", "FECHA DE PAGO", "FECHA COBRO"),
+        "mcobro": find("MONTO COBRADO", "COBRADO"), "cred": find("CREDITO"),
     }
     if pos["ov"] is None or pos["valor"] is None:
         return None, ["Faltan las columnas ORDEN DE VENTA o VALOR."]
@@ -696,26 +713,40 @@ def load_ordenes(raw_bytes, nombre, hoy_iso, credito_def, dias_fact):
 
     recs = []
     for r in rows[h + 1:]:
-        ov = cell(r, "ov")
-        if not ov or vacio(ov):
+        if not any(str(c).strip() for c in r):
             continue
-        recs.append({
-            "OV": ov, "Registro_txt": cell(r, "reg"), "Cliente": cell(r, "cli") or "SIN CLIENTE",
-            "Facturas": "" if vacio(cell(r, "fact")) else cell(r, "fact"),
-            "OC": "" if vacio(cell(r, "oc")) else cell(r, "oc"),
-            "Cotizacion": "" if vacio(cell(r, "cot")) else cell(r, "cot"),
-            "Estatus": cell(r, "est"), "Valor_txt": cell(r, "valor"), "Area": cell(r, "area") or "Sin área",
-            "Fact_txt": cell(r, "ffact"), "Cobro_txt": cell(r, "fcobro"), "Cred_txt": cell(r, "cred"),
-        })
+        ov = cell(r, "ov")
+        if ov and not vacio(ov):
+            recs.append({
+                "OV": ov, "Registro_txt": cell(r, "reg"), "Cliente_txt": cell(r, "cli"),
+                "Facturas": "" if vacio(cell(r, "fact")) else cell(r, "fact"),
+                "OC": "" if vacio(cell(r, "oc")) else cell(r, "oc"),
+                "Cotizacion": "" if vacio(cell(r, "cot")) else cell(r, "cot"),
+                "Estatus": "" if vacio(cell(r, "est")) else cell(r, "est"),
+                "Valor_txt": cell(r, "valor"), "Area": cell(r, "area") or "Sin área",
+                "Fact_txt": cell(r, "ffact"), "Cobro_txt": cell(r, "fcobro"),
+                "MCobro_txt": cell(r, "mcobro"), "Cred_txt": cell(r, "cred"),
+            })
+        elif recs:
+            # Filas de continuación (cuando el CRM separa las líneas de una celda en varias filas)
+            if cell(r, "valor"):
+                recs[-1]["Valor_txt"] += "\n" + cell(r, "valor")
+            if cell(r, "cli"):
+                recs[-1]["Cliente_txt"] += "\n" + cell(r, "cli")
     if not recs:
         return None, ["La plantilla no tiene órdenes de venta debajo de los encabezados."]
     d = pd.DataFrame(recs).drop_duplicates(subset="OV", keep="first").reset_index(drop=True)
 
-    vals = d["Valor_txt"].map(parse_valor)
-    d["Monto"] = [a for a, c in vals]
-    d["Moneda"] = [c for a, c in vals]
-    d["Monto_USD"] = [a if c == "USD" else 0.0 for a, c in vals]
-    d["Monto_MXN"] = [a if c == "MXN" else 0.0 for a, c in vals]
+    # Planta (cliente): la celda trae varias líneas; la primera es la planta y la última la razón social.
+    lineas = d["Cliente_txt"].map(lambda t: [x.strip() for x in re.split(r"[\r\n]+", str(t)) if x.strip()])
+    d["Cliente"] = lineas.map(lambda L: L[0] if L else "SIN CLIENTE")
+    d["Razon_Social"] = lineas.map(lambda L: L[-1] if len(L) > 1 else "")
+    d["Cuenta"] = d["Cliente"].map(cuenta_de)
+
+    parsed = d["Valor_txt"].map(parse_valor_doble)
+    d["Total"] = [p[0] for p in parsed]
+    d["Moneda"] = [p[1] for p in parsed]
+    fac_raw = [p[2] for p in parsed]
 
     def credito(txt):
         m = re.search(r"\d+", str(txt))
@@ -730,30 +761,68 @@ def load_ordenes(raw_bytes, nombre, hoy_iso, credito_def, dias_fact):
     d["F_Fact"] = parse_fecha(d["Fact_txt"])
     d["F_Cobro"] = parse_fecha(d["Cobro_txt"])
 
+    # Facturado: viene en la celda de Valor ("Facturado:"). Si no viene, se infiere de factura o fecha.
+    n_inf = 0
+    facturado = []
+    for (_, r), f in zip(d.iterrows(), fac_raw):
+        if f is not None:
+            facturado.append(f)
+        else:
+            n_inf += 1
+            facturado.append(r["Total"] if (r["Facturas"] or pd.notna(r["F_Fact"])) else 0.0)
+    d["Facturado"] = facturado
+    if n_inf:
+        avisos.append(str(n_inf) + " orden(es) sin dato de 'Facturado' en el Valor; se asumió facturado completo si tiene factura o fecha de facturación.")
+
+    # Cobrado: columna 'Monto cobrado' si existe; si no, todo lo facturado cuando hay fecha de cobro.
+    mc = d["MCobro_txt"].map(lambda t: parse_valor(t)[0] if str(t).strip() else None)
+    cobrado = []
+    for (_, r), m in zip(d.iterrows(), mc):
+        if m is not None and not pd.isna(m):
+            cobrado.append(m)
+        elif pd.notna(r["F_Cobro"]):
+            cobrado.append(r["Facturado"])
+        else:
+            cobrado.append(0.0)
+    d["Cobrado"] = cobrado
+    d["Pendiente"] = (d["Total"] - d["Facturado"]).clip(lower=0)
+    d["Saldo"] = (d["Facturado"] - d["Cobrado"]).clip(lower=0)
+    d["Completada"] = d["Estatus"].map(lambda x: "COMPLET" in norm(x) or "TERMIN" in norm(x))
+
     estados = []
     for _, r in d.iterrows():
         if "CANCEL" in norm(r["Estatus"]):
             estados.append("Cancelada")
-        elif pd.notna(r["F_Cobro"]):
-            estados.append("Cobrada")
-        elif pd.notna(r["F_Fact"]) or r["Facturas"]:
+        elif r["Total"] <= EPS:
+            estados.append("Sin valor")
+        elif r["Pendiente"] > EPS and r["Facturado"] > EPS:
+            estados.append("Facturación parcial")
+        elif r["Pendiente"] > EPS:
+            estados.append("Por facturar")
+        elif r["Saldo"] > EPS:
             estados.append("Por cobrar")
         else:
-            estados.append("Por facturar")
+            estados.append("Cobrada")
     d["Estado"] = estados
 
     d["Dias_Registro"] = (hoy - d["Registro"].dt.normalize()).dt.days
-    d["Dias_a_Facturar"] = (d["F_Fact"] - d["Registro"]).dt.days
+    d["Dias_a_Facturar"] = (d["F_Fact"].dt.normalize() - d["Registro"].dt.normalize()).dt.days
     d["Vence"] = d["F_Fact"] + pd.to_timedelta(d["Credito"], unit="D")
     dv = (hoy - d["Vence"].dt.normalize()).dt.days
-    d["Dias_Vencido"] = dv.where(d["Estado"] == "Por cobrar")
-    d["Dias_Cobro"] = (d["F_Cobro"] - d["F_Fact"]).dt.days
+    d["Dias_Vencido"] = dv.where(d["Saldo"] > EPS)
+    d["Dias_Cobro"] = (d["F_Cobro"].dt.normalize() - d["F_Fact"].dt.normalize()).dt.days
     d["Atraso_Cobro"] = d["Dias_Cobro"] - d["Credito"]
     d["Bucket"] = d["Dias_Vencido"].map(bucket_vencido)
 
-    n_sin_fecha = int(((d["Estado"] == "Por cobrar") & d["F_Fact"].isna()).sum())
+    n_sin_fecha = int(((d["Saldo"] > EPS) & d["F_Fact"].isna()).sum())
+    n_con_saldo = int((d["Saldo"] > EPS).sum())
     if n_sin_fecha:
-        avisos.append(str(n_sin_fecha) + " orden(es) con factura pero sin fecha de facturación: no se puede calcular su vencimiento.")
+        if n_con_saldo and n_sin_fecha == n_con_saldo:
+            avisos.append("Ninguna orden con saldo facturado tiene fecha de facturación: no se puede calcular vencimiento, antigüedad de cartera ni flujo esperado hasta que captures esas fechas.")
+        else:
+            avisos.append(str(n_sin_fecha) + " orden(es) con saldo facturado pero sin fecha de facturación: no se puede calcular su vencimiento.")
+    if n_con_saldo and d["F_Cobro"].isna().all() and not d["MCobro_txt"].astype(str).str.strip().any():
+        avisos.append("La plantilla no trae fechas ni montos de cobro: todo lo facturado aparece como 'por cobrar' y ese monto puede estar sobrestimado hasta que captures los cobros.")
     n_sin_reg = int(d["Registro"].isna().sum())
     if n_sin_reg:
         avisos.append(str(n_sin_reg) + " orden(es) sin fecha de registro válida.")
@@ -764,22 +833,26 @@ def load_ordenes(raw_bytes, nombre, hoy_iso, credito_def, dias_fact):
     alertas, semaforos = [], []
     for _, r in d.iterrows():
         f = []
-        if r["Estado"] == "Por facturar":
-            if pd.notna(r["Dias_Registro"]) and r["Dias_Registro"] > dias_fact:
-                f.append("Sin facturar " + str(int(r["Dias_Registro"])) + " días")
-        elif r["Estado"] == "Por cobrar":
+        dr = r["Dias_Registro"]
+        if r["Pendiente"] > EPS:
+            if r["Completada"]:
+                f.append("Servicio completado con saldo por facturar")
+            elif pd.notna(dr) and dr > dias_fact:
+                f.append("Sin facturar " + str(int(dr)) + " días")
+        if r["Saldo"] > EPS:
             if pd.isna(r["Dias_Vencido"]):
                 f.append("Falta fecha de facturación")
             elif r["Dias_Vencido"] > 0:
                 f.append("Vencida " + str(int(r["Dias_Vencido"])) + " días")
             elif r["Dias_Vencido"] >= -7:
                 f.append("Vence en " + str(int(-r["Dias_Vencido"])) + " días")
-        if r["Estado"] in ("Por facturar", "Por cobrar") and not r["OC"]:
+        if (r["Pendiente"] > EPS or r["Saldo"] > EPS) and not r["OC"]:
             f.append("Sin orden de compra")
         alertas.append(", ".join(f))
-        rojo = (r["Estado"] == "Por cobrar" and pd.notna(r["Dias_Vencido"]) and r["Dias_Vencido"] > 30) or (
-            r["Estado"] == "Por facturar" and pd.notna(r["Dias_Registro"]) and r["Dias_Registro"] > 2 * dias_fact)
-        semaforos.append("Rojo" if rojo else ("Ámbar" if f else "Verde"))
+        rojo = (r["Saldo"] > EPS and pd.notna(r["Dias_Vencido"]) and r["Dias_Vencido"] > 30) or (
+            r["Pendiente"] > EPS and pd.notna(dr) and (dr > 2 * dias_fact or (r["Completada"] and dr > dias_fact)))
+        f_sem = [x for x in f if x != "Falta fecha de facturación"]
+        semaforos.append("Rojo" if rojo else ("Ámbar" if f_sem else "Verde"))
     d["Alerta"] = alertas
     d["Semaforo"] = semaforos
     return d, avisos
@@ -1680,15 +1753,22 @@ def _f(serie):
     return serie.dt.strftime("%d/%m/%Y").fillna("")
 
 
+def _mon(x, col, moneda, cond=None):
+    sub = x if cond is None else x[cond]
+    return float(sub.loc[sub["Moneda"] == moneda, col].sum())
+
+
 def render_cobranza():
     st.markdown("### Seguimiento de órdenes de venta y cobranza")
     st.caption("Los montos se muestran en USD y MXN tal como vienen en el registro; no se convierten con tipo de cambio.")
     with st.expander("Plantilla: columnas y cómo llenarla"):
-        st.write("Pega las primeras ocho columnas desde tu CRM, en este orden, y llena las cuatro últimas:")
+        st.write("Pega las primeras ocho columnas desde tu CRM, en este orden, y llena las cinco últimas:")
         st.write(", ".join(PLANTILLA_OV[:8]) + ".")
         st.write("Agrega: " + ", ".join(PLANTILLA_OV[8:]) + ".")
-        st.caption("Estado automático: sin fecha de facturación ni facturas = Por facturar; con factura = Por cobrar; con fecha de cobro = Cobrada. "
-                   "El vencimiento es la fecha de facturación más los días de crédito del cliente (0, 30, 60 o 90).")
+        st.caption("La celda Valor del CRM trae el total y, debajo, lo 'Facturado' (parcialidades): la app lee ambos. "
+                   "Por facturar = total menos facturado. Por cobrar = facturado menos cobrado. "
+                   "Si no capturas 'Monto cobrado', se asume que, con fecha de cobro, se cobró todo lo facturado. "
+                   "El vencimiento es la fecha de facturación más los días de crédito del cliente.")
         st.download_button("Descargar encabezados de la plantilla (CSV)", plantilla_csv_bytes(),
                            file_name="plantilla_ov_cobranza.csv", mime="text/csv")
 
@@ -1714,21 +1794,20 @@ def render_cobranza():
         st.info("No hay órdenes vigentes en la plantilla.")
         return
 
-    # --- filtros
     f1, f2, f3, f4 = st.columns(4)
     with f1:
         q = st.text_input("Buscar", placeholder="OV, cliente, factura, OC, cotización", key="ov_q")
     with f2:
-        f_cli = st.multiselect("Cliente", sorted(d["Cliente"].unique()), key="ov_cli")
+        f_cta = st.multiselect("Cuenta", sorted(d["Cuenta"].unique()), key="ov_cta")
     with f3:
         f_area = st.multiselect("Área", sorted(d["Area"].unique()), key="ov_area")
     with f4:
-        f_est = st.multiselect("Estado", ["Por facturar", "Por cobrar", "Cobrada"], key="ov_est")
+        f_est = st.multiselect("Estado", ["Por facturar", "Facturación parcial", "Por cobrar", "Cobrada", "Sin valor"], key="ov_est")
     if q:
-        hay = (d["OV"] + " " + d["Cliente"] + " " + d["Facturas"] + " " + d["OC"] + " " + d["Cotizacion"]).str.lower()
+        hay = (d["OV"] + " " + d["Cliente"] + " " + d["Razon_Social"] + " " + d["Facturas"] + " " + d["OC"] + " " + d["Cotizacion"]).str.lower()
         d = d[hay.str.contains(q.strip().lower(), regex=False)]
-    if f_cli:
-        d = d[d["Cliente"].isin(f_cli)]
+    if f_cta:
+        d = d[d["Cuenta"].isin(f_cta)]
     if f_area:
         d = d[d["Area"].isin(f_area)]
     if f_est:
@@ -1738,108 +1817,104 @@ def render_cobranza():
         st.info("Ninguna orden coincide con los filtros.")
         return
 
-    def par(mask):
-        sub = d[mask]
-        return float(sub["Monto_USD"].sum()), float(sub["Monto_MXN"].sum()), int(len(sub))
+    def par(col, cond=None):
+        sub = d if cond is None else d[cond]
+        return _mon(sub, col, "USD"), _mon(sub, col, "MXN"), int((sub[col] > EPS).sum())
 
-    pf = par(d["Estado"] == "Por facturar")
-    pc = par(d["Estado"] == "Por cobrar")
-    ve = par((d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] > 0))
-    co = par(d["Estado"] == "Cobrada")
-
-    def card(label, t, sub):
-        kpi_card(label, "USD $" + format(t[0], ",.2f"), "MXN $" + format(t[1], ",.2f") + " | " + str(t[2]) + " OV" + sub)
+    def card(label, t, extra=""):
+        kpi_card(label, "USD $" + format(t[0], ",.2f"), "MXN $" + format(t[1], ",.2f") + " | " + str(t[2]) + " OV" + extra)
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        card("Por facturar", pf, "")
+        card("Por facturar", par("Pendiente"))
     with k2:
-        card("Por cobrar", pc, "")
+        card("Por cobrar (facturado)", par("Saldo"))
     with k3:
-        card("Vencido", ve, " vencidas")
+        card("Vencido", par("Saldo", d["Dias_Vencido"] > 0), " vencidas")
     with k4:
-        card("Cobrado", co, "")
+        card("Cobrado", par("Cobrado"))
 
-    cobradas = d[(d["Estado"] == "Cobrada") & (d["Dias_Cobro"] >= 0)]
+    cobradas = d[(d["Cobrado"] > EPS) & (d["Dias_Cobro"] >= 0)]
     facturadas = d[d["Dias_a_Facturar"] >= 0]
     en_plazo = float((cobradas["Atraso_Cobro"] <= 0).mean() * 100) if len(cobradas) else None
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     with m1:
-        kpi_card("Promedio días a facturar", (format(facturadas["Dias_a_Facturar"].mean(), ".0f") + " días") if len(facturadas) and facturadas["Dias_a_Facturar"].notna().any() else "N/D",
-                 "Del registro a la facturación")
+        kpi_card("Prom. días a facturar", (format(facturadas["Dias_a_Facturar"].mean(), ".0f") + " días") if len(facturadas) else "N/D", "Registro a facturación")
     with m2:
-        kpi_card("Promedio días de cobro", (format(cobradas["Dias_Cobro"].mean(), ".0f") + " días") if len(cobradas) and cobradas["Dias_Cobro"].notna().any() else "N/D",
-                 "De la facturación al cobro")
+        kpi_card("Prom. días de cobro", (format(cobradas["Dias_Cobro"].mean(), ".0f") + " días") if len(cobradas) else "N/D", "Facturación a cobro")
     with m3:
-        kpi_card("Cobradas dentro de crédito", (format(en_plazo, ".0f") + "%") if en_plazo is not None else "N/D",
-                 str(len(cobradas)) + " órdenes cobradas")
+        kpi_card("Cobradas en crédito", (format(en_plazo, ".0f") + "%") if en_plazo is not None else "N/D", str(len(cobradas)) + " órdenes")
     with m4:
-        sin_oc = int(((d["Estado"] != "Cobrada") & (d["OC"] == "")).sum())
-        kpi_card("Sin orden de compra", str(sin_oc), "Pendientes de cobro con riesgo")
+        kpi_card("Completadas por facturar", str(int(((d["Completada"]) & (d["Pendiente"] > EPS)).sum())), "Servicio listo, sin facturar completo")
+    with m5:
+        kpi_card("Sin orden de compra", str(int((((d["Pendiente"] > EPS) | (d["Saldo"] > EPS)) & (d["OC"] == "")).sum())), "Con saldo pendiente")
 
-    # --- listas de acción
     st.markdown("### Dónde actuar hoy")
-    cols = ["OV", "Cliente", "Area", "Estado", "Registro", "F_Fact", "Vence", "Credito", "Dias_Vencido",
-            "Facturas", "OC", "Monto_USD", "Monto_MXN", "Semaforo", "Alerta"]
-    ren = {"Area": "Área", "Registro": "Registro", "F_Fact": "F. facturación", "Credito": "Crédito",
-           "Dias_Vencido": "Días vencido", "Monto_USD": "USD", "Monto_MXN": "MXN", "Semaforo": "Semáforo", "Facturas": "Factura(s)"}
-    fmt = {"USD": "${:,.2f}", "MXN": "${:,.2f}", "Días vencido": "{:.0f}", "Crédito": "{:.0f}"}
+    cols = ["OV", "Cliente", "Area", "Estado", "Registro", "F_Fact", "Vence", "Credito", "Dias_Vencido", "Facturas", "OC",
+            "Moneda", "Total", "Facturado", "Pendiente", "Saldo", "Semaforo", "Alerta"]
+    ren = {"Area": "Área", "F_Fact": "F. facturación", "Credito": "Crédito", "Dias_Vencido": "Días vencido",
+           "Semaforo": "Semáforo", "Facturas": "Factura(s)", "Pendiente": "Por facturar", "Saldo": "Por cobrar"}
+    fmt = {"Total": "${:,.2f}", "Facturado": "${:,.2f}", "Por facturar": "${:,.2f}", "Por cobrar": "${:,.2f}",
+           "Días vencido": "{:.0f}", "Crédito": "{:.0f}"}
 
     def vista(x):
         t = x[cols].copy()
         for c in ("Registro", "F_Fact", "Vence"):
             t[c] = _f(t[c])
-        return t.rename(columns=ren).rename(columns={"Vence": "Vence"})
+        return t.rename(columns=ren)
 
-    t1, t2, t3, t4, t5 = st.tabs(["Vencidas: cobrar ya", "Vencen en 15 días", "Por facturar", "Sin orden de compra", "Cartera por cliente"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["Vencidas: cobrar ya", "Vencen en 15 días", "Completadas sin facturar",
+                                      "Por facturar", "Sin orden de compra", "Cartera por cuenta"])
     with t1:
-        x = d[(d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] > 0)].sort_values("Dias_Vencido", ascending=False)
-        st.caption("Facturas ya vencidas contra el crédito del cliente. Ordenadas por días de atraso.")
+        x = d[(d["Saldo"] > EPS) & (d["Dias_Vencido"] > 0)].sort_values("Dias_Vencido", ascending=False)
+        st.caption("Saldos facturados ya vencidos contra el crédito del cliente. Ordenados por días de atraso.")
         show_df(vista(x), fmt, ["Semáforo"])
     with t2:
-        x = d[(d["Estado"] == "Por cobrar") & (d["Dias_Vencido"] <= 0) & (d["Dias_Vencido"] >= -15)].sort_values("Dias_Vencido", ascending=False)
-        st.caption("Facturas que vencen en los próximos 15 días: el mejor momento para confirmar la fecha de pago.")
+        x = d[(d["Saldo"] > EPS) & (d["Dias_Vencido"] <= 0) & (d["Dias_Vencido"] >= -15)].sort_values("Dias_Vencido", ascending=False)
+        st.caption("Saldos que vencen en los próximos 15 días: el mejor momento para confirmar la fecha de pago.")
         show_df(vista(x), fmt, ["Semáforo"])
     with t3:
-        x = d[d["Estado"] == "Por facturar"].sort_values("Dias_Registro", ascending=False)
-        st.caption("Órdenes registradas que aún no se facturan. Más de " + str(int(dias_fact)) + " días es ámbar y más del doble es rojo.")
+        x = d[d["Completada"] & (d["Pendiente"] > EPS)].sort_values("Dias_Registro", ascending=False)
+        st.caption("Servicios con estatus completado que aún tienen saldo por facturar: dinero ganado que todavía no se cobra.")
         show_df(vista(x), fmt, ["Semáforo"])
     with t4:
-        x = d[(d["Estado"] != "Cobrada") & (d["OC"] == "")].sort_values("Dias_Registro", ascending=False)
-        st.caption("Servicios sin orden de compra registrada: mayor riesgo de problemas de cobro.")
+        x = d[d["Pendiente"] > EPS].sort_values("Dias_Registro", ascending=False)
+        st.caption("Incluye órdenes sin facturar y con facturación parcial. Más de " + str(int(dias_fact)) + " días es ámbar y más del doble es rojo.")
         show_df(vista(x), fmt, ["Semáforo"])
     with t5:
-        g = d.groupby("Cliente").agg(
-            Credito=("Credito", "max"), OV=("OV", "count"),
-            Prom_cobro=("Dias_Cobro", "mean"), Atraso_prom=("Atraso_Cobro", "mean"),
-            Por_facturar_USD=("Monto_USD", lambda x: float(x[d.loc[x.index, "Estado"] == "Por facturar"].sum())),
-            Por_facturar_MXN=("Monto_MXN", lambda x: float(x[d.loc[x.index, "Estado"] == "Por facturar"].sum())),
-            Por_cobrar_USD=("Monto_USD", lambda x: float(x[d.loc[x.index, "Estado"] == "Por cobrar"].sum())),
-            Por_cobrar_MXN=("Monto_MXN", lambda x: float(x[d.loc[x.index, "Estado"] == "Por cobrar"].sum())),
-            Vencidas=("Dias_Vencido", lambda x: int((x > 0).sum())),
-            Max_vencido=("Dias_Vencido", "max"),
-        ).reset_index().sort_values(["Vencidas", "Max_vencido"], ascending=False)
-        g = g.rename(columns={"Credito": "Crédito", "Prom_cobro": "Prom. días de cobro", "Atraso_prom": "Atraso prom. vs crédito",
-                              "Por_facturar_USD": "Por facturar USD", "Por_facturar_MXN": "Por facturar MXN",
-                              "Por_cobrar_USD": "Por cobrar USD", "Por_cobrar_MXN": "Por cobrar MXN",
-                              "Max_vencido": "Máx. días vencido"})
-        st.caption("Muestra cómo paga cada cliente frente a su crédito. No se suman USD con MXN.")
-        show_df(g, {"Por facturar USD": "${:,.2f}", "Por facturar MXN": "${:,.2f}", "Por cobrar USD": "${:,.2f}",
-                    "Por cobrar MXN": "${:,.2f}", "Prom. días de cobro": "{:.0f}", "Atraso prom. vs crédito": "{:.0f}",
-                    "Máx. días vencido": "{:.0f}"})
+        x = d[((d["Pendiente"] > EPS) | (d["Saldo"] > EPS)) & (d["OC"] == "")].sort_values("Dias_Registro", ascending=False)
+        st.caption("Servicios sin orden de compra registrada: mayor riesgo de problemas de cobro.")
+        show_df(vista(x), fmt, ["Semáforo"])
+    with t6:
+        filas = []
+        for cta, g in d.groupby("Cuenta"):
+            venc = g["Dias_Vencido"] > 0
+            filas.append({
+                "Cuenta": cta, "Crédito": int(g["Credito"].max()), "OV": int(len(g)),
+                "Prom. días de cobro": g.loc[g["Dias_Cobro"] >= 0, "Dias_Cobro"].mean(),
+                "Atraso prom. vs crédito": g.loc[g["Dias_Cobro"] >= 0, "Atraso_Cobro"].mean(),
+                "Por facturar USD": _mon(g, "Pendiente", "USD"), "Por facturar MXN": _mon(g, "Pendiente", "MXN"),
+                "Por cobrar USD": _mon(g, "Saldo", "USD"), "Por cobrar MXN": _mon(g, "Saldo", "MXN"),
+                "Vencido USD": _mon(g, "Saldo", "USD", venc), "Vencido MXN": _mon(g, "Saldo", "MXN", venc),
+                "Vencidas": int(venc.sum()), "Máx. días vencido": g["Dias_Vencido"].max(),
+            })
+        cart = pd.DataFrame(filas).sort_values(["Vencidas", "Máx. días vencido"], ascending=False)
+        st.caption("Muestra cómo paga cada cuenta frente a su crédito. No se suman USD con MXN.")
+        money = {c: "${:,.2f}" for c in cart.columns if c.endswith("USD") or c.endswith("MXN")}
+        money.update({"Prom. días de cobro": "{:.0f}", "Atraso prom. vs crédito": "{:.0f}", "Máx. días vencido": "{:.0f}"})
+        show_df(cart, money)
 
-    # --- antigüedad de cartera y flujo esperado (una gráfica por moneda)
     st.markdown("### Antigüedad de cartera y flujo esperado de cobro")
-    pcb = d[d["Estado"] == "Por cobrar"]
+    pcb = d[d["Saldo"] > EPS]
     if pcb.empty:
-        st.info("No hay facturas por cobrar con los filtros actuales.")
+        st.info("No hay saldos facturados por cobrar con los filtros actuales.")
     else:
-        for moneda, col in (("USD", "Monto_USD"), ("MXN", "Monto_MXN")):
-            sub = pcb[pcb[col] > 0]
+        for moneda in ("USD", "MXN"):
+            sub = pcb[pcb["Moneda"] == moneda]
             if sub.empty:
                 continue
             c1, c2 = st.columns(2)
-            ag = sub.groupby("Bucket")[col].sum().reindex(BUCKETS).fillna(0).reset_index()
+            ag = sub.groupby("Bucket")["Saldo"].sum().reindex(BUCKETS).fillna(0).reset_index()
             ag.columns = ["Antigüedad", "Monto"]
             with c1:
                 st.markdown("**Antigüedad de cartera (" + moneda + ")**")
@@ -1848,7 +1923,7 @@ def render_cobranza():
                     tooltip=["Antigüedad", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
             fl = sub[sub["Vence"].notna()].copy()
             fl["Mes"] = fl["Vence"].dt.strftime("%Y-%m")
-            fl = fl.groupby("Mes")[col].sum().reset_index()
+            fl = fl.groupby("Mes")["Saldo"].sum().reset_index()
             fl.columns = ["Mes de vencimiento", "Monto"]
             with c2:
                 st.markdown("**Flujo esperado por mes de vencimiento (" + moneda + ")**")
