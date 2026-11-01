@@ -862,6 +862,182 @@ def plantilla_csv_bytes():
     return (",".join(PLANTILLA_OV) + "\n").encode("utf-8-sig")
 
 
+
+# ---------------------------------------------------------------------------
+# REPORTE SEMANAL DE ACTIVIDADES
+# ---------------------------------------------------------------------------
+ACT_TIPOS = ["Visita", "Llamada", "Correo", "WhatsApp", "Reunión virtual", "Cotización enviada",
+             "Seguimiento de cobranza", "Otra"]
+PLANTILLA_ACT = ["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción y resultado", "Siguiente paso",
+                 "Fecha siguiente paso", "Proyecto u OV", "Monto", "Moneda"]
+MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
+            "octubre", "noviembre", "diciembre"]
+DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+
+def fecha_es(d):
+    d = pd.Timestamp(d)
+    return str(d.day) + " de " + MESES_ES[d.month - 1] + " de " + str(d.year)
+
+
+def rango_semana(d):
+    """Lunes y domingo de la semana que contiene la fecha d."""
+    d = pd.Timestamp(d).normalize()
+    lunes = d - pd.Timedelta(days=d.weekday())
+    return lunes, lunes + pd.Timedelta(days=6)
+
+
+def semana_anterior(hoy_):
+    lunes, _ = rango_semana(hoy_)
+    lunes = lunes - pd.Timedelta(days=7)
+    return lunes, lunes + pd.Timedelta(days=6)
+
+
+def normalizar_actividades(t):
+    """Convierte una tabla con las columnas de PLANTILLA_ACT en el formato interno."""
+    t = t.reset_index(drop=True)
+    for c in PLANTILLA_ACT:
+        if c not in t.columns:
+            t[c] = ""
+    d = pd.DataFrame(index=t.index)
+    d["Fecha"] = parse_fecha(t["Fecha"])
+    d["Cuenta"] = t["Cuenta o cliente"].fillna("").astype(str).str.strip()
+    tipo = t["Tipo de actividad"].fillna("").astype(str).str.strip()
+    d["Tipo"] = tipo.where(tipo != "", "Otra")
+    d["Descripcion"] = t["Descripción y resultado"].fillna("").astype(str).str.strip()
+    d["Siguiente"] = t["Siguiente paso"].fillna("").astype(str).str.strip()
+    d["F_Sig"] = parse_fecha(t["Fecha siguiente paso"])
+    d["Ref"] = t["Proyecto u OV"].fillna("").astype(str).str.strip()
+    montos, monedas = [], []
+    for v, m in zip(t["Monto"], t["Moneda"]):
+        cur = norm(m) if not pd.isna(m) else ""
+        if pd.isna(v) or str(v).strip() == "":
+            montos.append(float("nan"))
+            monedas.append(cur if cur in ("USD", "MXN") else "")
+        elif isinstance(v, (int, float)):
+            montos.append(float(v))
+            monedas.append(cur if cur in ("USD", "MXN") else "")
+        else:
+            amt, c = parse_valor(v)
+            montos.append(amt)
+            monedas.append(cur if cur in ("USD", "MXN") else (c if ("USD" in norm(v) or "MXN" in norm(v)) else ""))
+    d["Monto"] = montos
+    d["Moneda"] = monedas
+    vacia = d["Fecha"].isna() & (d["Descripcion"] == "") & (d["Cuenta"] == "")
+    return d[~vacia].reset_index(drop=True)
+
+
+def load_actividades(raw_bytes, nombre):
+    """Lee la bitácora de actividades (CSV o Excel). Devuelve (DataFrame normalizado, avisos)."""
+    if str(nombre).lower().endswith((".xlsx", ".xlsm", ".xls")):
+        try:
+            rows = pd.read_excel(io.BytesIO(raw_bytes), header=None, dtype=str).fillna("").values.tolist()
+        except Exception as e:
+            return None, ["No se pudo leer el Excel (si falta openpyxl, agrégalo a requirements.txt): " + str(e)]
+    else:
+        text = decode_bytes(raw_bytes)
+        rows = list(csv.reader(io.StringIO(text), delimiter=detect_delimiter(text)))
+    h = None
+    for i, r in enumerate(rows):
+        j = " ".join(norm(c) for c in r)
+        if "FECHA" in j and ("TIPO" in j or "ACTIVIDAD" in j):
+            h = i
+            break
+    if h is None:
+        return None, ["No se encontró la fila de encabezados (Fecha y Tipo de actividad)."]
+    header = [norm(c) for c in rows[h]]
+
+    def find(*keys, exacto=False):
+        for k in keys:
+            for pos, n in enumerate(header):
+                if (n == k) if exacto else (k in n):
+                    return pos
+        return None
+
+    pos = {
+        "Fecha": find("FECHA", exacto=True) if find("FECHA", exacto=True) is not None else find("FECHA DE LA ACTIVIDAD"),
+        "Cuenta o cliente": find("CUENTA", "CLIENTE"), "Tipo de actividad": find("TIPO"),
+        "Descripción y resultado": find("DESCRIPCION", "RESULTADO"),
+        "Siguiente paso": find("SIGUIENTE PASO", exacto=True),
+        "Fecha siguiente paso": find("FECHA SIGUIENTE", "FECHA DEL SIGUIENTE"),
+        "Proyecto u OV": find("PROYECTO", "OV"), "Monto": find("MONTO"), "Moneda": find("MONEDA"),
+    }
+    if pos["Fecha"] is None:
+        return None, ["No se encontró la columna Fecha."]
+    data = []
+    for r in rows[h + 1:]:
+        if not any(str(c).strip() for c in r):
+            continue
+        data.append({k: (str(r[p]).strip() if p is not None and p < len(r) else "") for k, p in pos.items()})
+    if not data:
+        return None, ["La bitácora no tiene actividades debajo de los encabezados."]
+    return normalizar_actividades(pd.DataFrame(data)), []
+
+
+def plantilla_act_csv_bytes():
+    return (",".join(PLANTILLA_ACT) + "\n").encode("utf-8-sig")
+
+
+def par_txt(usd, mxn):
+    return "USD $" + format(usd, ",.2f") + " | MXN $" + format(mxn, ",.2f")
+
+
+def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, ia_text=""):
+    L = ["REPORTE SEMANAL DE ACTIVIDADES",
+         "Semana del " + fecha_es(lunes) + " al " + fecha_es(domingo),
+         "Preparado por: Javier Camacho, Asesor B2B | MESS Servicios Metrológicos", ""]
+    if ia_text.strip():
+        L += ["RESUMEN EJECUTIVO", ia_text.strip(), ""]
+    L.append("1. RESUMEN DE LA SEMANA")
+    if len(act):
+        L.append("- Actividades registradas: " + str(len(act)) + " (" + ", ".join(k + ": " + str(v) for k, v in act["Tipo"].value_counts().items()) + ")")
+    else:
+        L.append("- Actividades registradas: ninguna capturada para esta semana")
+    if nuevos is not None:
+        L.append("- Proyectos nuevos en el CRM: " + str(len(nuevos)) + " | " + par_txt(nuevos["Monto_USD"].sum(), nuevos["Monto_MXN"].sum()))
+    if ovs is not None:
+        L.append("- Órdenes de venta registradas: " + str(len(ovs)) + " | " + par_txt(
+            float(ovs.loc[ovs["Moneda"] == "USD", "Total"].sum()), float(ovs.loc[ovs["Moneda"] == "MXN", "Total"].sum())))
+        if ov_fact is not None:
+            L.append("- Órdenes con factura emitida en la semana: " + str(len(ov_fact)) + " | monto facturado a la fecha " + par_txt(
+                float(ov_fact.loc[ov_fact["Moneda"] == "USD", "Facturado"].sum()), float(ov_fact.loc[ov_fact["Moneda"] == "MXN", "Facturado"].sum())))
+        if ov_cobro is not None:
+            L.append("- Órdenes con cobro registrado en la semana: " + str(len(ov_cobro)) + " | monto cobrado " + par_txt(
+                float(ov_cobro.loc[ov_cobro["Moneda"] == "USD", "Cobrado"].sum()), float(ov_cobro.loc[ov_cobro["Moneda"] == "MXN", "Cobrado"].sum())))
+    L += ["", "2. ACTIVIDADES POR CLIENTE"]
+    if len(act):
+        for cta, g in act.sort_values("Fecha").groupby("Cuenta", sort=True):
+            L.append("- " + (cta or "Sin cliente"))
+            for _, r in g.iterrows():
+                linea = "   " + r["Fecha"].strftime("%d/%m") + " | " + r["Tipo"] + ": " + (r["Descripcion"] or "sin detalle")
+                if r["Siguiente"]:
+                    linea += " | Siguiente paso: " + r["Siguiente"] + ((" (" + r["F_Sig"].strftime("%d/%m") + ")") if pd.notna(r["F_Sig"]) else "")
+                L.append(linea)
+    else:
+        L.append("- Sin actividades capturadas.")
+    if nuevos is not None:
+        L += ["", "3. PROYECTOS NUEVOS EN EL CRM"]
+        if len(nuevos):
+            for _, r in nuevos.iterrows():
+                L.append("- " + str(r["Folio"]) + " | " + str(r["Cliente"]) + " | " + str(r["Descripcion"])[:90] + " | " + str(r["Fase"]) + " | " + par_txt(r["Monto_USD"], r["Monto_MXN"]))
+        else:
+            L.append("- Ninguno registrado en la semana.")
+    if ovs is not None:
+        L += ["", "4. ÓRDENES DE VENTA REGISTRADAS"]
+        if len(ovs):
+            for _, r in ovs.iterrows():
+                L.append("- " + str(r["OV"]) + " | " + str(r["Cliente"]) + " | " + str(r["Moneda"]) + " $" + format(r["Total"], ",.2f") + " | " + str(r["Estado"]))
+        else:
+            L.append("- Ninguna registrada en la semana.")
+    L += ["", "5. COMPROMISOS PARA LA SEMANA SIGUIENTE"]
+    if prox is not None and len(prox):
+        for _, r in prox.sort_values("F_Sig").iterrows():
+            L.append("- " + r["F_Sig"].strftime("%d/%m") + " | " + (r["Cuenta"] or "Sin cliente") + ": " + (r["Siguiente"] or "sin detalle"))
+    else:
+        L.append("- Ninguno capturado con fecha en la semana siguiente.")
+    return "\n".join(L)
+
+
 # ===========================================================================
 # LÓGICA DE DATOS (fin)
 # ===========================================================================
@@ -1112,7 +1288,10 @@ with st.sidebar:
             "Otros (revisar)": st.number_input("Otros", 0.0, 100.0, 0.0, step=0.5),
         }
 
-hoy = pd.Timestamp.today().normalize()
+try:
+    hoy = pd.Timestamp.now(tz="America/Mexico_City").tz_localize(None).normalize()
+except Exception:
+    hoy = pd.Timestamp.today().normalize()
 base = None
 avisos = []
 if archivo is not None:
@@ -1184,7 +1363,7 @@ if base is not None:
 
 hay_comision = any(v > 0 for v in rates.values())
 
-tab_dash, tab_lab, tab_mk, tab_cob = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital", "Órdenes y Cobranza"])
+tab_dash, tab_lab, tab_mk, tab_cob, tab_rep = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital", "Órdenes y Cobranza", "Reporte Semanal"])
 
 
 # ---------------------------------------------------------------------------
@@ -1781,6 +1960,7 @@ def render_cobranza():
         dias_fact = st.number_input("Días máximos para facturar", min_value=1, max_value=180, value=30, step=5,
                                     help="Tiempo razonable entre el registro de la OV y su facturación.")
     if archivo_ov is None:
+        st.session_state.pop("ov_df", None)
         st.info("Sube la plantilla para ver el seguimiento de facturación y cobranza.")
         return
     d, avs = load_ordenes(archivo_ov.getvalue(), archivo_ov.name, hoy.strftime("%Y-%m-%d"), int(cred_def), int(dias_fact))
@@ -1790,6 +1970,7 @@ def render_cobranza():
         return
     n_canc = int((d["Estado"] == "Cancelada").sum())
     d = d[d["Estado"] != "Cancelada"].copy()
+    st.session_state["ov_df"] = d.copy()
     if d.empty:
         st.info("No hay órdenes vigentes en la plantilla.")
         return
@@ -1827,8 +2008,9 @@ def render_cobranza():
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         card("Por facturar", par("Pendiente"))
+    sin_cobros = bool(d["F_Cobro"].isna().all() and not (d["Cobrado"] > EPS).any())
     with k2:
-        card("Por cobrar (facturado)", par("Saldo"))
+        card("Facturado (cobros sin capturar)" if sin_cobros else "Por cobrar (facturado)", par("Saldo"))
     with k3:
         card("Vencido", par("Saldo", d["Dias_Vencido"] > 0), " vencidas")
     with k4:
@@ -1855,13 +2037,15 @@ def render_cobranza():
     ren = {"Area": "Área", "F_Fact": "F. facturación", "Credito": "Crédito", "Dias_Vencido": "Días vencido",
            "Semaforo": "Semáforo", "Facturas": "Factura(s)", "Pendiente": "Por facturar", "Saldo": "Por cobrar"}
     fmt = {"Total": "${:,.2f}", "Facturado": "${:,.2f}", "Por facturar": "${:,.2f}", "Por cobrar": "${:,.2f}",
-           "Días vencido": "{:.0f}", "Crédito": "{:.0f}"}
+           "Crédito": "{:.0f}"}
 
     def vista(x):
         t = x[cols].copy()
         for c in ("Registro", "F_Fact", "Vence"):
             t[c] = _f(t[c])
-        return t.rename(columns=ren)
+        t = t.rename(columns=ren)
+        t["Días vencido"] = t["Días vencido"].map(lambda v: "" if pd.isna(v) else str(int(v)))
+        return t
 
     t1, t2, t3, t4, t5, t6 = st.tabs(["Vencidas: cobrar ya", "Vencen en 15 días", "Completadas sin facturar",
                                       "Por facturar", "Sin orden de compra", "Cartera por cuenta"])
@@ -1918,9 +2102,12 @@ def render_cobranza():
             ag.columns = ["Antigüedad", "Monto"]
             with c1:
                 st.markdown("**Antigüedad de cartera (" + moneda + ")**")
-                show_chart(alt.Chart(ag).mark_bar(color=MESS_BLUE).encode(
-                    x=alt.X("Antigüedad:N", sort=BUCKETS, title=None), y=alt.Y("Monto:Q", title=moneda),
-                    tooltip=["Antigüedad", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
+                if float(ag["Monto"].sum()) <= 0:
+                    st.info("Sin fechas de facturación: no se puede calcular la antigüedad de cartera.")
+                else:
+                    show_chart(alt.Chart(ag).mark_bar(color=MESS_BLUE).encode(
+                        x=alt.X("Antigüedad:N", sort=BUCKETS, title=None), y=alt.Y("Monto:Q", title=moneda),
+                        tooltip=["Antigüedad", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
             fl = sub[sub["Vence"].notna()].copy()
             fl["Mes"] = fl["Vence"].dt.strftime("%Y-%m")
             fl = fl.groupby("Mes")["Saldo"].sum().reset_index()
@@ -1935,10 +2122,227 @@ def render_cobranza():
                         tooltip=["Mes de vencimiento", alt.Tooltip("Monto:Q", format=",.2f")]).properties(height=240))
 
     st.markdown("### Detalle de órdenes")
-    det = d.sort_values(["Estado", "Dias_Registro"], ascending=[True, False])
+    det = d.assign(_o=d["Semaforo"].map({"Rojo": 0, "Ámbar": 1, "Verde": 2})).sort_values(
+        ["_o", "Dias_Registro"], ascending=[True, False]).drop(columns="_o")
     show_df(vista(det), fmt, ["Semáforo"])
     st.download_button("Descargar detalle (CSV)", vista(det).to_csv(index=False).encode("utf-8-sig"),
                        file_name="seguimiento_ov_cobranza.csv", mime="text/csv")
+
+
+# ---------------------------------------------------------------------------
+# PESTAÑA: REPORTE SEMANAL DE ACTIVIDADES
+# ---------------------------------------------------------------------------
+def build_reporte_docx(texto):
+    doc = Document()
+    lineas = texto.split("\n")
+    doc.add_heading(lineas[0], 0)
+    for ln in lineas[1:]:
+        if re.match(r"^\d\. ", ln) or ln.strip() == "RESUMEN EJECUTIVO":
+            doc.add_heading(ln, level=2)
+        elif ln.strip():
+            doc.add_paragraph(ln)
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def render_reporte():
+    st.markdown("### Reporte semanal de actividades")
+    modo = st.radio("Semana a reportar", ["Semana anterior (ya transcurrida)", "Otra semana"], horizontal=True, key="rep_modo")
+    if modo.startswith("Semana anterior"):
+        lunes, domingo = semana_anterior(hoy)
+    else:
+        ref = st.date_input("Cualquier día de la semana a reportar", value=(hoy - pd.Timedelta(days=7)).date(), key="rep_ref")
+        lunes, domingo = rango_semana(ref)
+        if domingo >= hoy:
+            st.warning("Esa semana aún no termina: el reporte quedará parcial.")
+    fin = domingo + pd.Timedelta(days=1)
+    st.markdown("**Semana del " + fecha_es(lunes) + " al " + fecha_es(domingo) + "**")
+    st.caption("Los montos van en USD y MXN tal como vienen en el registro; no se convierten con tipo de cambio.")
+
+    with st.expander("Plantilla de actividades y captura rápida"):
+        st.write("Columnas: " + ", ".join(PLANTILLA_ACT) + ".")
+        st.caption("Tipos de actividad: " + ", ".join(ACT_TIPOS) + ". Lo que captures aquí no se guarda en la nube: "
+                   "descárgalo y sube tu bitácora (Excel o CSV) cada semana.")
+        st.download_button("Descargar encabezados de la plantilla (CSV)", plantilla_act_csv_bytes(),
+                           file_name="plantilla_actividades.csv", mime="text/csv")
+        vacio_df = pd.DataFrame({
+            "Fecha": pd.Series(dtype="datetime64[ns]"), "Cuenta o cliente": pd.Series(dtype="object"),
+            "Tipo de actividad": pd.Series(dtype="object"), "Descripción y resultado": pd.Series(dtype="object"),
+            "Siguiente paso": pd.Series(dtype="object"), "Fecha siguiente paso": pd.Series(dtype="datetime64[ns]"),
+            "Proyecto u OV": pd.Series(dtype="object"), "Monto": pd.Series(dtype="float64"), "Moneda": pd.Series(dtype="object"),
+        })
+        try:
+            cfg = {
+                "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                "Fecha siguiente paso": st.column_config.DateColumn("Fecha siguiente paso", format="DD/MM/YYYY"),
+                "Tipo de actividad": st.column_config.SelectboxColumn("Tipo de actividad", options=ACT_TIPOS),
+                "Moneda": st.column_config.SelectboxColumn("Moneda", options=["USD", "MXN"]),
+            }
+            editado = st.data_editor(vacio_df, num_rows="dynamic", key="act_editor", column_config=cfg)
+        except Exception:
+            editado = vacio_df
+        if len(editado):
+            st.download_button("Descargar lo capturado (CSV)", editado.to_csv(index=False).encode("utf-8-sig"),
+                               file_name="actividades_capturadas.csv", mime="text/csv")
+    archivo_act = st.file_uploader("Bitácora de actividades (CSV o Excel)", type=["csv", "xlsx"], key="act_file")
+
+    partes = []
+    if archivo_act is not None:
+        da, avs = load_actividades(archivo_act.getvalue(), archivo_act.name)
+        for a in avs:
+            st.warning(a)
+        if da is not None:
+            partes.append(da)
+    if len(editado):
+        partes.append(normalizar_actividades(editado.copy()))
+    A = pd.concat(partes, ignore_index=True) if partes else normalizar_actividades(pd.DataFrame(columns=PLANTILLA_ACT))
+    n_sin_fecha = int(A["Fecha"].isna().sum())
+    if n_sin_fecha:
+        st.warning(str(n_sin_fecha) + " actividad(es) sin fecha válida: quedan fuera del reporte.")
+
+    act = A[(A["Fecha"] >= lunes) & (A["Fecha"] < fin)].sort_values("Fecha")
+    prox = A[(A["F_Sig"] >= fin) & (A["F_Sig"] < fin + pd.Timedelta(days=7))]
+
+    nuevos = None
+    if base is not None:
+        nuevos = base[(base["Registro"] >= lunes) & (base["Registro"] < fin)].sort_values("Registro")
+    ov = st.session_state.get("ov_df")
+    ovs = ov_fact = ov_cobro = None
+    if ov is not None:
+        ovs = ov[(ov["Registro"] >= lunes) & (ov["Registro"] < fin)].sort_values("Registro")
+        if ov["F_Fact"].notna().any():
+            ov_fact = ov[(ov["F_Fact"] >= lunes) & (ov["F_Fact"] < fin)]
+        if ov["F_Cobro"].notna().any():
+            ov_cobro = ov[(ov["F_Cobro"] >= lunes) & (ov["F_Cobro"] < fin)]
+
+    if len(act) == 0:
+        st.info("No hay actividades capturadas para esa semana: el reporte incluirá solo lo que traen tus extracciones del CRM.")
+
+    def contar(*tipos):
+        return int(act["Tipo"].isin(tipos).sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi_card("Actividades", str(len(act)), "Registradas en la semana")
+    with c2:
+        kpi_card("Visitas", str(contar("Visita")), "Presenciales")
+    with c3:
+        kpi_card("Contactos", str(contar("Llamada", "Correo", "WhatsApp", "Reunión virtual")), "Llamadas, correos, WhatsApp y reuniones")
+    with c4:
+        kpi_card("Cotizaciones enviadas", str(contar("Cotización enviada")), "Según la bitácora")
+
+    def usdmxn(df_, cu, cm):
+        return float(df_[cu].sum()), float(df_[cm].sum())
+
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        if nuevos is None:
+            kpi_card("Proyectos nuevos (CRM)", "N/D", "Sube el CSV del radar")
+        else:
+            u, m = usdmxn(nuevos, "Monto_USD", "Monto_MXN")
+            kpi_card("Proyectos nuevos (CRM)", str(len(nuevos)), par_txt(u, m))
+    with d2:
+        if ovs is None:
+            kpi_card("Órdenes de venta registradas", "N/D", "Sube la plantilla en Órdenes y Cobranza")
+        else:
+            kpi_card("Órdenes de venta registradas", str(len(ovs)),
+                     par_txt(float(ovs.loc[ovs["Moneda"] == "USD", "Total"].sum()), float(ovs.loc[ovs["Moneda"] == "MXN", "Total"].sum())))
+    with d3:
+        if ov_fact is None:
+            kpi_card("Órdenes con factura emitida", "N/D", "Faltan fechas de facturación")
+        else:
+            kpi_card("Órdenes con factura emitida", str(len(ov_fact)),
+                     par_txt(float(ov_fact.loc[ov_fact["Moneda"] == "USD", "Facturado"].sum()), float(ov_fact.loc[ov_fact["Moneda"] == "MXN", "Facturado"].sum())))
+    with d4:
+        if ov_cobro is None:
+            kpi_card("Órdenes con cobro registrado", "N/D", "Faltan fechas de cobro")
+        else:
+            kpi_card("Órdenes con cobro registrado", str(len(ov_cobro)),
+                     par_txt(float(ov_cobro.loc[ov_cobro["Moneda"] == "USD", "Cobrado"].sum()), float(ov_cobro.loc[ov_cobro["Moneda"] == "MXN", "Cobrado"].sum())))
+
+    if len(act):
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("**Actividades por tipo**")
+            por_tipo = act["Tipo"].value_counts().reset_index()
+            por_tipo.columns = ["Tipo", "Actividades"]
+            show_chart(alt.Chart(por_tipo).mark_bar(color=MESS_BLUE).encode(
+                y=alt.Y("Tipo:N", sort="-x", title=None), x=alt.X("Actividades:Q", title=None),
+                tooltip=["Tipo", "Actividades"]).properties(height=240))
+        with g2:
+            st.markdown("**Actividades por día**")
+            dias = pd.DataFrame({"Día": DIAS_ES, "Actividades": [int((act["Fecha"].dt.weekday == i).sum()) for i in range(7)]})
+            show_chart(alt.Chart(dias).mark_bar(color=ACCENT).encode(
+                x=alt.X("Día:N", sort=DIAS_ES, title=None), y=alt.Y("Actividades:Q", title=None),
+                tooltip=["Día", "Actividades"]).properties(height=240))
+
+    st.markdown("### Detalle de la semana")
+    ta, tb, tc, td = st.tabs(["Actividades", "Proyectos nuevos (CRM)", "Órdenes de venta", "Compromisos de la semana siguiente"])
+    with ta:
+        t = act.copy()
+        t["Fecha"] = t["Fecha"].dt.strftime("%d/%m/%Y")
+        t["F_Sig"] = t["F_Sig"].dt.strftime("%d/%m/%Y").fillna("")
+        show_df(t.rename(columns={"Cuenta": "Cuenta o cliente", "Descripcion": "Descripción y resultado",
+                                  "Siguiente": "Siguiente paso", "F_Sig": "Fecha siguiente", "Ref": "Proyecto u OV"}),
+                {"Monto": "${:,.2f}"})
+    with tb:
+        if nuevos is None:
+            st.info("Sube el CSV del radar para ver los proyectos registrados en la semana.")
+        else:
+            t = nuevos[["Folio", "Cliente", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN", "Registro"]].copy()
+            t["Registro"] = t["Registro"].dt.strftime("%d/%m/%Y")
+            t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 80)
+            show_df(t.rename(columns={"Descripcion": "Descripción", "Area": "Área", "Monto_USD": "USD", "Monto_MXN": "MXN"}),
+                    {"USD": "${:,.2f}", "MXN": "${:,.2f}"})
+    with tc:
+        if ovs is None:
+            st.info("Sube la plantilla en la pestaña Órdenes y Cobranza para ver las órdenes registradas en la semana.")
+        else:
+            t = ovs[["OV", "Cliente", "Estado", "Moneda", "Total", "Facturado", "Registro"]].copy()
+            t["Registro"] = t["Registro"].dt.strftime("%d/%m/%Y")
+            show_df(t, {"Total": "${:,.2f}", "Facturado": "${:,.2f}"})
+    with td:
+        t = prox.sort_values("F_Sig")[["F_Sig", "Cuenta", "Siguiente", "Ref"]].copy()
+        t["F_Sig"] = t["F_Sig"].dt.strftime("%d/%m/%Y")
+        show_df(t.rename(columns={"F_Sig": "Fecha", "Cuenta": "Cuenta o cliente", "Siguiente": "Siguiente paso", "Ref": "Proyecto u OV"}))
+
+    st.markdown("### Reporte listo para enviar")
+    clave = lunes.strftime("%Y%m%d")
+    ia_text = st.session_state.get("rep_ia_" + clave, "")
+    texto = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, ia_text)
+    if st.button("Redactar resumen ejecutivo con IA"):
+        base_txt = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, "")
+        prompt = "\n".join([
+            "Redacta, en español y en texto plano (sin Markdown ni asteriscos), un resumen ejecutivo de 5 a 8 líneas para la gerencia y la dirección de MESS Servicios Metrológicos sobre la semana reportada.",
+            "Usa solo los datos del reporte. Menciona logros, riesgos o pendientes y el foco de la semana siguiente.",
+            "Cita los montos en USD y MXN por separado, sin convertir ni sumar entre monedas. No inventes cifras, clientes ni resultados.",
+            "", "REPORTE:", base_txt,
+        ])
+        with st.spinner("Redactando el resumen..."):
+            res, err = call_gemini(prompt)
+        if err:
+            st.error(err)
+        else:
+            st.session_state["rep_ia_" + clave] = clean_message(res)
+            st.rerun()
+    st.text_area("Reporte (editable)", value=texto, height=420, key="rep_txt_" + clave + ("_ia" if ia_text else ""))
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        st.download_button("Descargar reporte (.txt)", texto.encode("utf-8"), file_name="Reporte_semanal_" + clave + ".txt", mime="text/plain")
+    with r2:
+        if Document is None:
+            st.warning("Instala python-docx para descargar el .docx.")
+        else:
+            try:
+                st.download_button("Descargar reporte (.docx)", build_reporte_docx(texto), file_name="Reporte_semanal_" + clave + ".docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            except Exception as e:
+                st.error("No se pudo generar el .docx: " + str(e))
+    with r3:
+        st.link_button("Abrir en correo", "mailto:?subject=" + quote("Reporte semanal de actividades | " + fecha_es(lunes) + " al " + fecha_es(domingo))
+                       + "&body=" + quote(texto[:1800]))
 
 with tab_dash:
     try:
@@ -1960,6 +2364,11 @@ with tab_cob:
         render_cobranza()
     except Exception as e:
         st.error("Error en Órdenes y Cobranza: " + str(e))
+with tab_rep:
+    try:
+        render_reporte()
+    except Exception as e:
+        st.error("Error en el Reporte Semanal: " + str(e))
 
 st.markdown(
     '<div class="brand-footer">Grupo MESS | all about metrology | mess.com.mx</div>',
