@@ -864,15 +864,17 @@ def plantilla_csv_bytes():
 
 
 # ---------------------------------------------------------------------------
-# REPORTE SEMANAL DE ACTIVIDADES
+# REPORTE SEMANAL: ACTIVIDADES, AGENDA Y FORECAST
 # ---------------------------------------------------------------------------
 ACT_TIPOS = ["Visita", "Llamada", "Correo", "WhatsApp", "Reunión virtual", "Cotización enviada",
              "Seguimiento de cobranza", "Otra"]
-PLANTILLA_ACT = ["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción y resultado", "Siguiente paso",
-                 "Fecha siguiente paso", "Proyecto u OV", "Monto", "Moneda"]
+ACT_ESTATUS = ["Realizada", "Programada", "Reprogramada", "Cancelada"]
+PLANTILLA_ACT = ["Fecha", "Hora", "Cuenta o cliente", "Tipo de actividad", "Estatus", "Descripción y resultado",
+                 "Siguiente paso", "Fecha siguiente paso", "Proyecto u OV", "Monto", "Moneda"]
 MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
             "octubre", "noviembre", "diciembre"]
 DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+BUCKETS_FC = ["Vencido", "Esta semana", "Próxima semana", "Resto del mes", "Mes siguiente", "Después", "Sin fecha"]
 
 
 def fecha_es(d):
@@ -901,6 +903,23 @@ def normalizar_actividades(t):
             t[c] = ""
     d = pd.DataFrame(index=t.index)
     d["Fecha"] = parse_fecha(t["Fecha"])
+
+    def hora(v):
+        m = re.search(r"(\d{1,2}):(\d{2})", "" if pd.isna(v) else str(v))
+        return (m.group(1).zfill(2) + ":" + m.group(2)) if m else ""
+
+    def estatus(v):
+        n = "" if pd.isna(v) else norm(v)
+        if "REPROG" in n:
+            return "Reprogramada"
+        if "PROGRAM" in n:
+            return "Programada"
+        if "CANCEL" in n:
+            return "Cancelada"
+        return "Realizada"
+
+    d["Hora"] = t["Hora"].map(hora)
+    d["Estatus"] = t["Estatus"].map(estatus)
     d["Cuenta"] = t["Cuenta o cliente"].fillna("").astype(str).str.strip()
     tipo = t["Tipo de actividad"].fillna("").astype(str).str.strip()
     d["Tipo"] = tipo.where(tipo != "", "Otra")
@@ -954,9 +973,12 @@ def load_actividades(raw_bytes, nombre):
                     return pos
         return None
 
+    f_exacta = find("FECHA", exacto=True)
     pos = {
-        "Fecha": find("FECHA", exacto=True) if find("FECHA", exacto=True) is not None else find("FECHA DE LA ACTIVIDAD"),
+        "Fecha": f_exacta if f_exacta is not None else find("FECHA DE LA ACTIVIDAD"),
+        "Hora": find("HORA", exacto=True),
         "Cuenta o cliente": find("CUENTA", "CLIENTE"), "Tipo de actividad": find("TIPO"),
+        "Estatus": find("ESTATUS", "ESTADO"),
         "Descripción y resultado": find("DESCRIPCION", "RESULTADO"),
         "Siguiente paso": find("SIGUIENTE PASO", exacto=True),
         "Fecha siguiente paso": find("FECHA SIGUIENTE", "FECHA DEL SIGUIENTE"),
@@ -982,7 +1004,103 @@ def par_txt(usd, mxn):
     return "USD $" + format(usd, ",.2f") + " | MXN $" + format(mxn, ",.2f")
 
 
-def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, ia_text=""):
+def agenda_siguiente(A, ini, fin):
+    """Agenda de la semana [ini, fin): actividades programadas más los siguientes pasos con fecha."""
+    cols = ["Fecha", "Hora", "Cuenta", "Actividad", "Origen", "Ref"]
+    filas = []
+    prog = A[(A["Fecha"] >= ini) & (A["Fecha"] < fin) & A["Estatus"].isin(["Programada", "Reprogramada"])]
+    for r in prog.itertuples():
+        filas.append({"Fecha": r.Fecha, "Hora": r.Hora, "Cuenta": r.Cuenta,
+                      "Actividad": r.Tipo + (": " + r.Descripcion if r.Descripcion else ""), "Origen": r.Estatus, "Ref": r.Ref})
+    sig = A[(A["F_Sig"] >= ini) & (A["F_Sig"] < fin) & (A["Siguiente"] != "") & (A["Estatus"] != "Cancelada")]
+    for r in sig.itertuples():
+        filas.append({"Fecha": r.F_Sig, "Hora": "", "Cuenta": r.Cuenta, "Actividad": r.Siguiente,
+                      "Origen": "Siguiente paso", "Ref": r.Ref})
+    out = pd.DataFrame(filas, columns=cols)
+    if len(out):
+        out = out.sort_values(["Fecha", "Hora"]).reset_index(drop=True)
+    return out
+
+
+def bucket_cierre(c, hoy_):
+    if pd.isna(c):
+        return "Sin fecha"
+    c = pd.Timestamp(c).normalize()
+    dom = hoy_ + pd.Timedelta(days=6 - hoy_.weekday())
+    dom2 = dom + pd.Timedelta(days=7)
+    fin_mes = hoy_ + pd.offsets.MonthEnd(0)
+    fin_sig = (fin_mes + pd.Timedelta(days=1)) + pd.offsets.MonthEnd(0)
+    if c < hoy_:
+        return "Vencido"
+    if c <= dom:
+        return "Esta semana"
+    if c <= dom2:
+        return "Próxima semana"
+    if c <= fin_mes:
+        return "Resto del mes"
+    if c <= fin_sig:
+        return "Mes siguiente"
+    return "Después"
+
+
+def forecast_datos(b, hoy_):
+    """Forecast del radar por moneda (sin convertir): por periodo de cierre, por fase y prioritarias."""
+    d = b.copy()
+    d["Bucket"] = d["Cierre_Est"].map(lambda c: bucket_cierre(c, hoy_))
+    out = {}
+    for m in ("USD", "MXN"):
+        col = "Monto_" + m
+        sub = d[d[col] > 0].copy()
+        sub["Pond"] = sub[col] * sub["Prob"]
+        agg = dict(Proyectos=("Folio", "count"), Bruto=(col, "sum"), Ponderado=("Pond", "sum"))
+        out["periodo_" + m] = sub.groupby("Bucket").agg(**agg).reindex(BUCKETS_FC).fillna(0)
+        out["fase_" + m] = sub.groupby("Fase").agg(**agg).sort_index()
+        out["top_" + m] = sub.sort_values("Pond", ascending=False).head(5)[
+            ["Folio", "Cliente", "Descripcion", "Fase", "Cierre_Est", col, "Pond"]]
+    out["definir"] = d[d["Sin_Cotizar"]].sort_values("Dias_Registro", ascending=False).head(15)[
+        ["Folio", "Cliente", "Descripcion", "Fase", "Area", "Dias_Registro", "Cierre_Est"]]
+    out["n_definir"] = int(d["Sin_Cotizar"].sum())
+    fin_mes = hoy_ + pd.offsets.MonthEnd(0)
+    mes = d[d["Cierre_Est"] <= fin_mes]
+    out["mes_usd_bruto"] = float(mes["Monto_USD"].sum())
+    out["mes_usd_pond"] = float((mes["Monto_USD"] * mes["Prob"]).sum())
+    out["mes_mxn_bruto"] = float(mes["Monto_MXN"].sum())
+    out["mes_mxn_pond"] = float((mes["Monto_MXN"] * mes["Prob"]).sum())
+    return out
+
+
+def forecast_texto(fc, meta_, cerrado_):
+    L = []
+    for m in ("USD", "MXN"):
+        p = fc["periodo_" + m]
+        L.append("Pipeline en " + m + ": " + str(int(p["Proyectos"].sum())) + " proyectos | bruto $" + format(p["Bruto"].sum(), ",.2f")
+                 + " | ponderado $" + format(p["Ponderado"].sum(), ",.2f"))
+        for bk, r in p.iterrows():
+            if r["Proyectos"] > 0:
+                L.append("   " + bk + ": " + str(int(r["Proyectos"])) + " proyectos | bruto $" + format(r["Bruto"], ",.2f")
+                         + " | ponderado $" + format(r["Ponderado"], ",.2f"))
+    L.append("")
+    L.append("Oportunidades prioritarias (por monto ponderado):")
+    for m in ("USD", "MXN"):
+        for r in fc["top_" + m].itertuples():
+            cierre = r.Cierre_Est.strftime("%d/%m") if pd.notna(r.Cierre_Est) else "sin fecha"
+            L.append("- " + m + " | " + str(r.Folio) + " | " + str(r.Cliente) + " | " + str(r.Fase) + " | cierre est. " + cierre
+                     + " | $" + format(getattr(r, "Monto_" + m), ",.2f") + " | ponderado $" + format(r.Pond, ",.2f"))
+    L.append("")
+    L.append("Propuestas por definir (sin monto cotizado): " + str(fc["n_definir"]) + " proyectos")
+    for r in fc["definir"].head(8).itertuples():
+        L.append("- " + str(r.Folio) + " | " + str(r.Cliente) + " | " + str(r.Descripcion)[:70] + " | " + str(r.Fase) + " | " + str(int(r.Dias_Registro)) + " días")
+    L.append("")
+    L.append("Resumen financiero:")
+    L.append("- Con cierre estimado en el mes (incluye vencidos): USD $" + format(fc["mes_usd_bruto"], ",.2f") + " bruto / $"
+             + format(fc["mes_usd_pond"], ",.2f") + " ponderado | MXN $" + format(fc["mes_mxn_bruto"], ",.2f") + " bruto / $"
+             + format(fc["mes_mxn_pond"], ",.2f") + " ponderado")
+    falt = max(0.0, meta_ - cerrado_)
+    L.append("- Meta mensual en USD: $" + format(meta_, ",.0f") + " | Cerrado capturado: $" + format(cerrado_, ",.0f") + " | Faltante: $" + format(falt, ",.0f"))
+    return L
+
+
+def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, agenda, forecast_lineas, ia_text=""):
     L = ["REPORTE SEMANAL DE ACTIVIDADES",
          "Semana del " + fecha_es(lunes) + " al " + fecha_es(domingo),
          "Preparado por: Javier Camacho, Asesor B2B | MESS Servicios Metrológicos", ""]
@@ -990,9 +1108,9 @@ def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, pro
         L += ["RESUMEN EJECUTIVO", ia_text.strip(), ""]
     L.append("1. RESUMEN DE LA SEMANA")
     if len(act):
-        L.append("- Actividades registradas: " + str(len(act)) + " (" + ", ".join(k + ": " + str(v) for k, v in act["Tipo"].value_counts().items()) + ")")
+        L.append("- Actividades realizadas: " + str(len(act)) + " (" + ", ".join(k + ": " + str(v) for k, v in act["Tipo"].value_counts().items()) + ")")
     else:
-        L.append("- Actividades registradas: ninguna capturada para esta semana")
+        L.append("- Actividades realizadas: ninguna capturada para esta semana")
     if nuevos is not None:
         L.append("- Proyectos nuevos en el CRM: " + str(len(nuevos)) + " | " + par_txt(nuevos["Monto_USD"].sum(), nuevos["Monto_MXN"].sum()))
     if ovs is not None:
@@ -1029,12 +1147,15 @@ def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, pro
                 L.append("- " + str(r["OV"]) + " | " + str(r["Cliente"]) + " | " + str(r["Moneda"]) + " $" + format(r["Total"], ",.2f") + " | " + str(r["Estado"]))
         else:
             L.append("- Ninguna registrada en la semana.")
-    L += ["", "5. COMPROMISOS PARA LA SEMANA SIGUIENTE"]
-    if prox is not None and len(prox):
-        for _, r in prox.sort_values("F_Sig").iterrows():
-            L.append("- " + r["F_Sig"].strftime("%d/%m") + " | " + (r["Cuenta"] or "Sin cliente") + ": " + (r["Siguiente"] or "sin detalle"))
+    L += ["", "5. AGENDA Y PLAN DE VISITAS DE LA SEMANA SIGUIENTE"]
+    if agenda is not None and len(agenda):
+        for _, r in agenda.iterrows():
+            hora = (" " + r["Hora"]) if r["Hora"] else ""
+            L.append("- " + r["Fecha"].strftime("%d/%m") + hora + " | " + (r["Cuenta"] or "Sin cliente") + ": " + r["Actividad"] + " (" + r["Origen"] + ")")
     else:
-        L.append("- Ninguno capturado con fecha en la semana siguiente.")
+        L.append("- Nada capturado con fecha en la semana siguiente.")
+    if forecast_lineas:
+        L += ["", "6. FORECAST SEMANAL Y MENSUAL"] + forecast_lineas
     return "\n".join(L)
 
 
@@ -2130,7 +2251,7 @@ def render_cobranza():
 
 
 # ---------------------------------------------------------------------------
-# PESTAÑA: REPORTE SEMANAL DE ACTIVIDADES
+# PESTAÑA: REPORTE SEMANAL (ACTIVIDADES, AGENDA Y FORECAST)
 # ---------------------------------------------------------------------------
 def build_reporte_docx(texto):
     doc = Document()
@@ -2147,8 +2268,34 @@ def build_reporte_docx(texto):
     return buf
 
 
+def build_reporte_xlsx(hojas):
+    """Libro de Excel con una hoja por sección del reporte (requiere openpyxl)."""
+    from openpyxl.styles import Font
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for nombre, t in hojas.items():
+            nm = nombre[:31]
+            t.to_excel(w, sheet_name=nm, index=False)
+            ws = w.sheets[nm]
+            for i, c in enumerate(t.columns, 1):
+                letra = ws.cell(row=1, column=i).column_letter
+                largo = int(t[c].astype(str).str.len().max()) if len(t) else 10
+                ws.column_dimensions[letra].width = min(60, max(12, largo + 2, len(str(c)) + 2))
+                ws.cell(row=1, column=i).font = Font(bold=True)
+    buf.seek(0)
+    return buf
+
+
+def _fechas(t, cols):
+    t = t.copy()
+    for c in cols:
+        if c in t.columns:
+            t[c] = pd.to_datetime(t[c]).dt.strftime("%d/%m/%Y").fillna("")
+    return t
+
+
 def render_reporte():
-    st.markdown("### Reporte semanal de actividades")
+    st.markdown("### Reporte semanal: actividades, agenda y forecast")
     modo = st.radio("Semana a reportar", ["Semana anterior (ya transcurrida)", "Otra semana"], horizontal=True, key="rep_modo")
     if modo.startswith("Semana anterior"):
         lunes, domingo = semana_anterior(hoy)
@@ -2158,18 +2305,21 @@ def render_reporte():
         if domingo >= hoy:
             st.warning("Esa semana aún no termina: el reporte quedará parcial.")
     fin = domingo + pd.Timedelta(days=1)
+    fin_sig = fin + pd.Timedelta(days=7)
     st.markdown("**Semana del " + fecha_es(lunes) + " al " + fecha_es(domingo) + "**")
     st.caption("Los montos van en USD y MXN tal como vienen en el registro; no se convierten con tipo de cambio.")
 
-    with st.expander("Plantilla de actividades y captura rápida"):
+    with st.expander("Plantilla de actividades y agenda (captura rápida)"):
         st.write("Columnas: " + ", ".join(PLANTILLA_ACT) + ".")
-        st.caption("Tipos de actividad: " + ", ".join(ACT_TIPOS) + ". Lo que captures aquí no se guarda en la nube: "
-                   "descárgalo y sube tu bitácora (Excel o CSV) cada semana.")
+        st.caption("Estatus: " + ", ".join(ACT_ESTATUS) + ". Las 'Realizada' (o sin estatus) forman el reporte de la semana; "
+                   "las 'Programada' o 'Reprogramada' con fecha forman la agenda de la semana siguiente. "
+                   "Lo capturado aquí no se guarda en la nube: descárgalo y sube tu bitácora (Excel o CSV) cada semana.")
         st.download_button("Descargar encabezados de la plantilla (CSV)", plantilla_act_csv_bytes(),
                            file_name="plantilla_actividades.csv", mime="text/csv")
         vacio_df = pd.DataFrame({
-            "Fecha": pd.Series(dtype="datetime64[ns]"), "Cuenta o cliente": pd.Series(dtype="object"),
-            "Tipo de actividad": pd.Series(dtype="object"), "Descripción y resultado": pd.Series(dtype="object"),
+            "Fecha": pd.Series(dtype="datetime64[ns]"), "Hora": pd.Series(dtype="object"),
+            "Cuenta o cliente": pd.Series(dtype="object"), "Tipo de actividad": pd.Series(dtype="object"),
+            "Estatus": pd.Series(dtype="object"), "Descripción y resultado": pd.Series(dtype="object"),
             "Siguiente paso": pd.Series(dtype="object"), "Fecha siguiente paso": pd.Series(dtype="datetime64[ns]"),
             "Proyecto u OV": pd.Series(dtype="object"), "Monto": pd.Series(dtype="float64"), "Moneda": pd.Series(dtype="object"),
         })
@@ -2178,6 +2328,7 @@ def render_reporte():
                 "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                 "Fecha siguiente paso": st.column_config.DateColumn("Fecha siguiente paso", format="DD/MM/YYYY"),
                 "Tipo de actividad": st.column_config.SelectboxColumn("Tipo de actividad", options=ACT_TIPOS),
+                "Estatus": st.column_config.SelectboxColumn("Estatus", options=ACT_ESTATUS),
                 "Moneda": st.column_config.SelectboxColumn("Moneda", options=["USD", "MXN"]),
             }
             editado = st.data_editor(vacio_df, num_rows="dynamic", key="act_editor", column_config=cfg)
@@ -2186,13 +2337,13 @@ def render_reporte():
         if len(editado):
             st.download_button("Descargar lo capturado (CSV)", editado.to_csv(index=False).encode("utf-8-sig"),
                                file_name="actividades_capturadas.csv", mime="text/csv")
-    archivo_act = st.file_uploader("Bitácora de actividades (CSV o Excel)", type=["csv", "xlsx"], key="act_file")
+    archivo_act = st.file_uploader("Bitácora de actividades y agenda (CSV o Excel)", type=["csv", "xlsx"], key="act_file")
 
     partes = []
     if archivo_act is not None:
         da, avs = load_actividades(archivo_act.getvalue(), archivo_act.name)
-        for a in avs:
-            st.warning(a)
+        for a_ in avs:
+            st.warning(a_)
         if da is not None:
             partes.append(da)
     if len(editado):
@@ -2202,8 +2353,12 @@ def render_reporte():
     if n_sin_fecha:
         st.warning(str(n_sin_fecha) + " actividad(es) sin fecha válida: quedan fuera del reporte.")
 
-    act = A[(A["Fecha"] >= lunes) & (A["Fecha"] < fin)].sort_values("Fecha")
-    prox = A[(A["F_Sig"] >= fin) & (A["F_Sig"] < fin + pd.Timedelta(days=7))]
+    en_semana = (A["Fecha"] >= lunes) & (A["Fecha"] < fin)
+    act = A[en_semana & (A["Estatus"] == "Realizada")].sort_values(["Fecha", "Hora"])
+    n_otras = int((en_semana & (A["Estatus"] != "Realizada")).sum())
+    if n_otras:
+        st.caption(str(n_otras) + " actividad(es) de esa semana con estatus programada, reprogramada o cancelada quedan fuera del conteo de realizadas.")
+    agenda = agenda_siguiente(A, fin, fin_sig)
 
     nuevos = None
     if base is not None:
@@ -2216,16 +2371,20 @@ def render_reporte():
             ov_fact = ov[(ov["F_Fact"] >= lunes) & (ov["F_Fact"] < fin)]
         if ov["F_Cobro"].notna().any():
             ov_cobro = ov[(ov["F_Cobro"] >= lunes) & (ov["F_Cobro"] < fin)]
+    fc = f_lineas = None
+    if base is not None:
+        fc = forecast_datos(base, hoy)
+        f_lineas = forecast_texto(fc, meta, cerrado)
 
     if len(act) == 0:
-        st.info("No hay actividades capturadas para esa semana: el reporte incluirá solo lo que traen tus extracciones del CRM.")
+        st.info("No hay actividades realizadas capturadas para esa semana: el reporte incluirá lo que traen tus extracciones del CRM.")
 
     def contar(*tipos):
         return int(act["Tipo"].isin(tipos).sum())
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        kpi_card("Actividades", str(len(act)), "Registradas en la semana")
+        kpi_card("Actividades realizadas", str(len(act)), "En la semana reportada")
     with c2:
         kpi_card("Visitas", str(contar("Visita")), "Presenciales")
     with c3:
@@ -2233,16 +2392,12 @@ def render_reporte():
     with c4:
         kpi_card("Cotizaciones enviadas", str(contar("Cotización enviada")), "Según la bitácora")
 
-    def usdmxn(df_, cu, cm):
-        return float(df_[cu].sum()), float(df_[cm].sum())
-
     d1, d2, d3, d4 = st.columns(4)
     with d1:
         if nuevos is None:
             kpi_card("Proyectos nuevos (CRM)", "N/D", "Sube el CSV del radar")
         else:
-            u, m = usdmxn(nuevos, "Monto_USD", "Monto_MXN")
-            kpi_card("Proyectos nuevos (CRM)", str(len(nuevos)), par_txt(u, m))
+            kpi_card("Proyectos nuevos (CRM)", str(len(nuevos)), par_txt(float(nuevos["Monto_USD"].sum()), float(nuevos["Monto_MXN"].sum())))
     with d2:
         if ovs is None:
             kpi_card("Órdenes de venta registradas", "N/D", "Sube la plantilla en Órdenes y Cobranza")
@@ -2278,15 +2433,69 @@ def render_reporte():
                 x=alt.X("Día:N", sort=DIAS_ES, title=None), y=alt.Y("Actividades:Q", title=None),
                 tooltip=["Día", "Actividades"]).properties(height=240))
 
-    st.markdown("### Detalle de la semana")
-    ta, tb, tc, td = st.tabs(["Actividades", "Proyectos nuevos (CRM)", "Órdenes de venta", "Compromisos de la semana siguiente"])
+    st.markdown("### Detalle")
+    ta, tg, tf, tb, tc = st.tabs(["Actividades", "Agenda semana siguiente", "Forecast", "Proyectos nuevos (CRM)", "Órdenes de venta"])
     with ta:
         t = act.copy()
         t["Fecha"] = t["Fecha"].dt.strftime("%d/%m/%Y")
         t["F_Sig"] = t["F_Sig"].dt.strftime("%d/%m/%Y").fillna("")
+        t = t[["Fecha", "Hora", "Cuenta", "Tipo", "Descripcion", "Siguiente", "F_Sig", "Ref", "Monto", "Moneda"]]
         show_df(t.rename(columns={"Cuenta": "Cuenta o cliente", "Descripcion": "Descripción y resultado",
                                   "Siguiente": "Siguiente paso", "F_Sig": "Fecha siguiente", "Ref": "Proyecto u OV"}),
                 {"Monto": "${:,.2f}"})
+    with tg:
+        st.caption("Semana del " + fecha_es(fin) + " al " + fecha_es(fin_sig - pd.Timedelta(days=1))
+                   + ". Incluye actividades programadas y los siguientes pasos con fecha.")
+        t = _fechas(agenda, ["Fecha"])
+        show_df(t.rename(columns={"Cuenta": "Cuenta o cliente", "Ref": "Proyecto u OV"}))
+    with tf:
+        if fc is None:
+            st.info("Sube el CSV del radar para generar el forecast.")
+        else:
+            top_f = base["Cierre_Est"].value_counts()
+            if len(top_f) and top_f.iloc[0] / len(base) >= 0.30:
+                st.warning(str(round(top_f.iloc[0] / len(base) * 100)) + "% de los proyectos comparten la fecha de cierre estimada "
+                           + top_f.index[0].strftime("%d/%m/%Y") + ". Si es una fecha por defecto de SCOTT, el forecast por periodo está sesgado.")
+            falt = max(0.0, meta - cerrado)
+            q1, q2, q3, q4 = st.columns(4)
+            for col_, m in ((q1, "USD"), (q2, "MXN")):
+                pp = fc["periodo_" + m]
+                with col_:
+                    kpi_card("Pipeline en " + m, "$" + format(pp["Bruto"].sum(), ",.2f"),
+                             "Ponderado $" + format(pp["Ponderado"].sum(), ",.2f") + " | " + str(int(pp["Proyectos"].sum())) + " proyectos")
+            with q3:
+                kpi_card("Faltante de la meta (USD)", "$" + format(falt, ",.0f"), "Meta $" + format(meta, ",.0f") + " | cerrado $" + format(cerrado, ",.0f"))
+            with q4:
+                kpi_card("Propuestas por definir", str(fc["n_definir"]), "Proyectos sin monto cotizado")
+            st.markdown("#### Cierre estimado por periodo")
+            f1, f2 = st.columns(2)
+            for col_, m in ((f1, "USD"), (f2, "MXN")):
+                t = fc["periodo_" + m].reset_index()
+                t.columns = ["Periodo"] + list(t.columns[1:])
+                with col_:
+                    st.markdown("**" + m + "**")
+                    show_df(t, {"Proyectos": "{:.0f}", "Bruto": "${:,.2f}", "Ponderado": "${:,.2f}"})
+            st.markdown("#### Pipeline por fase")
+            f1, f2 = st.columns(2)
+            for col_, m in ((f1, "USD"), (f2, "MXN")):
+                t = fc["fase_" + m].reset_index()
+                with col_:
+                    st.markdown("**" + m + "**")
+                    show_df(t, {"Proyectos": "{:.0f}", "Bruto": "${:,.2f}", "Ponderado": "${:,.2f}"})
+            st.markdown("#### Oportunidades prioritarias (por monto ponderado)")
+            f1, f2 = st.columns(2)
+            for col_, m in ((f1, "USD"), (f2, "MXN")):
+                t = fc["top_" + m].copy()
+                t["Cierre_Est"] = t["Cierre_Est"].dt.strftime("%d/%m/%Y").fillna("")
+                t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 50)
+                t = t.rename(columns={"Descripcion": "Descripción", "Cierre_Est": "Cierre est.", "Monto_" + m: "Monto " + m, "Pond": "Ponderado " + m})
+                with col_:
+                    st.markdown("**" + m + "**")
+                    show_df(t, {"Monto " + m: "${:,.2f}", "Ponderado " + m: "${:,.2f}"})
+            st.markdown("#### Propuestas por definir")
+            t = _fechas(fc["definir"], ["Cierre_Est"])
+            t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 70)
+            show_df(t.rename(columns={"Descripcion": "Descripción", "Area": "Área", "Dias_Registro": "Días reg.", "Cierre_Est": "Cierre est."}))
     with tb:
         if nuevos is None:
             st.info("Sube el CSV del radar para ver los proyectos registrados en la semana.")
@@ -2303,20 +2512,16 @@ def render_reporte():
             t = ovs[["OV", "Cliente", "Estado", "Moneda", "Total", "Facturado", "Registro"]].copy()
             t["Registro"] = t["Registro"].dt.strftime("%d/%m/%Y")
             show_df(t, {"Total": "${:,.2f}", "Facturado": "${:,.2f}"})
-    with td:
-        t = prox.sort_values("F_Sig")[["F_Sig", "Cuenta", "Siguiente", "Ref"]].copy()
-        t["F_Sig"] = t["F_Sig"].dt.strftime("%d/%m/%Y")
-        show_df(t.rename(columns={"F_Sig": "Fecha", "Cuenta": "Cuenta o cliente", "Siguiente": "Siguiente paso", "Ref": "Proyecto u OV"}))
 
     st.markdown("### Reporte listo para enviar")
     clave = lunes.strftime("%Y%m%d")
     ia_text = st.session_state.get("rep_ia_" + clave, "")
-    texto = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, ia_text)
+    texto = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, agenda, f_lineas, ia_text)
     if st.button("Redactar resumen ejecutivo con IA"):
-        base_txt = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, prox, "")
+        base_txt = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, agenda, f_lineas, "")
         prompt = "\n".join([
             "Redacta, en español y en texto plano (sin Markdown ni asteriscos), un resumen ejecutivo de 5 a 8 líneas para la gerencia y la dirección de MESS Servicios Metrológicos sobre la semana reportada.",
-            "Usa solo los datos del reporte. Menciona logros, riesgos o pendientes y el foco de la semana siguiente.",
+            "Usa solo los datos del reporte. Menciona logros, riesgos o pendientes, el foco de la semana siguiente y el forecast.",
             "Cita los montos en USD y MXN por separado, sin convertir ni sumar entre monedas. No inventes cifras, clientes ni resultados.",
             "", "REPORTE:", base_txt,
         ])
@@ -2327,8 +2532,8 @@ def render_reporte():
         else:
             st.session_state["rep_ia_" + clave] = clean_message(res)
             st.rerun()
-    st.text_area("Reporte (editable)", value=texto, height=420, key="rep_txt_" + clave + ("_ia" if ia_text else ""))
-    r1, r2, r3 = st.columns(3)
+    st.text_area("Reporte (editable)", value=texto, height=440, key="rep_txt_" + clave + ("_ia" if ia_text else ""))
+    r1, r2, r3, r4 = st.columns(4)
     with r1:
         st.download_button("Descargar reporte (.txt)", texto.encode("utf-8"), file_name="Reporte_semanal_" + clave + ".txt", mime="text/plain")
     with r2:
@@ -2341,7 +2546,28 @@ def render_reporte():
             except Exception as e:
                 st.error("No se pudo generar el .docx: " + str(e))
     with r3:
-        st.link_button("Abrir en correo", "mailto:?subject=" + quote("Reporte semanal de actividades | " + fecha_es(lunes) + " al " + fecha_es(domingo))
+        try:
+            hojas = {"Resumen": pd.DataFrame({"Reporte": texto.split("\n")})}
+            if len(act):
+                hojas["Actividades"] = _fechas(act, ["Fecha", "F_Sig"])
+            if len(agenda):
+                hojas["Agenda"] = _fechas(agenda, ["Fecha"])
+            if fc is not None:
+                for m in ("USD", "MXN"):
+                    hojas["Periodo " + m] = fc["periodo_" + m].reset_index()
+                    hojas["Fase " + m] = fc["fase_" + m].reset_index()
+                    hojas["Prioritarias " + m] = _fechas(fc["top_" + m], ["Cierre_Est"])
+                hojas["Por definir"] = _fechas(fc["definir"], ["Cierre_Est"])
+            if nuevos is not None and len(nuevos):
+                hojas["Proyectos nuevos"] = _fechas(nuevos[["Folio", "Cliente", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN", "Registro"]], ["Registro"])
+            if ovs is not None and len(ovs):
+                hojas["OV registradas"] = _fechas(ovs[["OV", "Cliente", "Estado", "Moneda", "Total", "Facturado", "Registro"]], ["Registro"])
+            st.download_button("Descargar reporte (.xlsx)", build_reporte_xlsx(hojas), file_name="Reporte_semanal_" + clave + ".xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.caption("Excel no disponible (agrega openpyxl a requirements.txt): " + str(e)[:80])
+    with r4:
+        st.link_button("Abrir en correo", "mailto:?subject=" + quote("Reporte semanal | " + fecha_es(lunes) + " al " + fecha_es(domingo))
                        + "&body=" + quote(texto[:1800]))
 
 with tab_dash:
