@@ -260,6 +260,54 @@ MESS_HECHOS = [
     "Capacitación técnica en línea (MESS Academy) y equipo seminuevo en renta o venta.",
     "Presencia en Querétaro, San Luis Potosí, Saltillo, Monterrey, Guadalajara y Aguascalientes.",
 ]
+# ---------------------------------------------------------------------------
+# VOZ Y MENTALIDAD DE LA IA (editable): un solo lugar para todos los prompts
+# ---------------------------------------------------------------------------
+PERFIL_EXPERTO = [
+    "Eres Javier Camacho, vendedor consultivo B2B de metrología industrial y también metrólogo de criterio: entiendes el equipo, la norma que lo rige y lo que le cuesta a la planta medir mal.",
+    "Piensas como vendedor: buscas entender el problema del cliente, quién decide y qué sigue, y propones un paso pequeño y concreto.",
+    "Piensas como metrólogo: hablas con precisión técnica, sin adornos ni promesas que no puedas sostener.",
+]
+REGLAS_VOZ = [
+    "Español de México, tono de colega profesional: cercano, seguro y claro. Escribe como habla una persona, con frases que se conectan; evita el tono de plantilla o de folleto.",
+    "Mensajes cortos: quien ve un mensaje largo no lo lee. Una sola idea y una sola petición por mensaje.",
+    "Correo: abre con 'Saludos Ing. [Nombre],' y cierra con 'Que tengas un excelente día.' Sin firma. Cuerpo de 3 a 5 líneas (máximo 90 palabras).",
+    "WhatsApp: mismo trato, más breve (máximo 45 palabras, sin firma).",
+    "Llamada o visita: en lugar de un mensaje, un guion de apertura de 4 a 6 frases con una sola pregunta clave.",
+    "Si no se conoce el nombre del contacto, deja [Nombre]. Si el contacto no es ingeniero (por ejemplo, compras), saluda con 'Saludos [Nombre],'.",
+    "Evita: 'estimado', 'por medio de la presente', 'sinergias', 'soluciones integrales', 'quedo atento a sus valiosos comentarios', cadenas de signos de exclamación y adjetivos de relleno.",
+    "Usa uno o dos términos técnicos por mensaje como máximo, y solo cuando el equipo del proyecto lo justifique.",
+]
+REGLAS_METODO = [
+    "MEDDPICC es tu análisis interno: identifica qué elemento está más débil en esta fase (métrica, comprador económico, criterios de decisión, proceso de decisión, dolor, champion o competencia) y úsalo para decidir qué averiguar. No lo menciones en el mensaje.",
+    "SPIN va en la pregunta: una sola pregunta bien puesta (situación, problema, implicación o necesidad, según la fase), natural, sin sonar a cuestionario.",
+    "Sandler va en el cierre y con sutileza: deja una salida cómoda, por ejemplo 'si hoy no es prioridad, me dices y lo retomamos cuando te convenga'. Sin presión, sin urgencia falsa.",
+    "Nunca nombres las metodologías (MEDDPICC, SPIN, Sandler) dentro del mensaje.",
+]
+PREGUNTA_FASE = {
+    0: "confirmar si el proyecto sigue vigente y quién lo decide",
+    1: "entender qué problema de medición o calibración quieren resolver y qué pasa en planta si no se resuelve",
+    2: "saber con qué criterios van a comparar la cotización (precio, plazo, acreditación, servicio)",
+    3: "conocer los pasos y quién autoriza antes de emitir la orden de compra",
+    4: "confirmar la fecha en que saldrá la orden de compra y si algo la detiene",
+}
+# Vocabulario técnico de referencia: valida y ajusta estas líneas con tu criterio de metrólogo.
+GLOSARIO_TECNICO = [
+    "Calibración y laboratorio: trazabilidad a patrones, incertidumbre de medición, intervalos de calibración, certificado, ISO/IEC 17025.",
+    "Metrología dimensional y CMM: repetibilidad y reproducibilidad, ISO 10360 (verificación de CMM), retrofit, programas de inspección.",
+    "Dureza: Rockwell (ISO 6508, ASTM E18) y Vickers (ISO 6507), bloques patrón de dureza, verificación del durómetro.",
+    "Fuerza y torque: máquinas de ensayo y celdas de carga (ISO 7500-1), torquímetros (ISO 6789).",
+    "Temperatura: termopares, uniformidad térmica y exactitud del sistema en pirometría aeronáutica (AMS2750).",
+    "Automotriz: IATF 16949 y análisis del sistema de medición (MSA). Aeronáutico: AS9100 y NADCAP.",
+]
+REGLAS_DATOS = [
+    "Usa únicamente los datos de la oportunidad y los hechos de MESS. No inventes precios, fechas, plazos, normas, acreditaciones ni antecedentes con el cliente.",
+    "Si falta un dato, no lo menciones o escríbelo como 'por confirmar'.",
+    "Habla solo de la cuenta indicada: no menciones a otros clientes ni mezcles datos de proyectos distintos.",
+    "No afirmes que MESS está acreditado para una magnitud o alcance específico; para la empresa usa solo los hechos listados.",
+]
+
+
 CANALES = ["WhatsApp", "Correo ejecutivo", "Llamada", "Visita presencial"]
 PERFILES = ["Ingeniero de planta o calidad", "Comprador", "Director o dueño"]
 
@@ -627,11 +675,21 @@ def vacio(x):
 
 
 def parse_fecha(serie):
-    s = pd.Series(serie)
-    try:
-        return pd.to_datetime(s, format="mixed", dayfirst=True, errors="coerce")
-    except (TypeError, ValueError):
-        return pd.to_datetime(s, dayfirst=True, errors="coerce")
+    """Fechas de Excel (ISO, año-mes-día) se leen tal cual; los textos dd/mm/aaaa se leen con el día primero."""
+    s_ = pd.Series(serie).astype("object")
+    txt = s_.astype(str).str.strip()
+    iso = txt.str.match(r"^\d{4}-\d{2}-\d{2}")
+    res = pd.Series(pd.NaT, index=s_.index, dtype="datetime64[ns]")
+    if iso.any():
+        res.loc[iso] = pd.to_datetime(txt[iso], format="ISO8601", errors="coerce")
+    resto = ~iso
+    if resto.any():
+        r_ = txt[resto].replace({"": None, "nan": None, "NaT": None, "None": None})
+        try:
+            res.loc[resto] = pd.to_datetime(r_, format="mixed", dayfirst=True, errors="coerce")
+        except (TypeError, ValueError):
+            res.loc[resto] = pd.to_datetime(r_, dayfirst=True, errors="coerce")
+    return res
 
 
 def bucket_vencido(dias):
@@ -895,6 +953,21 @@ def semana_anterior(hoy_):
     return lunes, lunes + pd.Timedelta(days=6)
 
 
+def tipo_canonico(x):
+    n = norm(x)
+    if not n:
+        return "Otra"
+    for t in ACT_TIPOS:
+        if norm(t) == n:
+            return t
+    for clave, t in (("VISIT", "Visita"), ("LLAM", "Llamada"), ("CORREO", "Correo"), ("MAIL", "Correo"), ("WHATSAPP", "WhatsApp"),
+                     ("REUNION", "Reunión virtual"), ("VIRTUAL", "Reunión virtual"), ("TEAMS", "Reunión virtual"),
+                     ("COTIZ", "Cotización enviada"), ("COBRANZA", "Seguimiento de cobranza")):
+        if clave in n:
+            return t
+    return str(x).strip().capitalize()
+
+
 def normalizar_actividades(t):
     """Convierte una tabla con las columnas de PLANTILLA_ACT en el formato interno."""
     t = t.reset_index(drop=True)
@@ -921,8 +994,7 @@ def normalizar_actividades(t):
     d["Hora"] = t["Hora"].map(hora)
     d["Estatus"] = t["Estatus"].map(estatus)
     d["Cuenta"] = t["Cuenta o cliente"].fillna("").astype(str).str.strip()
-    tipo = t["Tipo de actividad"].fillna("").astype(str).str.strip()
-    d["Tipo"] = tipo.where(tipo != "", "Otra")
+    d["Tipo"] = t["Tipo de actividad"].fillna("").map(tipo_canonico)
     d["Descripcion"] = t["Descripción y resultado"].fillna("").astype(str).str.strip()
     d["Siguiente"] = t["Siguiente paso"].fillna("").astype(str).str.strip()
     d["F_Sig"] = parse_fecha(t["Fecha siguiente paso"])
@@ -1095,8 +1167,11 @@ def forecast_texto(fc, meta_, cerrado_):
     L.append("- Con cierre estimado en el mes (incluye vencidos): USD $" + format(fc["mes_usd_bruto"], ",.2f") + " bruto / $"
              + format(fc["mes_usd_pond"], ",.2f") + " ponderado | MXN $" + format(fc["mes_mxn_bruto"], ",.2f") + " bruto / $"
              + format(fc["mes_mxn_pond"], ",.2f") + " ponderado")
-    falt = max(0.0, meta_ - cerrado_)
-    L.append("- Meta mensual en USD: $" + format(meta_, ",.0f") + " | Cerrado capturado: $" + format(cerrado_, ",.0f") + " | Faltante: $" + format(falt, ",.0f"))
+    if cerrado_ > 0:
+        falt = max(0.0, meta_ - cerrado_)
+        L.append("- Meta mensual en USD: $" + format(meta_, ",.0f") + " | Cerrado del mes capturado: $" + format(cerrado_, ",.0f") + " | Faltante: $" + format(falt, ",.0f"))
+    else:
+        L.append("- Meta mensual en USD: $" + format(meta_, ",.0f") + " | Cerrado del mes: no capturado (el faltante no se puede calcular; no significa que no hubo cierres)")
     return L
 
 
@@ -1286,49 +1361,84 @@ def build_prompt(ctx):
         montos.append(format(ctx["usd"], ",.2f") + " USD")
     if ctx["mxn"] > 0:
         montos.append(format(ctx["mxn"], ",.2f") + " MXN")
-    monto_txt = " y ".join(montos) if montos else "Aún sin cotizar (sin monto): no menciones precios en el mensaje."
-    lines = [
-        "Actúa como Javier Camacho, Key Account Manager (KAM) B2B de MESS Servicios Metrológicos en Querétaro, México.",
-        "Eres experto en metrología dimensional, calibración acreditada ISO/IEC 17025 y equipos de alta gama (Zeiss, Taylor Hobson, Wilson, Kreon).",
-        "Hablas como asesor técnico de metrología industrial: trazabilidad, incertidumbre, repetibilidad, paros de línea, retrabajo y certeza dimensional en piso de producción.",
-        "Tono consultivo, humano y directo, sin exageraciones técnicas ni lenguaje de marketing inflado. Frases claras y cortas.",
-        "No inventes precios, fechas de entrega, certificaciones, referencias ni datos que no estén en el contexto.",
+    monto_txt = " y ".join(montos) if montos else "Aún sin cotizar (sin monto): no menciones precios."
+    fase_n = int(ctx.get("fase_n", 1))
+    contacto = (ctx.get("contacto") or "").strip()
+    L = list(PERFIL_EXPERTO) + ["", "VOZ Y ESTILO:"] + ["- " + r for r in REGLAS_VOZ]
+    L += ["", "MÉTODO DE VENTA (con sutileza y naturalidad):"] + ["- " + r for r in REGLAS_METODO]
+    L += ["", "VOCABULARIO TÉCNICO DE REFERENCIA (úsalo solo si aplica al equipo del proyecto):"] + ["- " + r for r in GLOSARIO_TECNICO]
+    L += ["", "HECHOS DE MESS (lo único que puedes afirmar sobre la empresa):"] + ["- " + h for h in MESS_HECHOS]
+    L += ["", "REGLAS DE DATOS:"] + ["- " + r for r in REGLAS_DATOS]
+    L += [
         "",
-        "DATOS DE LA OPORTUNIDAD:",
+        "OPORTUNIDAD (solo esta cuenta):",
         "- Cuenta: " + ctx["cuenta"],
-        "- Folios agrupados: " + ctx["folios"],
-        "- Descripción de equipos o servicios: " + ctx["descripcion"],
-        "- Monto del paquete: " + monto_txt,
-        "- Fase actual: " + ctx["fase"],
-        "- Días desde el registro: " + str(ctx["dias"]),
-        "- Cierre estimado en SCOTT: " + ctx["cierre"],
-        "- Cotizaciones: " + (ctx["cotizaciones"] or "Sin número de cotización registrado"),
-        "- Propuestas a incluir:",
+        "- Contacto: " + (contacto or "sin nombre (usa [Nombre])") + " | Perfil: " + ctx["perfil"],
+        "- Folios: " + ctx["folios"],
+        "- Equipos o servicios: " + ctx["descripcion"],
+        "- Propuestas:",
         ctx["desglose"],
+        "- Monto del paquete: " + monto_txt,
+        "- Fase: " + ctx["fase"] + " | Días desde el registro: " + str(ctx["dias"]) + " | Cierre estimado en SCOTT: " + ctx["cierre"],
+        "- Cotizaciones: " + (ctx["cotizaciones"] or "sin número registrado"),
         "- Objetivo de esta acción: " + ctx["objetivo"],
         "- Canal: " + ctx["canal"],
-        "- Interlocutor: " + ctx["perfil"],
-        "- Giro industrial: " + (ctx["giro"] or "No especificado"),
-        "- Contexto adicional: " + (ctx["contexto"] or "Ninguno"),
+        "- Giro: " + (ctx["giro"] or "no especificado"),
+        "- Contexto del KAM: " + (ctx["contexto"] or "ninguno"),
+        "- Lo que conviene averiguar en esta fase: " + PREGUNTA_FASE.get(fase_n, PREGUNTA_FASE[0]),
         "",
-        "METODOLOGÍA (aplícala de forma invisible y natural):",
-        "- SPIN Selling: preguntas de Situación, Problema, Implicación y Necesidad-Solución sobre el riesgo de medir mal o calibrar tarde.",
-        "- MEDDPICC: en esta fase el foco es " + ctx["foco"] + ". Señala qué elementos faltan por validar y qué pregunta los destapa.",
-        "- Sandler: dale al cliente permiso de decir que no, sin presión y sin forzar una decisión. Busca una respuesta honesta, no una promesa.",
-        "",
+        "PROCESO: primero razona en silencio (qué le importa a este interlocutor, qué elemento está más débil, cuál es la mejor jugada) y después escribe.",
         "FORMATO: responde ÚNICAMENTE con estas cuatro etiquetas XML, en este orden, sin texto fuera de ellas y sin bloques de código:",
-        "<ANALYSIS> Diagnóstico breve: qué sabemos, qué falta validar (lista corta MEDDPICC) y la mejor jugada para esta fase. </ANALYSIS>",
-        "<MESSAGE> Dos versiones listas para enviar por el canal indicado, separadas por una línea con tres guiones (---): primero la versión BREVE y después la COMPLETA. Incluye al menos una pregunta SPIN y un cierre con permiso de decir no. </MESSAGE>",
-        "REGLAS PARA <MESSAGE>: el texto se mostrará en una caja de texto plano. PROHIBIDO usar tablas Markdown (nada de barras verticales ni :---) y PROHIBIDO usar asteriscos.",
-        "En la versión COMPLETA presenta cada propuesta en una lista vertical, con una línea en blanco entre propuestas, con este formato exacto:",
-        "• Cotización [Número] - [Equipo o servicio]",
-        "Impacto en planta: [beneficio técnico metrológico o cumplimiento normativo IATF/ISO, sin inventar certificaciones adicionales]",
-        "Inversión: [monto exacto en USD o MXN; si no hay monto escribe 'Por cotizar']",
-        "La versión BREVE no lleva la lista: solo menciona el paquete y una pregunta.",
-        "<OBJECTIONS> Las dos o tres objeciones más probables (precio, tiempos, prioridad interna) y cómo responderlas con enfoque Sandler. </OBJECTIONS>",
-        "<LOG> Resumen de dos a cuatro líneas para registrar en SCOTT: acción, interlocutor y siguiente paso. </LOG>",
+        "<ANALYSIS> De 5 a 7 líneas cortas: situación (fase, días, monto), qué le importa a este interlocutor, qué elemento está más débil y qué averiguar, y la jugada. </ANALYSIS>",
+        "<MESSAGE> Dos versiones separadas por una línea con tres guiones (---). Primero la CORTA, la que recomiendas enviar (máximo 60 palabras en correo y 40 en WhatsApp). Después la CON DETALLE (máximo 120 palabras), que agrega una línea por cotización con este formato: '• Cotización [número] - [equipo o servicio] - [monto con su moneda]'. Ambas con el saludo y el cierre del canal y con una sola pregunta. </MESSAGE>",
+        "<OBJECTIONS> Las dos objeciones más probables y cómo contestarlas en una o dos frases naturales cada una, como se dirían de viva voz. </OBJECTIONS>",
+        "<LOG> De dos a tres líneas para SCOTT: acción, contacto y siguiente paso. </LOG>",
     ]
-    return "\n".join(lines)
+    return "\n".join(L)
+
+
+def _clave_cuenta(c):
+    """Palabra o par de palabras con que suele nombrarse una cuenta en un texto."""
+    p = [w for w in norm(c).replace(",", " ").split() if w not in ("DE", "DEL", "Y", "LA", "EL", "LOS", "LAS")]
+    genericas = {"SOLUCIONES", "TRANSMISIONES", "FUNDICION", "SERVICIOS", "INDUSTRIAL", "MEXICO", "COMPANIA", "GRUPO"}
+    if not p:
+        return ""
+    if len(p) == 1 or (len(p[0]) >= 5 and p[0] not in genericas):
+        return p[0]
+    return " ".join(p[:2])
+
+
+def verificar_texto(texto, cuenta, permitidos, todas_cuentas, publico=False):
+    """Avisos de datos que no vienen de la fuente: otras cuentas y montos que no están en el paquete."""
+    avisos = []
+    t_up = norm(texto)
+    toks_sel = set(norm(cuenta).replace(",", " ").split())
+    for oc in todas_cuentas:
+        clave = _clave_cuenta(oc)
+        if len(clave) < 3:
+            continue
+        if not publico and (set(clave.split()) & toks_sel):
+            continue
+        if re.search(r"\b" + re.escape(clave) + r"\b", t_up):
+            avisos.append(("Nombra a '" + clave.title() + "' en un contenido público." if publico else
+                           "Menciona a '" + clave.title() + "', que no es la cuenta seleccionada."))
+    for m in re.finditer(r"\$\s*([\d,]+(?:\.\d+)?)|([\d,]{3,}(?:\.\d+)?)\s*(?:USD|MXN|dólares|pesos)", texto, re.I):
+        num = (m.group(1) or m.group(2) or "").replace(",", "")
+        try:
+            v = float(num)
+        except ValueError:
+            continue
+        if v < 1:
+            continue
+        if publico:
+            avisos.append("Incluye un monto ($" + format(v, ",.2f") + ") en un contenido público.")
+        elif not any(abs(v - p_) < 1.0 for p_ in permitidos):
+            avisos.append("El monto $" + format(v, ",.2f") + " no coincide con ninguna propuesta seleccionada.")
+    out = []
+    for a_ in avisos:
+        if a_ not in out:
+            out.append(a_)
+    return out
 
 
 def clean_message(txt):
@@ -1762,6 +1872,7 @@ def render_lab():
                                 key="obj_" + cuenta + "_" + str(fase_n))
         canal = st.radio("Canal", CANALES, horizontal=True)
         perfil = st.selectbox("Interlocutor", PERFILES)
+        contacto = st.text_input("Nombre del contacto (opcional)", placeholder="Ej. Roque Martínez", key="lab_contacto")
     with c2:
         giro = st.text_input("Giro industrial", placeholder="Ej. Aeroespacial, automotriz")
         contexto = st.text_area("Contexto específico (opcional)", height=110,
@@ -1776,9 +1887,10 @@ def render_lab():
             "cotizaciones": ", ".join([c for c in sel["Cotizacion"].astype(str) if c]),
             "desglose": desglose,
             "objetivo": objetivo, "canal": canal, "perfil": perfil, "giro": giro, "contexto": contexto,
-            "foco": FOCO_MEDDPICC.get(fase_n, FOCO_MEDDPICC[0]),
+            "foco": FOCO_MEDDPICC.get(fase_n, FOCO_MEDDPICC[0]), "fase_n": fase_n, "contacto": contacto,
+            "permitidos": [float(x) for x in list(sel["Monto_USD"]) + list(sel["Monto_MXN"]) + [usd, mxn] if float(x) > 0],
         }
-        with st.spinner("Analizando la cuenta con MEDDPICC, SPIN y Sandler..."):
+        with st.spinner("Analizando la cuenta y redactando..."):
             txt, err = call_gemini(build_prompt(ctx))
         if err:
             st.error(err)
@@ -1812,12 +1924,19 @@ def render_lab():
     with pm:
         versiones = [clean_message(v) for v in re.split(r"\n\s*-{3,}\s*\n", tags["MESSAGE"]) if v.strip()]
         if len(versiones) >= 2:
-            ver = st.radio("Versión", ["Breve", "Completa"], horizontal=True, key="ver_" + rid)
-            base_msg = versiones[0] if ver == "Breve" else versiones[1]
+            ver = st.radio("Versión", ["Corta (recomendada)", "Con detalle"], horizontal=True, key="ver_" + rid)
+            base_msg = versiones[0] if ver.startswith("Corta") else versiones[1]
         else:
             ver = "Unica"
             base_msg = clean_message(tags["MESSAGE"])
         mensaje = st.text_area("Mensaje (editable)", value=base_msg, height=190, key="msg_" + rid + "_" + ver)
+        st.caption(str(len(mensaje.split())) + " palabras. Los mensajes cortos se leen completos.")
+        otras = list(base["Cuenta"].unique()) if base is not None else []
+        revis = verificar_texto(mensaje + "\n" + tags["ANALYSIS"] + "\n" + tags["OBJECTIONS"], ctx["cuenta"], ctx.get("permitidos", []), otras)
+        if revis:
+            st.warning("Revisa antes de enviar: " + " ".join(revis))
+        else:
+            st.caption("Revisión automática: no se detectaron otras cuentas ni montos ajenos al paquete.")
     with po:
         st.write(tags["OBJECTIONS"])
     with pl:
@@ -1857,15 +1976,14 @@ def render_lab():
 # MOTOR DE MARKETING DIGITAL (apoyo a la venta)
 # ---------------------------------------------------------------------------
 def build_mk_prompt(ctx):
-    lines = [
-        "Actúa como estratega de marketing digital B2B de Grupo MESS (metrología industrial en México), apoyando a Javier Camacho, Key Account Manager.",
-        "Tu trabajo es crear acciones de marketing que ayuden a cerrar ventas ya abiertas, no campañas genéricas.",
-        "Lenguaje metrológico natural (trazabilidad, incertidumbre, repetibilidad, paros de línea, retrabajo), tono " + ctx["tono"].lower() + ", sin exageraciones.",
-        "",
-        "HECHOS VERIFICABLES DE MESS (apóyate solo en estos; no inventes certificaciones, cifras, clientes, casos de éxito ni plazos):",
-    ]
-    lines += ["- " + h for h in MESS_HECHOS]
-    lines += [
+    L = ["Actúas como estratega de marketing digital B2B de Grupo MESS, al servicio de Javier Camacho, Key Account Manager."]
+    L += list(PERFIL_EXPERTO) + ["", "VOZ Y ESTILO:"] + ["- " + r for r in REGLAS_VOZ]
+    L += ["- Tono solicitado para este plan: " + ctx["tono"].lower() + "."]
+    L += ["", "MÉTODO (sutil, nunca nombrado):"] + ["- " + r for r in REGLAS_METODO]
+    L += ["", "VOCABULARIO TÉCNICO DE REFERENCIA:"] + ["- " + r for r in GLOSARIO_TECNICO]
+    L += ["", "HECHOS DE MESS (apóyate solo en estos; no inventes certificaciones, cifras, clientes, casos de éxito ni plazos):"]
+    L += ["- " + h for h in MESS_HECHOS]
+    L += [
         "",
         "BASE DE LA ACCIÓN:",
         ctx["resumen"],
@@ -1875,22 +1993,23 @@ def build_mk_prompt(ctx):
         "- Evento, oferta o novedad a mencionar: " + (ctx["oferta"] or "Ninguna"),
         "",
         "REGLAS:",
-        "- El contenido de LinkedIn y de la FICHA es público: nunca menciones nombres de clientes ni montos.",
-        "- Si un caso de éxito no está en los hechos, no lo inventes; propón 'tema de caso a documentar'.",
-        "- Aplica SPIN en los ganchos y Sandler en los cierres: da permiso de decir que no, sin presión.",
+        "- LinkedIn y la ficha son públicos: nunca menciones nombres de clientes ni montos.",
+        "- Si un caso de éxito no está en los hechos, no lo inventes; propón un 'tema de caso a documentar'.",
+        "- Ninguna pieza nombra las metodologías de venta. Los correos y mensajes cierran dejando una salida cómoda al lector.",
+        "- Longitud: LinkedIn hasta 110 palabras; cada correo hasta 90; cada WhatsApp hasta 45; la ficha, una página breve.",
         "- Texto plano: prohibido usar tablas Markdown y asteriscos.",
         "- Para los canales no solicitados escribe únicamente: No solicitado.",
         "",
         "FORMATO: responde ÚNICAMENTE con estas siete etiquetas XML, en este orden, sin texto fuera de ellas ni bloques de código:",
-        "<ESTRATEGIA> Mensaje central, audiencia, por qué ahora y cómo esta acción apoya el cierre en la fase actual (5 a 8 líneas). </ESTRATEGIA>",
+        "<ESTRATEGIA> Mensaje central, audiencia, por qué ahora y cómo apoya el cierre en la fase actual (5 a 7 líneas). </ESTRATEGIA>",
         "<LINKEDIN> Una publicación lista para publicar: gancho, tres ideas, llamada a la acción y máximo cinco hashtags. </LINKEDIN>",
         "<EMAILS> Secuencia de tres correos (día 0, día 3 y día 7), cada uno con 'Asunto:' y cuerpo corto, separados por una línea con tres guiones (---). </EMAILS>",
-        "<WHATSAPP> Dos mensajes cortos de seguimiento separados por una línea con tres guiones (---). </WHATSAPP>",
-        "<FICHA> Texto para una ficha de una página o landing: titular, subtítulo y tres bloques (Qué resuelve, Por qué MESS, Siguiente paso). </FICHA>",
+        "<WHATSAPP> Dos mensajes de seguimiento separados por una línea con tres guiones (---). </WHATSAPP>",
+        "<FICHA> Titular, subtítulo y tres bloques breves (Qué resuelve, Por qué MESS, Siguiente paso). </FICHA>",
         "<CALENDARIO> Plan de 14 días: una línea por acción con el día y el responsable (KAM o Marketing). </CALENDARIO>",
-        "<KPIS> Entre cuatro y seis indicadores para medir si la acción apoyó la venta (respuestas, cotizaciones reabiertas, reuniones agendadas, POs). Sin prometer resultados ni inventar cifras. </KPIS>",
+        "<KPIS> Entre cuatro y seis indicadores para medir si la acción apoyó la venta. Sin prometer resultados ni inventar cifras. </KPIS>",
     ]
-    return "\n".join(lines)
+    return "\n".join(L)
 
 
 def build_mk_docx(ctx, tags):
@@ -1997,9 +2116,14 @@ def render_marketing():
     st.divider()
     names = ["Estrategia", "LinkedIn", "Correos", "WhatsApp", "Ficha o landing", "Calendario 14 días", "Indicadores"]
     keys = ["ESTRATEGIA", "LINKEDIN", "EMAILS", "WHATSAPP", "FICHA", "CALENDARIO", "KPIS"]
+    todas = list(base["Cuenta"].unique()) if base is not None else []
     for tab, name, key in zip(st.tabs(names), names, keys):
         with tab:
-            st.text_area(name + " (editable)", value=tags.get(key, ""), height=300, key="mk_" + key + "_" + rid)
+            editado_mk = st.text_area(name + " (editable)", value=tags.get(key, ""), height=300, key="mk_" + key + "_" + rid)
+            if key in ("LINKEDIN", "FICHA"):
+                rv = verificar_texto(editado_mk, "", [], todas, publico=True)
+                if rv:
+                    st.warning("Contenido público, revisa antes de publicar: " + " ".join(rv))
 
     st.markdown("##### Ejecución rápida")
     wa_msgs = [m.strip() for m in re.split(r"\n\s*-{3,}\s*\n", tags.get("WHATSAPP", "")) if m.strip()]
@@ -2522,6 +2646,9 @@ def render_reporte():
         prompt = "\n".join([
             "Redacta, en español y en texto plano (sin Markdown ni asteriscos), un resumen ejecutivo de 5 a 8 líneas para la gerencia y la dirección de MESS Servicios Metrológicos sobre la semana reportada.",
             "Usa solo los datos del reporte. Menciona logros, riesgos o pendientes, el foco de la semana siguiente y el forecast.",
+            "Cada hecho debe quedar con el cliente o folio con que aparece en el reporte; no atribuyas una acción, persona o cargo a otra cuenta.",
+            "La agenda proviene de la bitácora del usuario, no del CRM. Si dice 'no capturado', significa que el dato no se registró, no que no ocurrió (por ejemplo, cierres del mes).",
+            "Escribe como un vendedor experto que informa a su dirección: directo, natural y breve.",
             "Cita los montos en USD y MXN por separado, sin convertir ni sumar entre monedas. No inventes cifras, clientes ni resultados.",
             "", "REPORTE:", base_txt,
         ])
