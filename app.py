@@ -1234,6 +1234,407 @@ def build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, age
     return "\n".join(L)
 
 
+
+# ---------------------------------------------------------------------------
+# REPORTE A GERENCIA: AGENDA, FORECAST Y REPORTE EN EL FORMATO DEL CORREO
+# ---------------------------------------------------------------------------
+GM_TIPOS = ACT_TIPOS + ["Día no laborable"]
+GM_COLS = ["Fecha", "Cuenta", "Tipo", "Descripcion", "Cotizaciones", "Monto", "Moneda"]
+NO_LABORABLE = ("ASUETO", "VACACION", "FALLEC", "INCAPAC", "PERMISO", "FESTIVO", "DIA LIBRE", "DESCANSO")
+
+
+def es_no_laborable(texto):
+    n = norm(texto)
+    return any(k in n for k in NO_LABORABLE)
+
+
+def ciclo_viernes_jueves(envio):
+    """Ciclo de viernes a jueves. Devuelve (reporte_desde, reporte_hasta, agenda_desde, agenda_hasta)."""
+    envio = pd.Timestamp(envio).normalize()
+    inicio = envio - pd.Timedelta(days=(envio.weekday() - 4) % 7)
+    return inicio - pd.Timedelta(days=7), inicio - pd.Timedelta(days=1), inicio, inicio + pd.Timedelta(days=6)
+
+
+def rango_corto(ini, fin):
+    ini, fin = pd.Timestamp(ini), pd.Timestamp(fin)
+    if ini.month == fin.month and ini.year == fin.year:
+        return str(ini.day) + " al " + str(fin.day) + " de " + MESES_ES[fin.month - 1] + " del " + str(fin.year)
+    return (str(ini.day) + " de " + MESES_ES[ini.month - 1] + " al " + str(fin.day) + " de "
+            + MESES_ES[fin.month - 1] + " del " + str(fin.year))
+
+
+def _txt(v):
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip()
+
+
+def load_plantilla_gerencia(raw_bytes, nombre):
+    """Lee tu plantilla de agenda y reporte (Excel con celdas combinadas o CSV). Devuelve (DataFrame, avisos)."""
+    if str(nombre).lower().endswith((".xlsx", ".xlsm")):
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(raw_bytes), data_only=True)
+            ws = wb["Actividades"] if "Actividades" in wb.sheetnames else wb.worksheets[0]
+            grid = [[ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)] for r in range(1, ws.max_row + 1)]
+            for rg in ws.merged_cells.ranges:
+                v = ws.cell(row=rg.min_row, column=rg.min_col).value
+                for r in range(rg.min_row, rg.max_row + 1):
+                    for c in range(rg.min_col, rg.max_col + 1):
+                        grid[r - 1][c - 1] = v
+        except Exception as e:
+            return None, ["No se pudo leer el Excel: " + str(e)]
+    else:
+        text = decode_bytes(raw_bytes)
+        grid = list(csv.reader(io.StringIO(text), delimiter=detect_delimiter(text)))
+
+    h = None
+    for i, r in enumerate(grid):
+        j = " ".join(norm(c) for c in r if c is not None)
+        if "FECHA" in j and ("CUENTA" in j or "CLIENTE" in j):
+            h = i
+            break
+    if h is None:
+        return None, ["No se encontró la fila de encabezados (Fecha y Cuenta o cliente)."]
+    header = [norm(c) if c is not None else "" for c in grid[h]]
+
+    def col(*keys, exacto=False):
+        for k in keys:
+            for pos, n in enumerate(header):
+                if (n == k) if exacto else (k in n):
+                    return pos
+        return None
+
+    pos = {
+        "Fecha": col("FECHA", exacto=True) if col("FECHA", exacto=True) is not None else col("FECHA"),
+        "Cuenta": col("CUENTA", "CLIENTE"), "Tipo": col("TIPO"), "Descripcion": col("DESCRIPCION"),
+        "Cotizaciones": col("COTIZ"), "Monto": col("MONTO"), "Moneda": col("MONEDA"),
+    }
+    if pos["Fecha"] is None or pos["Cuenta"] is None:
+        return None, ["Faltan las columnas Fecha o Cuenta o cliente."]
+
+    def g(row, k):
+        p_ = pos.get(k)
+        return row[p_] if p_ is not None and p_ < len(row) else None
+
+    out = []
+    sin_fecha = 0
+    ult = {"Fecha": pd.NaT, "Cuenta": "", "Tipo": ""}
+    for row in grid[h + 1:]:
+        f, cu, ti, de, co = (g(row, k) for k in ("Fecha", "Cuenta", "Tipo", "Descripcion", "Cotizaciones"))
+        if any(norm(_txt(x)) == "FORECAST" for x in (cu, ti, de, co)):
+            continue
+        if not any(_txt(x) for x in (f, cu, ti, de, co)):
+            continue
+        continuacion = not _txt(f)
+        if _txt(f):
+            fecha = parse_fecha(pd.Series([f])).iloc[0]
+            ult["Fecha"] = fecha
+        else:
+            fecha = ult["Fecha"]
+        cuenta = _txt(cu) or (ult["Cuenta"] if continuacion else "")
+        tipo_t = _txt(ti) or (ult["Tipo"] if continuacion else "")
+        if _txt(cu):
+            ult["Cuenta"] = _txt(cu)
+        if _txt(ti):
+            ult["Tipo"] = _txt(ti)
+        if pd.isna(fecha):
+            sin_fecha += 1
+            continue
+        desc = _txt(de)
+        if es_no_laborable(cuenta) or (not tipo_t and es_no_laborable(desc)):
+            tipo = "Día no laborable"
+        elif tipo_t:
+            tipo = tipo_canonico(tipo_t)
+        else:
+            tipo = "Visita"
+        m_raw, mo_raw = g(row, "Monto"), _txt(g(row, "Moneda")).upper()
+        monto, mon = float("nan"), mo_raw if mo_raw in ("USD", "MXN") else ""
+        if _txt(m_raw):
+            if isinstance(m_raw, (int, float)):
+                monto = float(m_raw)
+            else:
+                monto, c_ = parse_valor(m_raw)
+                if not mon and ("USD" in norm(m_raw) or "MXN" in norm(m_raw)):
+                    mon = c_
+        out.append({"Fecha": fecha, "Cuenta": cuenta, "Tipo": tipo, "Descripcion": desc,
+                    "Cotizaciones": _txt(co), "Monto": monto, "Moneda": mon})
+    avisos = []
+    if sin_fecha:
+        avisos.append(str(sin_fecha) + " fila(s) sin fecha válida quedaron fuera.")
+    if not out:
+        return None, ["La plantilla no tiene filas con datos debajo de los encabezados."] + avisos
+    return pd.DataFrame(out, columns=GM_COLS), avisos
+
+
+def _tokens_ct(txt):
+    return re.findall(r"MESS-CT-[\d\-]*\d", norm(txt))
+
+
+def forecast_agenda(ag):
+    """Suma de los montos de la agenda por moneda. Una cotización repetida se cuenta una sola vez."""
+    d = ag.copy()
+    d["Monto"] = pd.to_numeric(d["Monto"], errors="coerce")
+    d["Moneda"] = d["Moneda"].fillna("").astype(str).str.upper().str.strip()
+    vistos, cuenta, avisos = set(), [], []
+    for _, r in d.iterrows():
+        toks = _tokens_ct(r["Cotizaciones"])
+        dup = len(toks) == 1 and toks[0] in vistos
+        if len(toks) == 1:
+            vistos.add(toks[0])
+        cuenta.append(not dup)
+        if dup:
+            avisos.append("La cotización " + toks[0] + " aparece más de una vez en la agenda; se cuenta una sola vez.")
+    d["_cuenta"] = cuenta
+    ok = d["_cuenta"] & (d["Monto"] > 0)
+    res = {m: float(d.loc[ok & (d["Moneda"] == m), "Monto"].sum()) for m in ("USD", "MXN")}
+    n_sin_mon = int((ok & ~d["Moneda"].isin(["USD", "MXN"])).sum())
+    if n_sin_mon:
+        avisos.append(str(n_sin_mon) + " fila(s) con monto pero sin moneda (USD o MXN): no se suman.")
+    res["avisos"] = list(dict.fromkeys(avisos))
+    res["lineas"] = int(ok.sum())
+    return res
+
+
+def verificar_contra_radar(ag, b):
+    """Compara los montos capturados con los del CRM. Devuelve (diferencias, cotizaciones que no están en el radar)."""
+    mapa = {}
+    for r in b.itertuples():
+        if r.Cotizacion:
+            mapa[norm(r.Cotizacion)] = (float(r.Monto_USD) if r.Monto_USD > 0 else float(r.Monto_MXN),
+                                        "USD" if r.Monto_USD > 0 else "MXN")
+    difs, ausentes = [], []
+    for r in ag.itertuples():
+        toks = _tokens_ct(r.Cotizaciones)
+        if not toks:
+            continue
+        ausentes += [t for t in toks if t not in mapa]
+        if all(t in mapa for t in toks) and pd.notna(r.Monto) and float(r.Monto) > 0:
+            monedas = {mapa[t][1] for t in toks}
+            suma = sum(mapa[t][0] for t in toks)
+            if monedas != {str(r.Moneda).upper()} or abs(suma - float(r.Monto)) > 1.0:
+                difs.append({"Fecha": r.Fecha, "Cuenta": r.Cuenta, "Cotizaciones": r.Cotizaciones,
+                             "Capturado": format(float(r.Monto), ",.2f") + " " + str(r.Moneda),
+                             "CRM": format(suma, ",.2f") + " " + "/".join(sorted(monedas))})
+    return difs, sorted(set(ausentes))
+
+
+def _fmt_monto(v):
+    try:
+        return "" if pd.isna(v) or float(v) == 0 else format(float(v), ",.2f")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_f(v):
+    return "" if pd.isna(v) else pd.Timestamp(v).strftime("%d/%m/%Y")
+
+
+def _limpiar_ag(ag):
+    d = ag.copy()
+    for c in ("Cuenta", "Tipo", "Descripcion", "Cotizaciones", "Moneda"):
+        d[c] = d[c].fillna("").astype(str).str.strip()
+    d["Fecha"] = pd.to_datetime(d["Fecha"], errors="coerce")
+    d["Monto"] = pd.to_numeric(d["Monto"], errors="coerce")
+    d = d[d["Fecha"].notna() & ((d["Cuenta"] != "") | (d["Descripcion"] != "") | (d["Monto"] > 0))]
+    return d.sort_values("Fecha", kind="stable").reset_index(drop=True)
+
+
+def _limpiar_rep(rp):
+    d = rp.copy()
+    for c in ("Cuenta", "Tipo", "Descripcion"):
+        d[c] = d[c].fillna("").astype(str).str.strip()
+    d["Fecha"] = pd.to_datetime(d["Fecha"], errors="coerce")
+    d["En correo"] = d["En correo"].fillna(True).astype(bool)
+    d = d[d["Fecha"].notna() & d["En correo"] & ((d["Cuenta"] != "") | (d["Descripcion"] != ""))]
+    return d.sort_values("Fecha", kind="stable").reset_index(drop=True)
+
+
+def _grupos(d):
+    """Rangos de filas contiguas con la misma fecha y cuenta (la visita se muestra una vez)."""
+    g, i = [], 0
+    while i < len(d):
+        j = i
+        while j + 1 < len(d) and d.at[j + 1, "Fecha"] == d.at[i, "Fecha"] and d.at[j + 1, "Cuenta"] == d.at[i, "Cuenta"]:
+            j += 1
+        g.append((i, j))
+        i = j + 1
+    return g
+
+
+def correo_partes(dest, ag, rp, ag_rango, rp_rango, fc, firma):
+    """Arma el correo: devuelve (html, texto)."""
+    saludo = "Saludos " + dest.strip() if dest.strip() else "Saludos"
+    t_ag = "Te comparto mi agenda de actividades del " + ag_rango + "."
+    t_fc = "Forecast del " + ag_rango + "."
+    t_rp = "Reporte de actividades del " + rp_rango + "."
+    td = "border:1px solid #999;padding:3px 6px;vertical-align:top;font-size:11px;font-family:Calibri,Arial,sans-serif"
+    th = td + ";background:#004580;color:#ffffff;font-weight:bold"
+    H = ['<p style="font-family:Calibri,Arial,sans-serif;font-size:13px">' + saludo + "</p>",
+         '<p style="font-family:Calibri,Arial,sans-serif;font-size:13px">' + t_ag + "</p>",
+         '<table style="border-collapse:collapse"><tr>' + "".join('<th style="' + th + '">' + c + "</th>" for c in
+                                                                  ["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción", "Cotizaciones", "Monto", "Moneda"]) + "</tr>"]
+    T = [saludo, "", t_ag, "", "\t".join(["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción", "Cotizaciones", "Monto", "Moneda"])]
+    primero = {i: (j - i + 1) for i, j in _grupos(ag)}
+    for i, r in ag.iterrows():
+        fila = "<tr>"
+        if i in primero:
+            n = primero[i]
+            fila += ('<td style="' + td + '" rowspan="' + str(n) + '">' + _fmt_f(r["Fecha"]) + "</td>"
+                     '<td style="' + td + '" rowspan="' + str(n) + '">' + r["Cuenta"] + "</td>"
+                     '<td style="' + td + '" rowspan="' + str(n) + '">' + r["Tipo"] + "</td>")
+        fila += ('<td style="' + td + '">' + r["Descripcion"] + "</td>"
+                 '<td style="' + td + '">' + r["Cotizaciones"] + "</td>"
+                 '<td style="' + td + ';text-align:right">' + _fmt_monto(r["Monto"]) + "</td>"
+                 '<td style="' + td + '">' + (r["Moneda"] if _fmt_monto(r["Monto"]) else "") + "</td></tr>")
+        H.append(fila)
+        T.append("\t".join([_fmt_f(r["Fecha"]), r["Cuenta"], r["Tipo"], r["Descripcion"], r["Cotizaciones"], _fmt_monto(r["Monto"]),
+                            r["Moneda"] if _fmt_monto(r["Monto"]) else ""]))
+    H.append("</table>")
+    H.append('<p style="font-family:Calibri,Arial,sans-serif;font-size:13px">' + t_fc + "</p>")
+    T += ["", t_fc]
+    lin = [(m, fc[m]) for m in ("MXN", "USD") if fc[m] > 0]
+    H.append('<table style="border-collapse:collapse">')
+    for k, (m, v) in enumerate(lin):
+        H.append('<tr><td style="' + td + ';font-weight:bold">' + ("Forecast" if k == 0 else "") + '</td><td style="' + td
+                 + ';text-align:right">' + format(v, ",.2f") + '</td><td style="' + td + '">' + m + "</td></tr>")
+        T.append(("Forecast" if k == 0 else "") + "\t" + format(v, ",.2f") + "\t" + m)
+    if not lin:
+        H.append('<tr><td style="' + td + '">Sin montos en la agenda</td></tr>')
+        T.append("Sin montos en la agenda")
+    H.append("</table>")
+    H.append('<p style="font-family:Calibri,Arial,sans-serif;font-size:13px">' + t_rp + "</p>")
+    H.append('<table style="border-collapse:collapse"><tr>' + "".join('<th style="' + th + '">' + c + "</th>" for c in
+                                                                     ["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción"]) + "</tr>")
+    T += ["", t_rp, "", "\t".join(["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción"])]
+    for _, r in rp.iterrows():
+        tipo = "" if r["Tipo"] == "Día no laborable" else r["Tipo"]
+        H.append('<tr><td style="' + td + '">' + _fmt_f(r["Fecha"]) + '</td><td style="' + td + '">' + r["Cuenta"] + '</td><td style="' + td
+                 + '">' + tipo + '</td><td style="' + td + '">' + r["Descripcion"] + "</td></tr>")
+        T.append("\t".join([_fmt_f(r["Fecha"]), r["Cuenta"], tipo, r["Descripcion"]]))
+    H.append("</table>")
+    f_html = "<br>".join(x for x in firma.split("\n"))
+    H.append('<p style="font-family:Calibri,Arial,sans-serif;font-size:12px">' + f_html + "</p>")
+    T += ["", firma]
+    return "\n".join(H), "\n".join(T)
+
+
+def correo_docx(dest, ag, rp, ag_rango, rp_rango, fc, firma):
+    doc = Document()
+    try:
+        doc.styles["Normal"].font.name = "Calibri"
+        doc.styles["Normal"].font.size = Pt(10)
+    except Exception:
+        pass
+    doc.add_paragraph("Saludos " + dest.strip() if dest.strip() else "Saludos")
+    doc.add_paragraph("Te comparto mi agenda de actividades del " + ag_rango + ".")
+    cab = ["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción", "Cotizaciones", "Monto", "Moneda"]
+    t = doc.add_table(rows=1, cols=7)
+    t.style = "Table Grid"
+    for k, c in enumerate(cab):
+        t.rows[0].cells[k].text = c
+        for run in t.rows[0].cells[k].paragraphs[0].runs:
+            run.bold = True
+    pr = {i: j for i, j in _grupos(ag)}
+    for i, r in ag.iterrows():
+        cel = t.add_row().cells
+        if i in pr:
+            cel[0].text, cel[1].text, cel[2].text = _fmt_f(r["Fecha"]), r["Cuenta"], r["Tipo"]
+        cel[3].text, cel[4].text = r["Descripcion"], r["Cotizaciones"]
+        cel[5].text = _fmt_monto(r["Monto"])
+        cel[6].text = r["Moneda"] if _fmt_monto(r["Monto"]) else ""
+    for i, j in pr.items():
+        if j > i:
+            for c in (0, 1, 2):
+                t.cell(i + 1, c).merge(t.cell(j + 1, c))
+    doc.add_paragraph("")
+    doc.add_paragraph("Forecast del " + ag_rango + ".")
+    lin = [(m, fc[m]) for m in ("MXN", "USD") if fc[m] > 0]
+    if lin:
+        tf = doc.add_table(rows=0, cols=3)
+        tf.style = "Table Grid"
+        for k, (m, v) in enumerate(lin):
+            cel = tf.add_row().cells
+            cel[0].text, cel[1].text, cel[2].text = ("Forecast" if k == 0 else ""), format(v, ",.2f"), m
+    doc.add_paragraph("")
+    doc.add_paragraph("Reporte de actividades del " + rp_rango + ".")
+    t2 = doc.add_table(rows=1, cols=4)
+    t2.style = "Table Grid"
+    for k, c in enumerate(["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción"]):
+        t2.rows[0].cells[k].text = c
+        for run in t2.rows[0].cells[k].paragraphs[0].runs:
+            run.bold = True
+    for _, r in rp.iterrows():
+        cel = t2.add_row().cells
+        cel[0].text, cel[1].text = _fmt_f(r["Fecha"]), r["Cuenta"]
+        cel[2].text = "" if r["Tipo"] == "Día no laborable" else r["Tipo"]
+        cel[3].text = r["Descripcion"]
+    doc.add_paragraph("")
+    for ln in firma.split("\n"):
+        doc.add_paragraph(ln)
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def plantilla_xlsx(ag, rp):
+    """Guarda agenda y reporte en tu mismo formato (con la suma del forecast por moneda como fórmula)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Actividades"
+    for k, c in enumerate(["Fecha", "Cuenta o cliente", "Tipo de actividad", "Descripción", "Cotizaciones", "Monto", "Moneda"], 1):
+        x = ws.cell(row=1, column=k, value=c)
+        x.font = Font(bold=True, color="FFFFFF")
+        x.fill = PatternFill("solid", fgColor="004580")
+        x.alignment = Alignment(horizontal="center", wrap_text=True)
+    r = 2
+    for _, f in rp.iterrows():
+        ws.cell(row=r, column=1, value=f["Fecha"].to_pydatetime()).number_format = "dd/mm/yyyy"
+        ws.cell(row=r, column=2, value=f["Cuenta"])
+        ws.cell(row=r, column=3, value="" if f["Tipo"] == "Día no laborable" else f["Tipo"])
+        ws.cell(row=r, column=4, value=f["Descripcion"])
+        r += 1
+    a0 = r
+    grp = _grupos(ag)
+    for _, f in ag.iterrows():
+        ws.cell(row=r, column=1, value=f["Fecha"].to_pydatetime()).number_format = "dd/mm/yyyy"
+        ws.cell(row=r, column=2, value=f["Cuenta"])
+        ws.cell(row=r, column=3, value=f["Tipo"])
+        ws.cell(row=r, column=4, value=f["Descripcion"])
+        ws.cell(row=r, column=5, value=f["Cotizaciones"])
+        if pd.notna(f["Monto"]) and float(f["Monto"]) > 0:
+            ws.cell(row=r, column=6, value=float(f["Monto"])).number_format = "#,##0.00"
+            ws.cell(row=r, column=7, value=f["Moneda"])
+        r += 1
+    a1 = r - 1
+    for i, j in grp:
+        if j > i:
+            for c in (1, 2, 3):
+                ws.merge_cells(start_row=a0 + i, start_column=c, end_row=a0 + j, end_column=c)
+    if a1 >= a0:
+        r += 1
+        for m in ("MXN", "USD"):
+            ws.cell(row=r, column=5, value="Forecast" if m == "MXN" else None)
+            ws.cell(row=r, column=6, value='=SUMIF(G' + str(a0) + ":G" + str(a1) + ',"' + m + '",F' + str(a0) + ":F" + str(a1) + ")").number_format = "#,##0.00"
+            ws.cell(row=r, column=7, value=m)
+            r += 1
+    for col_, w in zip("ABCDEFG", [13, 40, 18, 60, 36, 14, 9]):
+        ws.column_dimensions[col_].width = w
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 # ===========================================================================
 # LÓGICA DE DATOS (fin)
 # ===========================================================================
@@ -1594,7 +1995,7 @@ if base is not None:
 
 hay_comision = any(v > 0 for v in rates.values())
 
-tab_dash, tab_lab, tab_mk, tab_cob, tab_rep = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital", "Órdenes y Cobranza", "Reporte Semanal"])
+tab_dash, tab_lab, tab_mk, tab_cob, tab_rep = st.tabs(["Dashboard de Oportunidades", "Laboratorio IA", "Marketing Digital", "Órdenes y Cobranza", "Reporte a gerencia"])
 
 
 # ---------------------------------------------------------------------------
@@ -2375,327 +2776,197 @@ def render_cobranza():
 
 
 # ---------------------------------------------------------------------------
-# PESTAÑA: REPORTE SEMANAL (ACTIVIDADES, AGENDA Y FORECAST)
+# PESTAÑA: REPORTE A GERENCIA
 # ---------------------------------------------------------------------------
-def build_reporte_docx(texto):
-    doc = Document()
-    lineas = texto.split("\n")
-    doc.add_heading(lineas[0], 0)
-    for ln in lineas[1:]:
-        if re.match(r"^\d\. ", ln) or ln.strip() == "RESUMEN EJECUTIVO":
-            doc.add_heading(ln, level=2)
-        elif ln.strip():
-            doc.add_paragraph(ln)
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
+def _secret(nombre, defecto=""):
+    try:
+        return str(st.secrets.get(nombre) or defecto)
+    except Exception:
+        return defecto
 
 
-def build_reporte_xlsx(hojas):
-    """Libro de Excel con una hoja por sección del reporte (requiere openpyxl)."""
-    from openpyxl.styles import Font
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        for nombre, t in hojas.items():
-            nm = nombre[:31]
-            t.to_excel(w, sheet_name=nm, index=False)
-            ws = w.sheets[nm]
-            for i, c in enumerate(t.columns, 1):
-                letra = ws.cell(row=1, column=i).column_letter
-                largo = int(t[c].astype(str).str.len().max()) if len(t) else 10
-                ws.column_dimensions[letra].width = min(60, max(12, largo + 2, len(str(c)) + 2))
-                ws.cell(row=1, column=i).font = Font(bold=True)
-    buf.seek(0)
-    return buf
+def _vacio_ag():
+    return pd.DataFrame({
+        "Fecha": pd.Series(dtype="datetime64[ns]"), "Cuenta": pd.Series(dtype="object"), "Tipo": pd.Series(dtype="object"),
+        "Descripcion": pd.Series(dtype="object"), "Cotizaciones": pd.Series(dtype="object"),
+        "Monto": pd.Series(dtype="float64"), "Moneda": pd.Series(dtype="object")})
 
 
-def _fechas(t, cols):
-    t = t.copy()
-    for c in cols:
-        if c in t.columns:
-            t[c] = pd.to_datetime(t[c]).dt.strftime("%d/%m/%Y").fillna("")
-    return t
+def _vacio_rp():
+    return pd.DataFrame({
+        "En correo": pd.Series(dtype="bool"), "Fecha": pd.Series(dtype="datetime64[ns]"), "Cuenta": pd.Series(dtype="object"),
+        "Tipo": pd.Series(dtype="object"), "Descripcion": pd.Series(dtype="object")})
 
 
-def render_reporte():
-    st.markdown("### Reporte semanal: actividades, agenda y forecast")
-    modo = st.radio("Semana a reportar", ["Semana anterior (ya transcurrida)", "Otra semana"], horizontal=True, key="rep_modo")
-    if modo.startswith("Semana anterior"):
-        lunes, domingo = semana_anterior(hoy)
-    else:
-        ref = st.date_input("Cualquier día de la semana a reportar", value=(hoy - pd.Timedelta(days=7)).date(), key="rep_ref")
-        lunes, domingo = rango_semana(ref)
-        if domingo >= hoy:
-            st.warning("Esa semana aún no termina: el reporte quedará parcial.")
-    fin = domingo + pd.Timedelta(days=1)
-    fin_sig = fin + pd.Timedelta(days=7)
-    st.markdown("**Semana del " + fecha_es(lunes) + " al " + fecha_es(domingo) + "**")
-    st.caption("Los montos van en USD y MXN tal como vienen en el registro; no se convierten con tipo de cambio.")
-
-    with st.expander("Plantilla de actividades y agenda (captura rápida)"):
-        st.write("Columnas: " + ", ".join(PLANTILLA_ACT) + ".")
-        st.caption("Estatus: " + ", ".join(ACT_ESTATUS) + ". Las 'Realizada' (o sin estatus) forman el reporte de la semana; "
-                   "las 'Programada' o 'Reprogramada' con fecha forman la agenda de la semana siguiente. "
-                   "Lo capturado aquí no se guarda en la nube: descárgalo y sube tu bitácora (Excel o CSV) cada semana.")
-        st.download_button("Descargar encabezados de la plantilla (CSV)", plantilla_act_csv_bytes(),
-                           file_name="plantilla_actividades.csv", mime="text/csv")
-        vacio_df = pd.DataFrame({
-            "Fecha": pd.Series(dtype="datetime64[ns]"), "Hora": pd.Series(dtype="object"),
-            "Cuenta o cliente": pd.Series(dtype="object"), "Tipo de actividad": pd.Series(dtype="object"),
-            "Estatus": pd.Series(dtype="object"), "Descripción y resultado": pd.Series(dtype="object"),
-            "Siguiente paso": pd.Series(dtype="object"), "Fecha siguiente paso": pd.Series(dtype="datetime64[ns]"),
-            "Proyecto u OV": pd.Series(dtype="object"), "Monto": pd.Series(dtype="float64"), "Moneda": pd.Series(dtype="object"),
-        })
-        try:
-            cfg = {
-                "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                "Fecha siguiente paso": st.column_config.DateColumn("Fecha siguiente paso", format="DD/MM/YYYY"),
-                "Tipo de actividad": st.column_config.SelectboxColumn("Tipo de actividad", options=ACT_TIPOS),
-                "Estatus": st.column_config.SelectboxColumn("Estatus", options=ACT_ESTATUS),
-                "Moneda": st.column_config.SelectboxColumn("Moneda", options=["USD", "MXN"]),
-            }
-            editado = st.data_editor(vacio_df, num_rows="dynamic", key="act_editor", column_config=cfg)
-        except Exception:
-            editado = vacio_df
-        if len(editado):
-            st.download_button("Descargar lo capturado (CSV)", editado.to_csv(index=False).encode("utf-8-sig"),
-                               file_name="actividades_capturadas.csv", mime="text/csv")
-    archivo_act = st.file_uploader("Bitácora de actividades y agenda (CSV o Excel)", type=["csv", "xlsx"], key="act_file")
-
-    partes = []
-    if archivo_act is not None:
-        da, avs = load_actividades(archivo_act.getvalue(), archivo_act.name)
-        for a_ in avs:
-            st.warning(a_)
-        if da is not None:
-            partes.append(da)
-    if len(editado):
-        partes.append(normalizar_actividades(editado.copy()))
-    A = pd.concat(partes, ignore_index=True) if partes else normalizar_actividades(pd.DataFrame(columns=PLANTILLA_ACT))
-    n_sin_fecha = int(A["Fecha"].isna().sum())
-    if n_sin_fecha:
-        st.warning(str(n_sin_fecha) + " actividad(es) sin fecha válida: quedan fuera del reporte.")
-
-    en_semana = (A["Fecha"] >= lunes) & (A["Fecha"] < fin)
-    act = A[en_semana & (A["Estatus"] == "Realizada")].sort_values(["Fecha", "Hora"])
-    n_otras = int((en_semana & (A["Estatus"] != "Realizada")).sum())
-    if n_otras:
-        st.caption(str(n_otras) + " actividad(es) de esa semana con estatus programada, reprogramada o cancelada quedan fuera del conteo de realizadas.")
-    agenda = agenda_siguiente(A, fin, fin_sig)
-
-    nuevos = None
-    if base is not None:
-        nuevos = base[(base["Registro"] >= lunes) & (base["Registro"] < fin)].sort_values("Registro")
-    ov = st.session_state.get("ov_df")
-    ovs = ov_fact = ov_cobro = None
-    if ov is not None:
-        ovs = ov[(ov["Registro"] >= lunes) & (ov["Registro"] < fin)].sort_values("Registro")
-        if ov["F_Fact"].notna().any():
-            ov_fact = ov[(ov["F_Fact"] >= lunes) & (ov["F_Fact"] < fin)]
-        if ov["F_Cobro"].notna().any():
-            ov_cobro = ov[(ov["F_Cobro"] >= lunes) & (ov["F_Cobro"] < fin)]
-    fc = f_lineas = None
-    if base is not None:
-        fc = forecast_datos(base, hoy)
-        f_lineas = forecast_texto(fc, meta, cerrado)
-
-    if len(act) == 0:
-        st.info("No hay actividades realizadas capturadas para esa semana: el reporte incluirá lo que traen tus extracciones del CRM.")
-
-    def contar(*tipos):
-        return int(act["Tipo"].isin(tipos).sum())
-
-    c1, c2, c3, c4 = st.columns(4)
+def render_gerencia():
+    st.markdown("### Reporte a gerencia")
+    st.caption("Arma el correo semanal con tu formato: agenda de la próxima semana, forecast y reporte de actividades. "
+               "Ciclo de viernes a jueves. Los montos van en USD y MXN tal como vienen en el registro.")
+    c1, c2 = st.columns([1, 2])
     with c1:
-        kpi_card("Actividades realizadas", str(len(act)), "En la semana reportada")
+        envio = st.date_input("Fecha de envío", value=hoy.date(), key="gm_envio")
+    r_ini, r_fin, a_ini, a_fin = ciclo_viernes_jueves(envio)
+    k = str(envio)
+    with st.expander("Ajustar fechas del ciclo"):
+        x1, x2, x3, x4 = st.columns(4)
+        with x1:
+            r_ini = pd.Timestamp(st.date_input("Reporte desde", value=r_ini.date(), key="gm_ri_" + k))
+        with x2:
+            r_fin = pd.Timestamp(st.date_input("Reporte hasta", value=r_fin.date(), key="gm_rf_" + k))
+        with x3:
+            a_ini = pd.Timestamp(st.date_input("Agenda desde", value=a_ini.date(), key="gm_ai_" + k))
+        with x4:
+            a_fin = pd.Timestamp(st.date_input("Agenda hasta", value=a_fin.date(), key="gm_af_" + k))
+    rp_rango, ag_rango = rango_corto(r_ini, r_fin), rango_corto(a_ini, a_fin)
     with c2:
-        kpi_card("Visitas", str(contar("Visita")), "Presenciales")
-    with c3:
-        kpi_card("Contactos", str(contar("Llamada", "Correo", "WhatsApp", "Reunión virtual")), "Llamadas, correos, WhatsApp y reuniones")
-    with c4:
-        kpi_card("Cotizaciones enviadas", str(contar("Cotización enviada")), "Según la bitácora")
+        st.markdown("**Reporte de actividades:** " + rp_rango + "  \n**Agenda y forecast:** " + ag_rango)
 
-    d1, d2, d3, d4 = st.columns(4)
+    archivo = st.file_uploader("Tu plantilla de agenda y reporte (Excel o CSV)", type=["xlsx", "csv"], key="gm_file")
+    raw = archivo.getvalue() if archivo is not None else b""
+    sig = (archivo.name if archivo is not None else "", len(raw), str(r_ini), str(r_fin), str(a_ini), str(a_fin))
+    if st.session_state.get("gm_sig") != sig:
+        ag0, rp0, avs, n_fuera = _vacio_ag(), _vacio_rp(), [], 0
+        if archivo is not None:
+            full, avs = load_plantilla_gerencia(raw, archivo.name)
+            if full is not None:
+                full["Fecha"] = pd.to_datetime(full["Fecha"])
+                en_ag = (full["Fecha"] >= a_ini) & (full["Fecha"] < a_fin + pd.Timedelta(days=1))
+                en_rp = (full["Fecha"] >= r_ini) & (full["Fecha"] < r_fin + pd.Timedelta(days=1))
+                ag0 = full[en_ag][GM_COLS].reset_index(drop=True)
+                rpf = full[en_rp].copy()
+                rpf["En correo"] = rpf["Monto"].isna() | (rpf["Monto"] <= 0)
+                rp0 = rpf[["En correo", "Fecha", "Cuenta", "Tipo", "Descripcion"]].reset_index(drop=True)
+                n_fuera = int((~(en_ag | en_rp)).sum())
+        st.session_state.update({"gm_ag_base": ag0, "gm_rp_base": rp0, "gm_sig": sig, "gm_avs": avs, "gm_fuera": n_fuera,
+                                 "gm_ver": st.session_state.get("gm_ver", 0) + 1})
+    for a_ in st.session_state.get("gm_avs", []):
+        st.warning(a_)
+    ver = str(st.session_state["gm_ver"])
+    rp_base = st.session_state["gm_rp_base"]
+    if archivo is not None:
+        n_excl = int((~rp_base["En correo"]).sum()) if len(rp_base) else 0
+        st.caption(str(len(st.session_state["gm_ag_base"])) + " líneas de agenda y " + str(len(rp_base)) + " filas de reporte tomadas de tu archivo"
+                   + (" (" + str(st.session_state["gm_fuera"]) + " de otras fechas quedaron fuera)." if st.session_state["gm_fuera"] else ".")
+                   + ((" " + str(n_excl) + " filas del periodo con monto quedaron sin marcar 'En correo'; márcalas si quieres incluirlas.") if n_excl else ""))
+
+    try:
+        cfg_ag = {"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                  "Cuenta": st.column_config.TextColumn("Cuenta o cliente"),
+                  "Tipo": st.column_config.SelectboxColumn("Tipo de actividad", options=GM_TIPOS),
+                  "Descripcion": st.column_config.TextColumn("Descripción", width="large"),
+                  "Cotizaciones": st.column_config.TextColumn("Cotizaciones"),
+                  "Monto": st.column_config.NumberColumn("Monto", format="%.2f"),
+                  "Moneda": st.column_config.SelectboxColumn("Moneda", options=["USD", "MXN"])}
+        cfg_rp = {"En correo": st.column_config.CheckboxColumn("En correo"),
+                  "Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                  "Cuenta": st.column_config.TextColumn("Cuenta o cliente"),
+                  "Tipo": st.column_config.SelectboxColumn("Tipo de actividad", options=GM_TIPOS),
+                  "Descripcion": st.column_config.TextColumn("Descripción", width="large")}
+    except Exception:
+        cfg_ag = cfg_rp = None
+
+    st.markdown("#### 1. Agenda de la próxima semana")
+    ag_edit = st.data_editor(st.session_state["gm_ag_base"], num_rows="dynamic", key="gm_ag_" + ver, column_config=cfg_ag)
+    with st.expander("Agregar una visita desde el radar (cotizaciones del CRM)"):
+        if base is None:
+            st.info("Sube el CSV del radar en la barra lateral para traer las cotizaciones del CRM.")
+        else:
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                f_add = st.date_input("Fecha de la visita", value=a_ini.date(), key="gm_fadd")
+            with b2:
+                cli = st.selectbox("Cliente", sorted(base["Cliente"].unique()), key="gm_cli")
+            with b3:
+                tipo_add = st.selectbox("Tipo", GM_TIPOS, key="gm_tipo_add")
+            sub = base[base["Cliente"] == cli].sort_values("Ponderado", ascending=False)
+            etq = {}
+            for r in sub.itertuples():
+                if r.Monto_USD > 0:
+                    mt = format(r.Monto_USD, ",.2f") + " USD"
+                elif r.Monto_MXN > 0:
+                    mt = format(r.Monto_MXN, ",.2f") + " MXN"
+                else:
+                    mt = "sin monto"
+                etq[r.Folio] = (r.Cotizacion or "Proj " + str(r.Folio)) + " | " + str(r.Descripcion)[:55] + " | " + mt
+            sel = st.multiselect("Cotizaciones a tratar (si no eliges ninguna, se agrega solo la visita)", list(etq.keys()),
+                                 default=list(etq.keys()), format_func=lambda x: etq.get(x, x), key="gm_sel_" + cli)
+            if st.button("Agregar a la agenda"):
+                filas = []
+                for r in sub[sub["Folio"].isin(sel)].itertuples():
+                    usd = r.Monto_USD > 0
+                    filas.append({"Fecha": pd.Timestamp(f_add), "Cuenta": cli, "Tipo": tipo_add, "Descripcion": str(r.Descripcion)[:90],
+                                  "Cotizaciones": r.Cotizacion or "Sin registro",
+                                  "Monto": float(r.Monto_USD if usd else r.Monto_MXN) or float("nan"),
+                                  "Moneda": ("USD" if usd else "MXN") if (r.Monto_USD > 0 or r.Monto_MXN > 0) else ""})
+                if not filas:
+                    filas.append({"Fecha": pd.Timestamp(f_add), "Cuenta": cli, "Tipo": tipo_add, "Descripcion": "", "Cotizaciones": "",
+                                  "Monto": float("nan"), "Moneda": ""})
+                st.session_state["gm_ag_base"] = pd.concat([ag_edit, pd.DataFrame(filas, columns=GM_COLS)], ignore_index=True)
+                st.session_state["gm_ver"] = st.session_state["gm_ver"] + 1
+                st.rerun()
+
+    st.markdown("#### 2. Reporte de actividades")
+    rp_edit = st.data_editor(rp_base, num_rows="dynamic", key="gm_rp_" + ver, column_config=cfg_rp)
+
+    ag_use, rp_use = _limpiar_ag(ag_edit), _limpiar_rep(rp_edit)
+    fc = forecast_agenda(ag_use)
+    st.markdown("#### 3. Forecast y revisión")
+    q1, q2, q3 = st.columns(3)
+    with q1:
+        kpi_card("Forecast en MXN", "$" + format(fc["MXN"], ",.2f"), "Suma de la agenda, sin convertir")
+    with q2:
+        kpi_card("Forecast en USD", "$" + format(fc["USD"], ",.2f"), "Suma de la agenda, sin convertir")
+    with q3:
+        kpi_card("Visitas en la agenda", str(len(_grupos(ag_use))), str(fc["lineas"]) + " cotizaciones con monto")
+    for a_ in fc["avisos"]:
+        st.warning(a_)
+    if base is not None and len(ag_use):
+        difs, aus = verificar_contra_radar(ag_use, base)
+        if difs:
+            st.warning(str(len(difs)) + " monto(s) de la agenda no coinciden con el CRM. Revisa cuál es el correcto:")
+            t = pd.DataFrame(difs)
+            t["Fecha"] = t["Fecha"].map(_fmt_f)
+            show_df(t)
+        if aus:
+            st.caption(str(len(aus)) + " cotización(es) de la agenda no están en el radar cargado (pueden ser posteriores a esa extracción): "
+                       + ", ".join(aus[:12]) + ("..." if len(aus) > 12 else ""))
+
+    st.markdown("#### 4. Correo para gerencia")
+    d1, d2 = st.columns(2)
     with d1:
-        if nuevos is None:
-            kpi_card("Proyectos nuevos (CRM)", "N/D", "Sube el CSV del radar")
-        else:
-            kpi_card("Proyectos nuevos (CRM)", str(len(nuevos)), par_txt(float(nuevos["Monto_USD"].sum()), float(nuevos["Monto_MXN"].sum())))
+        dest = st.text_input("Saludo a (nombre)", value=_secret("destinatario_reporte"), key="gm_dest")
     with d2:
-        if ovs is None:
-            kpi_card("Órdenes de venta registradas", "N/D", "Sube la plantilla en Órdenes y Cobranza")
-        else:
-            kpi_card("Órdenes de venta registradas", str(len(ovs)),
-                     par_txt(float(ovs.loc[ovs["Moneda"] == "USD", "Total"].sum()), float(ovs.loc[ovs["Moneda"] == "MXN", "Total"].sum())))
-    with d3:
-        if ov_fact is None:
-            kpi_card("Órdenes con factura emitida", "N/D", "Faltan fechas de facturación")
-        else:
-            kpi_card("Órdenes con factura emitida", str(len(ov_fact)),
-                     par_txt(float(ov_fact.loc[ov_fact["Moneda"] == "USD", "Facturado"].sum()), float(ov_fact.loc[ov_fact["Moneda"] == "MXN", "Facturado"].sum())))
-    with d4:
-        if ov_cobro is None:
-            kpi_card("Órdenes con cobro registrado", "N/D", "Faltan fechas de cobro")
-        else:
-            kpi_card("Órdenes con cobro registrado", str(len(ov_cobro)),
-                     par_txt(float(ov_cobro.loc[ov_cobro["Moneda"] == "USD", "Cobrado"].sum()), float(ov_cobro.loc[ov_cobro["Moneda"] == "MXN", "Cobrado"].sum())))
-
-    if len(act):
-        g1, g2 = st.columns(2)
-        with g1:
-            st.markdown("**Actividades por tipo**")
-            por_tipo = act["Tipo"].value_counts().reset_index()
-            por_tipo.columns = ["Tipo", "Actividades"]
-            show_chart(alt.Chart(por_tipo).mark_bar(color=MESS_BLUE).encode(
-                y=alt.Y("Tipo:N", sort="-x", title=None), x=alt.X("Actividades:Q", title=None),
-                tooltip=["Tipo", "Actividades"]).properties(height=240))
-        with g2:
-            st.markdown("**Actividades por día**")
-            dias = pd.DataFrame({"Día": DIAS_ES, "Actividades": [int((act["Fecha"].dt.weekday == i).sum()) for i in range(7)]})
-            show_chart(alt.Chart(dias).mark_bar(color=ACCENT).encode(
-                x=alt.X("Día:N", sort=DIAS_ES, title=None), y=alt.Y("Actividades:Q", title=None),
-                tooltip=["Día", "Actividades"]).properties(height=240))
-
-    st.markdown("### Detalle")
-    ta, tg, tf, tb, tc = st.tabs(["Actividades", "Agenda semana siguiente", "Forecast", "Proyectos nuevos (CRM)", "Órdenes de venta"])
-    with ta:
-        t = act.copy()
-        t["Fecha"] = t["Fecha"].dt.strftime("%d/%m/%Y")
-        t["F_Sig"] = t["F_Sig"].dt.strftime("%d/%m/%Y").fillna("")
-        t = t[["Fecha", "Hora", "Cuenta", "Tipo", "Descripcion", "Siguiente", "F_Sig", "Ref", "Monto", "Moneda"]]
-        show_df(t.rename(columns={"Cuenta": "Cuenta o cliente", "Descripcion": "Descripción y resultado",
-                                  "Siguiente": "Siguiente paso", "F_Sig": "Fecha siguiente", "Ref": "Proyecto u OV"}),
-                {"Monto": "${:,.2f}"})
-    with tg:
-        st.caption("Semana del " + fecha_es(fin) + " al " + fecha_es(fin_sig - pd.Timedelta(days=1))
-                   + ". Incluye actividades programadas y los siguientes pasos con fecha.")
-        t = _fechas(agenda, ["Fecha"])
-        show_df(t.rename(columns={"Cuenta": "Cuenta o cliente", "Ref": "Proyecto u OV"}))
-    with tf:
-        if fc is None:
-            st.info("Sube el CSV del radar para generar el forecast.")
-        else:
-            top_f = base["Cierre_Est"].value_counts()
-            if len(top_f) and top_f.iloc[0] / len(base) >= 0.30:
-                st.warning(str(round(top_f.iloc[0] / len(base) * 100)) + "% de los proyectos comparten la fecha de cierre estimada "
-                           + top_f.index[0].strftime("%d/%m/%Y") + ". Si es una fecha por defecto de SCOTT, el forecast por periodo está sesgado.")
-            falt = max(0.0, meta - cerrado)
-            q1, q2, q3, q4 = st.columns(4)
-            for col_, m in ((q1, "USD"), (q2, "MXN")):
-                pp = fc["periodo_" + m]
-                with col_:
-                    kpi_card("Pipeline en " + m, "$" + format(pp["Bruto"].sum(), ",.2f"),
-                             "Ponderado $" + format(pp["Ponderado"].sum(), ",.2f") + " | " + str(int(pp["Proyectos"].sum())) + " proyectos")
-            with q3:
-                kpi_card("Faltante de la meta (USD)", "$" + format(falt, ",.0f"), "Meta $" + format(meta, ",.0f") + " | cerrado $" + format(cerrado, ",.0f"))
-            with q4:
-                kpi_card("Propuestas por definir", str(fc["n_definir"]), "Proyectos sin monto cotizado")
-            st.markdown("#### Cierre estimado por periodo")
-            f1, f2 = st.columns(2)
-            for col_, m in ((f1, "USD"), (f2, "MXN")):
-                t = fc["periodo_" + m].reset_index()
-                t.columns = ["Periodo"] + list(t.columns[1:])
-                with col_:
-                    st.markdown("**" + m + "**")
-                    show_df(t, {"Proyectos": "{:.0f}", "Bruto": "${:,.2f}", "Ponderado": "${:,.2f}"})
-            st.markdown("#### Pipeline por fase")
-            f1, f2 = st.columns(2)
-            for col_, m in ((f1, "USD"), (f2, "MXN")):
-                t = fc["fase_" + m].reset_index()
-                with col_:
-                    st.markdown("**" + m + "**")
-                    show_df(t, {"Proyectos": "{:.0f}", "Bruto": "${:,.2f}", "Ponderado": "${:,.2f}"})
-            st.markdown("#### Oportunidades prioritarias (por monto ponderado)")
-            f1, f2 = st.columns(2)
-            for col_, m in ((f1, "USD"), (f2, "MXN")):
-                t = fc["top_" + m].copy()
-                t["Cierre_Est"] = t["Cierre_Est"].dt.strftime("%d/%m/%Y").fillna("")
-                t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 50)
-                t = t.rename(columns={"Descripcion": "Descripción", "Cierre_Est": "Cierre est.", "Monto_" + m: "Monto " + m, "Pond": "Ponderado " + m})
-                with col_:
-                    st.markdown("**" + m + "**")
-                    show_df(t, {"Monto " + m: "${:,.2f}", "Ponderado " + m: "${:,.2f}"})
-            st.markdown("#### Propuestas por definir")
-            t = _fechas(fc["definir"], ["Cierre_Est"])
-            t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 70)
-            show_df(t.rename(columns={"Descripcion": "Descripción", "Area": "Área", "Dias_Registro": "Días reg.", "Cierre_Est": "Cierre est."}))
-    with tb:
-        if nuevos is None:
-            st.info("Sube el CSV del radar para ver los proyectos registrados en la semana.")
-        else:
-            t = nuevos[["Folio", "Cliente", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN", "Registro"]].copy()
-            t["Registro"] = t["Registro"].dt.strftime("%d/%m/%Y")
-            t["Descripcion"] = t["Descripcion"].astype(str).str.slice(0, 80)
-            show_df(t.rename(columns={"Descripcion": "Descripción", "Area": "Área", "Monto_USD": "USD", "Monto_MXN": "MXN"}),
-                    {"USD": "${:,.2f}", "MXN": "${:,.2f}"})
-    with tc:
-        if ovs is None:
-            st.info("Sube la plantilla en la pestaña Órdenes y Cobranza para ver las órdenes registradas en la semana.")
-        else:
-            t = ovs[["OV", "Cliente", "Estado", "Moneda", "Total", "Facturado", "Registro"]].copy()
-            t["Registro"] = t["Registro"].dt.strftime("%d/%m/%Y")
-            show_df(t, {"Total": "${:,.2f}", "Facturado": "${:,.2f}"})
-
-    st.markdown("### Reporte listo para enviar")
-    clave = lunes.strftime("%Y%m%d")
-    ia_text = st.session_state.get("rep_ia_" + clave, "")
-    texto = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, agenda, f_lineas, ia_text)
-    if st.button("Redactar resumen ejecutivo con IA"):
-        base_txt = build_reporte_texto(lunes, domingo, act, nuevos, ovs, ov_fact, ov_cobro, agenda, f_lineas, "")
-        prompt = "\n".join([
-            "Redacta, en español y en texto plano (sin Markdown ni asteriscos), un resumen ejecutivo de 5 a 8 líneas para la gerencia y la dirección de MESS Servicios Metrológicos sobre la semana reportada.",
-            "Usa solo los datos del reporte. Menciona logros, riesgos o pendientes, el foco de la semana siguiente y el forecast.",
-            "Cada hecho debe quedar con el cliente o folio con que aparece en el reporte; no atribuyas una acción, persona o cargo a otra cuenta.",
-            "La agenda proviene de la bitácora del usuario, no del CRM. Si dice 'no capturado', significa que el dato no se registró, no que no ocurrió (por ejemplo, cierres del mes).",
-            "Escribe como un vendedor experto que informa a su dirección: directo, natural y breve.",
-            "Cita los montos en USD y MXN por separado, sin convertir ni sumar entre monedas. No inventes cifras, clientes ni resultados.",
-            "", "REPORTE:", base_txt,
-        ])
-        with st.spinner("Redactando el resumen..."):
-            res, err = call_gemini(prompt)
-        if err:
-            st.error(err)
-        else:
-            st.session_state["rep_ia_" + clave] = clean_message(res)
-            st.rerun()
-    st.text_area("Reporte (editable)", value=texto, height=440, key="rep_txt_" + clave + ("_ia" if ia_text else ""))
+        firma = st.text_area("Firma", value=_secret("firma_correo", "Javier Alfonso Camacho Alzaga\nAsesor de Ventas\nMESS Servicios Metrológicos"),
+                             height=110, key="gm_firma")
+    if len(ag_use) == 0 and len(rp_use) == 0:
+        st.info("Carga tu plantilla o agrega visitas desde el radar para ver el correo.")
+        return
+    html, texto = correo_partes(dest, ag_use, rp_use, ag_rango, rp_rango, fc, firma)
+    st.caption("Vista previa: selecciona el contenido, cópialo y pégalo en Outlook; conserva las tablas.")
+    st.markdown(html, unsafe_allow_html=True)
+    tag = a_ini.strftime("%Y%m%d")
     r1, r2, r3, r4 = st.columns(4)
     with r1:
-        st.download_button("Descargar reporte (.txt)", texto.encode("utf-8"), file_name="Reporte_semanal_" + clave + ".txt", mime="text/plain")
-    with r2:
         if Document is None:
             st.warning("Instala python-docx para descargar el .docx.")
         else:
             try:
-                st.download_button("Descargar reporte (.docx)", build_reporte_docx(texto), file_name="Reporte_semanal_" + clave + ".docx",
+                st.download_button("Descargar correo (.docx)", correo_docx(dest, ag_use, rp_use, ag_rango, rp_rango, fc, firma),
+                                   file_name="Agenda_reporte_" + tag + ".docx",
                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             except Exception as e:
                 st.error("No se pudo generar el .docx: " + str(e))
+    with r2:
+        st.download_button("Descargar correo (.html)", ("<html><meta charset='utf-8'><body>" + html + "</body></html>").encode("utf-8"),
+                           file_name="Agenda_reporte_" + tag + ".html", mime="text/html")
     with r3:
         try:
-            hojas = {"Resumen": pd.DataFrame({"Reporte": texto.split("\n")})}
-            if len(act):
-                hojas["Actividades"] = _fechas(act, ["Fecha", "F_Sig"])
-            if len(agenda):
-                hojas["Agenda"] = _fechas(agenda, ["Fecha"])
-            if fc is not None:
-                for m in ("USD", "MXN"):
-                    hojas["Periodo " + m] = fc["periodo_" + m].reset_index()
-                    hojas["Fase " + m] = fc["fase_" + m].reset_index()
-                    hojas["Prioritarias " + m] = _fechas(fc["top_" + m], ["Cierre_Est"])
-                hojas["Por definir"] = _fechas(fc["definir"], ["Cierre_Est"])
-            if nuevos is not None and len(nuevos):
-                hojas["Proyectos nuevos"] = _fechas(nuevos[["Folio", "Cliente", "Descripcion", "Area", "Fase", "Monto_USD", "Monto_MXN", "Registro"]], ["Registro"])
-            if ovs is not None and len(ovs):
-                hojas["OV registradas"] = _fechas(ovs[["OV", "Cliente", "Estado", "Moneda", "Total", "Facturado", "Registro"]], ["Registro"])
-            st.download_button("Descargar reporte (.xlsx)", build_reporte_xlsx(hojas), file_name="Reporte_semanal_" + clave + ".xlsx",
+            st.download_button("Guardar mi plantilla (.xlsx)", plantilla_xlsx(ag_use, rp_use), file_name="Plantilla_agenda_reporte_" + tag + ".xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
-            st.caption("Excel no disponible (agrega openpyxl a requirements.txt): " + str(e)[:80])
+            st.caption("Excel no disponible (agrega openpyxl a requirements.txt): " + str(e)[:70])
     with r4:
-        st.link_button("Abrir en correo", "mailto:?subject=" + quote("Reporte semanal | " + fecha_es(lunes) + " al " + fecha_es(domingo))
-                       + "&body=" + quote(texto[:1800]))
+        st.download_button("Descargar texto (.txt)", texto.encode("utf-8"), file_name="Agenda_reporte_" + tag + ".txt", mime="text/plain")
 
 with tab_dash:
     try:
@@ -2719,9 +2990,9 @@ with tab_cob:
         st.error("Error en Órdenes y Cobranza: " + str(e))
 with tab_rep:
     try:
-        render_reporte()
+        render_gerencia()
     except Exception as e:
-        st.error("Error en el Reporte Semanal: " + str(e))
+        st.error("Error en el Reporte a gerencia: " + str(e))
 
 st.markdown(
     '<div class="brand-footer">Grupo MESS | all about metrology | mess.com.mx</div>',
